@@ -39,9 +39,9 @@
       ]
     }
   },
-  "url": "",
-  "manifest": "",
-  "download": "",
-  "readme": "",
+  "url": "https://github.com/fateafate/gpt-sovits-tts",
+  "manifest": "https://raw.githubusercontent.com/fateafate/gpt-sovits-tts/main/module.json",
+  "download": "https://github.com/fateafate/gpt-sovits-tts/archive/refs/heads/main.zip",
+  "readme": "https://github.com/fateafate/gpt-sovits-tts/blob/main/README.md",
   "license": "MIT"
 }
