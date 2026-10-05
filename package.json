@@ -1,0 +1,6 @@
+{
+  "name": "gpt-sovits-tts",
+  "private": true,
+  "type": "module",
+  "description": "Foundry VTT module — type:module only for tooling syntax checks; Foundry loads scripts/esmodules natively."
+}

@@ -1,0 +1,7 @@
+name: 五条悟
+gpt_model_path: models/satoru-e15.ckpt
+sovits_model_path: models/satoru_e16_s880.pth
+refer_audio_path: models/satoru_(Vocals).wav_0052771520_0052963200.wav
+prompt_text: もうそんなに俺のことを気にするな 俺の過去なんてそんなに面白いもんじゃないからな
+prompt_lang: ja
+emotions: {}

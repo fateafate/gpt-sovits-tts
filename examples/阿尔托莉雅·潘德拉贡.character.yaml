@@ -1,0 +1,35 @@
+name: 阿尔托莉雅·潘德拉贡
+gpt_model_path: models/saber-e15.ckpt
+sovits_model_path: models/saber_e8_s168.pth
+refer_audio_path: models/002di_bdlv1.wav
+prompt_text: 人類を救う戦いです。私たちの責務は何より重いものです、マスター。
+prompt_lang: ja
+character_setting: |
+  登场作品：Fate 系列。不列颠传说中的骑士王「亚瑟王」，实为男装丽人。
+  以「完美的王」为目标，性格正直、骄傲、自律，战斗时威严凛然，日常则温柔贤淑。
+  对骑士道与荣耀十分执着，说话简洁有力、克制而有王者的气度。
+emotions:
+  voice_custom_chara_figure_1001001_1_704e:
+    ref: speech/saber/voice_custom_chara_figure_1001001-1_704eb49dc6.wav
+    prompt: ''
+    lang: ''
+    label: 自信、從容、微笑
+    avatar: modules/gpt-sovits-tts/engine/fvtt_chars/阿尔托莉雅·潘德拉贡/sprites/saber/custom_chara_figure_1001001-1.png
+  voice_custom_chara_figure_1001001_2_85b3:
+    ref: speech/saber/voice_custom_chara_figure_1001001-2_85b3be2154.wav
+    prompt: ''
+    lang: ''
+    label: 怒吼、大喊
+    avatar: modules/gpt-sovits-tts/engine/fvtt_chars/阿尔托莉雅·潘德拉贡/sprites/saber/custom_chara_figure_1001001-2.png
+  voice_custom_chara_figure_1001001_4_69e9:
+    ref: speech/saber/voice_custom_chara_figure_1001001-4_69e97aa953.wav
+    prompt: ''
+    lang: ''
+    label: 憂慮、悲痛、沉思、回想
+    avatar: modules/gpt-sovits-tts/engine/fvtt_chars/阿尔托莉雅·潘德拉贡/sprites/saber/custom_chara_figure_1001001-4.png
+  voice_custom_chara_figure_1001001_5_59bb:
+    ref: speech/saber/voice_custom_chara_figure_1001001-5_59bb460440.wav
+    prompt: ''
+    lang: ''
+    label: 威壓、凜然
+    avatar: modules/gpt-sovits-tts/engine/fvtt_chars/阿尔托莉雅·潘德拉贡/sprites/saber/custom_chara_figure_1001001-5.png

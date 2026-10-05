@@ -1,0 +1,36 @@
+# ===== GPT-SoVITS 引擎与运行时（15.5GB，用户自行部署，不入库） =====
+engine/
+
+# ===== 角色音频资产（音色样本，版权/体积考虑不入库） =====
+**/*.wav
+**/*.mp3
+**/*.pth
+**/*.ckpt
+**/*.safetensors
+**/*.sz
+**/*.semantic
+**/fvtt_chars/
+server/chars/
+server/tmp_ref/
+audio_cache/
+
+# ===== 运行时日志与缓存 =====
+*.log
+__pycache__/
+*.pyc
+node_modules/
+.pytest_cache/
+.mypy_cache/
+
+# ===== 本地测试残留 =====
+_tools/cmp/
+
+# ===== 内部开发文档(不入库) =====
+企划*.md
+设计*.md
+草稿*.md
+
+# ===== 系统文件 =====
+.DS_Store
+Thumbs.db
+desktop.ini

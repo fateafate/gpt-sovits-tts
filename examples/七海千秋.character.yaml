@@ -1,0 +1,137 @@
+name: 七海千秋
+gpt_model_path: models/nanami-e15.ckpt
+sovits_model_path: models/nanami_e8_s496.pth
+refer_audio_path: models/nanami.aac_0001620800_0001747840.wav
+prompt_text: でも、怪しい人の手がかりならある。
+prompt_lang: ja
+character_setting: |
+  《弹丸论破V3》的女主角，被称作「超高校级的游戏玩家」。
+  性格安静、温和、认真，喜欢游戏与电子设备，说话语气平静柔和，偶尔有些天然呆。
+  对推理和游戏策略非常专注，关键时刻可靠而冷静。
+emotions:
+  voice_00:
+    ref: speech/nanami/nanami_voice_00.wav
+    prompt: ''
+    lang: ''
+    label: 中性，平静
+    avatar: modules/gpt-sovits-tts/engine/fvtt_chars/七海千秋/sprites/nanami/Danganronpa_V3_Chiaki_Nanami_Bonus_Mode_Sprites_01.webp
+  voice_01:
+    ref: speech/nanami/nanami_voice_01.wav
+    prompt: ''
+    lang: ''
+    label: 疲倦，困倦，打哈欠
+    avatar: modules/gpt-sovits-tts/engine/fvtt_chars/七海千秋/sprites/nanami/Danganronpa_V3_Chiaki_Nanami_Bonus_Mode_Sprites_02.webp
+  voice_02:
+    ref: speech/nanami/nanami_voice_02.wav
+    prompt: ''
+    lang: ''
+    label: 指点，引导，陈述
+    avatar: modules/gpt-sovits-tts/engine/fvtt_chars/七海千秋/sprites/nanami/Danganronpa_V3_Chiaki_Nanami_Bonus_Mode_Sprites_03.webp
+  voice_03:
+    ref: speech/nanami/nanami_voice_03.wav
+    prompt: ''
+    lang: ''
+    label: 生气，鼓起脸颊
+    avatar: modules/gpt-sovits-tts/engine/fvtt_chars/七海千秋/sprites/nanami/Danganronpa_V3_Chiaki_Nanami_Bonus_Mode_Sprites_04.webp
+  voice_04:
+    ref: speech/nanami/nanami_voice_04.wav
+    prompt: ''
+    lang: ''
+    label: 开心，微笑，温柔
+    avatar: modules/gpt-sovits-tts/engine/fvtt_chars/七海千秋/sprites/nanami/Danganronpa_V3_Chiaki_Nanami_Bonus_Mode_Sprites_05.webp
+  voice_05:
+    ref: speech/nanami/nanami_voice_05.wav
+    prompt: ''
+    lang: ''
+    label: 筋疲力尽，困倦，流口水
+    avatar: modules/gpt-sovits-tts/engine/fvtt_chars/七海千秋/sprites/nanami/Danganronpa_V3_Chiaki_Nanami_Bonus_Mode_Sprites_06.webp
+  voice_06:
+    ref: speech/nanami/nanami_voice_06.wav
+    prompt: ''
+    lang: ''
+    label: 皱眉，严肃，担心
+    avatar: modules/gpt-sovits-tts/engine/fvtt_chars/七海千秋/sprites/nanami/Danganronpa_V3_Chiaki_Nanami_Bonus_Mode_Sprites_07.webp
+  voice_07:
+    ref: speech/nanami/nanami_voice_07.wav
+    prompt: ''
+    lang: ''
+    label: 沉思，好奇
+    avatar: modules/gpt-sovits-tts/engine/fvtt_chars/七海千秋/sprites/nanami/Danganronpa_V3_Chiaki_Nanami_Bonus_Mode_Sprites_08.webp
+  voice_08:
+    ref: speech/nanami/nanami_voice_08.wav
+    prompt: ''
+    lang: ''
+    label: 中性，歪头，轻微好奇
+    avatar: modules/gpt-sovits-tts/engine/fvtt_chars/七海千秋/sprites/nanami/Danganronpa_V3_Chiaki_Nanami_Bonus_Mode_Sprites_09.webp
+  voice_09:
+    ref: speech/nanami/nanami_voice_09.wav
+    prompt: ''
+    lang: ''
+    label: 解释，指向，果断
+    avatar: modules/gpt-sovits-tts/engine/fvtt_chars/七海千秋/sprites/nanami/Danganronpa_V3_Chiaki_Nanami_Bonus_Mode_Sprites_10.webp
+  voice_10:
+    ref: speech/nanami/nanami_voice_10.wav
+    prompt: ''
+    lang: ''
+    label: 仔细查看，眺望
+    avatar: modules/gpt-sovits-tts/engine/fvtt_chars/七海千秋/sprites/nanami/Danganronpa_V3_Chiaki_Nanami_Bonus_Mode_Sprites_11.webp
+  voice_11:
+    ref: speech/nanami/nanami_voice_11.wav
+    prompt: ''
+    lang: ''
+    label: 不安，担忧，自闭
+    avatar: modules/gpt-sovits-tts/engine/fvtt_chars/七海千秋/sprites/nanami/Danganronpa_V3_Chiaki_Nanami_Bonus_Mode_Sprites_12.webp
+  voice_12:
+    ref: speech/nanami/nanami_voice_12.wav
+    prompt: ''
+    lang: ''
+    label: 十分兴奋, 激动到喘气
+    avatar: modules/gpt-sovits-tts/engine/fvtt_chars/七海千秋/sprites/nanami/Danganronpa_V3_Chiaki_Nanami_Bonus_Mode_Sprites_13.webp
+  voice_13:
+    ref: speech/nanami/nanami_voice_13.wav
+    prompt: ''
+    lang: ''
+    label: 沉思，低头，皱眉
+    avatar: modules/gpt-sovits-tts/engine/fvtt_chars/七海千秋/sprites/nanami/Danganronpa_V3_Chiaki_Nanami_Bonus_Mode_Sprites_14.webp
+  voice_14:
+    ref: speech/nanami/nanami_voice_14.wav
+    prompt: ''
+    lang: ''
+    label: 困倦，疲惫，在打瞌睡
+    avatar: modules/gpt-sovits-tts/engine/fvtt_chars/七海千秋/sprites/nanami/Danganronpa_V3_Chiaki_Nanami_Bonus_Mode_Sprites_15.webp
+  voice_15:
+    ref: speech/nanami/nanami_voice_15.wav
+    prompt: ''
+    lang: ''
+    label: 不满，难过，沮丧
+    avatar: modules/gpt-sovits-tts/engine/fvtt_chars/七海千秋/sprites/nanami/Danganronpa_V3_Chiaki_Nanami_Bonus_Mode_Sprites_16.webp
+  voice_16:
+    ref: speech/nanami/nanami_voice_16.wav
+    prompt: ''
+    lang: ''
+    label: 警告，阻止，制止
+    avatar: modules/gpt-sovits-tts/engine/fvtt_chars/七海千秋/sprites/nanami/Danganronpa_V3_Chiaki_Nanami_Bonus_Mode_Sprites_17.webp
+  voice_17:
+    ref: speech/nanami/nanami_voice_17.wav
+    prompt: ''
+    lang: ''
+    label: 埋怨，嘟嘴
+    avatar: modules/gpt-sovits-tts/engine/fvtt_chars/七海千秋/sprites/nanami/Danganronpa_V3_Chiaki_Nanami_Bonus_Mode_Sprites_18.webp
+  voice_18:
+    ref: speech/nanami/nanami_voice_18.wav
+    prompt: ''
+    lang: ''
+    label: 疑惑，思考，好奇
+    avatar: modules/gpt-sovits-tts/engine/fvtt_chars/七海千秋/sprites/nanami/Danganronpa_V3_Chiaki_Nanami_Bonus_Mode_Sprites_19.webp
+  voice_19:
+    ref: speech/nanami/nanami_voice_19.wav
+    prompt: ''
+    lang: ''
+    label: 严肃，不满，冷漠
+    avatar: modules/gpt-sovits-tts/engine/fvtt_chars/七海千秋/sprites/nanami/Danganronpa_V3_Chiaki_Nanami_Bonus_Mode_Sprites_20.webp
+  voice_20:
+    ref: speech/nanami/nanami_voice_20.wav
+    prompt: ''
+    lang: ''
+    label: 害羞，脸红
+    avatar: modules/gpt-sovits-tts/engine/fvtt_chars/七海千秋/sprites/nanami/Danganronpa_V3_Chiaki_Nanami_Bonus_Mode_Sprites_21.webp

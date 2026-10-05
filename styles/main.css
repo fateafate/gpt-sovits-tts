@@ -1,0 +1,690 @@
+/* gpt-sovits-tts — 模块样式 */
+
+/* 悬浮小工具条: fixed 可拖动, 深底白字, 不依赖聊天面板布局 */
+#fvtt-tts-floatbar {
+  position: fixed;
+  right: 16px;
+  bottom: 52px;
+  z-index: 99990;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+  background: rgba(15, 15, 20, 0.94);
+  border: 1px solid var(--color-border-dark, #555);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 12px;
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+#fvtt-tts-floatbar:active { cursor: grabbing; }
+#fvtt-tts-floatbar select {
+  height: 24px;
+  max-width: 96px;
+  min-width: 0;
+  padding: 0 2px;
+  font-size: 11px;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.45);
+  border: 1px solid var(--color-border-dark, #555);
+  border-radius: 4px;
+  cursor: pointer;
+}
+#fvtt-tts-floatbar select option { background: #1a1a22; color: #fff; }
+#fvtt-tts-floatbar button {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--color-border-dark, #555);
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.4);
+  color: #fff;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+}
+#fvtt-tts-floatbar button:hover { border-color: var(--color-border-highlight, #aaa); box-shadow: 0 0 6px rgba(255, 255, 255, 0.2); }
+#fvtt-tts-floatbar button.fvtt-tts-mic.active { color: #ff7b7b; }
+
+/* 聊天控件条(旧布局保留, 未来移除) */
+.fvtt-tts-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 3px 6px;
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--color-border-dark, rgba(0, 0, 0, 0.4));
+  background: rgba(0, 0, 0, 0.12);
+}
+.fvtt-tts-bar .fvtt-tts-row1,
+.fvtt-tts-bar .fvtt-tts-row2 {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex-wrap: wrap;
+}
+
+.fvtt-tts-bar .fvtt-tts-status,
+.fvtt-tts-bar .fvtt-tts-mic,
+.fvtt-tts-bar .fvtt-tts-send {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--color-border-dark, #444);
+  border-radius: 4px;
+  background: var(--color-bg-btn-minor-inactive, rgba(0, 0, 0, 0.4));
+  color: #fff;
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+}
+
+.fvtt-tts-bar .fvtt-tts-status:hover,
+.fvtt-tts-bar .fvtt-tts-mic:hover,
+.fvtt-tts-bar .fvtt-tts-send:hover {
+  color: #fff;
+  border-color: var(--color-border-highlight, #999);
+}
+
+.fvtt-tts-bar .fvtt-tts-status.ok {
+  color: #7ed07e;
+  border-color: #3d8b3d;
+}
+.fvtt-tts-bar .fvtt-tts-status.fail {
+  color: #e77;
+  border-color: #a33;
+  animation: fvtt-tts-blink 1.6s infinite;
+}
+.fvtt-tts-bar .fvtt-tts-status.unknown {
+  color: #ccb;
+}
+
+.fvtt-tts-bar .fvtt-tts-mic.active {
+  color: #fff;
+  background: #b03a3a;
+  border-color: #e05555;
+  animation: fvtt-tts-blink 1.2s infinite;
+}
+
+@keyframes fvtt-tts-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+
+/* 聊天消息上的重听按钮 */
+.chat-message .fvtt-tts-replay {
+  margin-left: 6px;
+  padding: 1px 5px;
+  border: none;
+  background: transparent;
+  color: #fff;
+  cursor: pointer;
+  font-size: 10px;
+  opacity: 0.55;
+  transition: opacity 0.15s ease;
+}
+.chat-message .fvtt-tts-replay:hover {
+  opacity: 1;
+  color: var(--color-text-hyperlink, #6c8cff);
+}
+
+/* 语音设置按钮 */
+.fvtt-tts-bar .fvtt-tts-voice {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid var(--color-border-dark, #444);
+  border-radius: 4px;
+  background: var(--color-bg-btn-minor-inactive, rgba(0, 0, 0, 0.4));
+  color: #fff;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+}
+.fvtt-tts-bar .fvtt-tts-voice:hover {
+  color: #fff;
+  border-color: var(--color-border-highlight, #999);
+}
+
+/* 朗读音量快捷按钮+弹出滑杆 */
+.fvtt-tts-bar .fvtt-tts-vol {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid var(--color-border-dark, #444);
+  border-radius: 4px;
+  background: var(--color-bg-btn-minor-inactive, rgba(0, 0, 0, 0.4));
+  color: #fff;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+}
+.fvtt-tts-bar .fvtt-tts-vol:hover {
+  color: #fff;
+  border-color: var(--color-border-highlight, #999);
+}
+.fvtt-tts-volpop {
+  position: fixed;
+  right: 28px;
+  bottom: 72px;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: rgba(20, 20, 25, 0.97);
+  border: 1px solid var(--color-border-dark, #444);
+  border-radius: 6px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.fvtt-tts-volpop input[type="range"] { width: 110px; }
+.fvtt-tts-volval { min-width: 38px; text-align: right; color: #dcdcdc; }
+
+/* 快捷切换: 角色/情绪下拉 */
+.fvtt-tts-bar .fvtt-tts-char,
+.fvtt-tts-bar .fvtt-tts-emotion {
+  height: 22px;
+  max-width: 86px;
+  min-width: 0;
+  padding: 0 2px;
+  margin-left: 2px;
+  font-size: 11px;
+  color: #fff;
+  background: var(--color-bg-btn-minor-inactive, rgba(0, 0, 0, 0.4));
+  border: 1px solid var(--color-border-dark, #444);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.fvtt-tts-bar .fvtt-tts-char:hover,
+.fvtt-tts-bar .fvtt-tts-emotion:hover {
+  border-color: var(--color-border-highlight, #999);
+}
+.fvtt-tts-bar .fvtt-tts-char option,
+.fvtt-tts-bar .fvtt-tts-emotion option {
+  background: var(--color-bg-2, #2a2a33);
+  color: #fff;
+}
+
+/* 语音样本库 */
+.fvtt-tts-vm-sample {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 4px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  font-size: 12px;
+}
+.fvtt-tts-vm-sample .vm-smp-play {
+  flex: 0 0 auto;
+  width: 24px;
+  padding: 0;
+  line-height: 1;
+}
+.fvtt-tts-vm-sample .vm-smp-file {
+  flex: 0 0 auto;
+  color: #fff;
+  font-family: monospace;
+  font-size: 11px;
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fvtt-tts-vm-sample .vm-smp-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: #dcdcdc;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fvtt-tts-vm-sample .vm-smp-slot {
+  flex: 0 0 auto;
+  width: 96px;
+  font-size: 11px;
+  background: var(--color-bg-btn-minor-inactive, rgba(0, 0, 0, 0.4));
+  color: #fff;
+  border: 1px solid var(--color-border-dark, #444);
+  border-radius: 4px;
+}
+.fvtt-tts-vm-sample .vm-smp-bind {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  font-size: 11px;
+}
+
+/* ============ 语音管理器面板 ============ */
+.fvtt-tts-vm {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 99980;
+  width: 560px;
+  max-width: 92vw;
+  max-height: 86vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-bg-2, #2a2a33);
+  border: 1px solid var(--color-border-dark, #444);
+  border-radius: 6px;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.55);
+  color: var(--color-text-light-highlight, #eee);
+  font-size: 13px;
+}
+.fvtt-tts-vm.fvtt-tts-dragging { user-select: none; cursor: grabbing; }
+.fvtt-tts-vm-head {
+  display: flex;
+  cursor: move;
+  touch-action: none;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: var(--color-bg-dark, #11111a);
+  border-bottom: 1px solid var(--color-border-dark, #444);
+  border-radius: 6px 6px 0 0;
+  font-weight: 700;
+}
+.fvtt-tts-vm-close {
+  border: none;
+  background: transparent;
+  color: #fff;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+.fvtt-tts-vm-close:hover { color: #fff; }
+.fvtt-tts-vm-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px 12px;
+}
+.fvtt-tts-vm-sec {
+  margin-bottom: 10px;
+  padding: 8px;
+  border: 1px solid var(--color-border-light, #555);
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.15);
+}
+.fvtt-tts-vm-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 5px 0;
+}
+.fvtt-tts-vm-row > span:first-child {
+  flex: 0 0 118px;
+  color: #fff;
+}
+.fvtt-tts-vm-row select,
+.fvtt-tts-vm-row input[type="text"],
+.fvtt-tts-vm-row input[type="password"],
+.fvtt-tts-vm-row input[type="file"] {
+  flex: 1;
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
+}
+.fvtt-tts-vm-row input[type="range"] { flex: 1; }
+/* AI 接入输入框: 明显可辨识, 不让用户以为"没有输入框" */
+.fvtt-tts-vm-ai-base,
+.fvtt-tts-vm-ai-key {
+  border: 1px solid #6b8cff !important;
+  background: rgba(0, 0, 0, 0.32) !important;
+  color: #fff !important;
+  padding: 4px 6px !important;
+  border-radius: 3px !important;
+  height: auto !important;
+}
+.fvtt-tts-vm-ai-base::placeholder,
+.fvtt-tts-vm-ai-key::placeholder {
+  color: #8fa3ff !important;
+  opacity: 1 !important;
+}
+.fvtt-tts-vm-ai-base:focus,
+.fvtt-tts-vm-ai-key:focus {
+  border-color: #4ea1ff !important;
+  box-shadow: 0 0 0 2px rgba(78, 161, 255, 0.25) !important;
+  outline: none !important;
+}
+.fvtt-tts-vm-sec-ai {
+  border-color: #3c4f8f !important;
+  background: rgba(20, 30, 70, 0.25) !important;
+}
+.fvtt-tts-vm-val { flex: 0 0 40px; text-align: right; color: #fff; }
+.fvtt-tts-vm-hint { margin: 4px 0 0 126px; color: #dcdcdc; font-size: 11px; }
+.fvtt-tts-vm-err {
+  color: #e77;
+  padding: 6px 0;
+}
+.fvtt-tts-vm-avrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.fvtt-tts-vm-av {
+  width: 42px;
+  height: 42px;
+  object-fit: cover;
+  border: 1px solid var(--color-border-dark, #444);
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.3);
+}
+.fvtt-tts-vm-av[src=""] { display: none; }
+.fvtt-tts-vm-sec-locked { opacity: 0.85; }
+.fvtt-tts-vm-status {
+  padding: 6px 8px;
+  border-radius: 4px;
+  background: rgba(0, 128, 0, 0.18);
+  color: #fff;
+  font-size: 12px;
+}
+.fvtt-tts-vm-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--color-border-dark, #444);
+}
+.fvtt-tts-vm button {
+  cursor: pointer;
+}
+
+/* ===== 第四轮: 角色构建器 ===== */
+.fvtt-tts-vm-btn {
+  margin: 2px;
+  padding: 2px 10px;
+  border: 1px solid var(--color-border-dark, #444);
+  border-radius: 4px;
+  background: var(--color-bg-btn-secondary, rgba(0,0,0,0.25));
+  color: inherit;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: nowrap;
+}
+.fvtt-tts-vm-btn:hover { box-shadow: 0 0 6px rgba(255,255,255,0.25); }
+.fvtt-tts-vm-btn:disabled { opacity: 0.5; cursor: wait; }
+.fvtt-tts-vm-title2 {
+  margin: 0 0 6px;
+  font-weight: 700;
+  color: #fff;
+}
+.fvtt-tts-vm-slot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+.fvtt-tts-vm-slot:last-child { border-bottom: none; }
+.vm-slot-label { flex: 0 0 52px; font-weight: 600; }
+.vm-slot-state { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #dcdcdc; font-size: 11px; }
+.vm-slot-file {
+  flex: 0 0 auto;
+  padding: 1px 8px;
+  border: 1px solid var(--color-border-dark, #444);
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.vm-slot-file:hover { box-shadow: 0 0 6px rgba(255,255,255,0.25); }
+.vm-radio { display: block; margin: 2px 0; }
+.vm-radio input { margin-right: 6px; }
+.vm-new-ref { max-width: 240px; }
+.vm-mainref { color: #dcdcdc; font-size: 12px; word-break: break-all; }
+.fvtt-tts-vm-av { width: 44px; height: 44px; object-fit: cover; border-radius: 6px; border: 1px solid var(--color-border-dark, #444); }
+
+/* 发送并朗读面板(语气选择 + 调配设定) */
+.fvtt-tts-sendpop {
+  position: fixed;
+  z-index: 99999;
+  width: 264px;
+  background: rgba(18, 18, 24, 0.98);
+  border: 1px solid var(--color-border-dark, #444);
+  border-radius: 8px;
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.6);
+  font-size: 12px;
+  color: #fff;
+  overflow: hidden;
+}
+.fvtt-tts-sendpop-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  font-weight: 700;
+  cursor: move;
+  user-select: none;
+  background: rgba(255, 255, 255, 0.05);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+.fvtt-tts-sendpop-close {
+  margin-left: auto;
+  cursor: pointer;
+  color: #dcdcdc;
+  font-size: 13px;
+  padding: 0 4px;
+}
+.fvtt-tts-sendpop-close:hover { color: #fff; }
+.fvtt-tts-sendpop-body { padding: 8px 10px 10px; }
+.fvtt-tts-sendpop-sec {
+  margin: 4px 0 4px;
+  font-size: 11px;
+  color: #dcdcdc;
+  font-weight: 600;
+}
+.fvtt-tts-sendpop-emogrid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+}
+.fvtt-tts-sendpop-emo {
+  padding: 4px 2px;
+  border: 1px solid var(--color-border-dark, #444);
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.3);
+  color: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  line-height: 1.2;
+}
+.fvtt-tts-sendpop-emo:hover { border-color: var(--color-border-highlight, #999); }
+.fvtt-tts-sendpop-emo.on { border-color: var(--color-text-hyperlink, #6c8cff); color: #fff; box-shadow: 0 0 6px rgba(108, 140, 255, 0.4); }
+.fvtt-tts-sendpop-emo.off { opacity: 0.55; }
+.fvtt-tts-sendpop-tune { display: flex; flex-direction: column; gap: 4px; }
+.fvtt-tts-sendpop-tuneline { display: flex; align-items: center; gap: 6px; }
+.fvtt-tts-sendpop-tuneline span { flex: 0 0 60px; color: #dcdcdc; }
+.fvtt-tts-sendpop-tuneline input[type="range"] { flex: 1; accent-color: var(--color-text-hyperlink, #6c8cff); }
+.fvtt-tts-sendpop-actions { margin-top: 6px; }
+.fvtt-tts-sendpop-openvm {
+  width: 100%;
+  padding: 4px 8px;
+  border: 1px dashed var(--color-border-dark, #555);
+  border-radius: 4px;
+  background: transparent;
+  color: #dcdcdc;
+  cursor: pointer;
+  font-size: 11px;
+}
+.fvtt-tts-sendpop-openvm:hover { color: #fff; border-color: var(--color-border-highlight, #999); }
+/* AI 预加载 / AI 直出: 默认白底, 醒目; 悬停高亮 */
+.fvtt-tts-sendpop-preload,
+.fvtt-tts-sendpop-direct {
+  flex: 1;
+  padding: 5px 8px;
+  border: 1px solid #b8b8c8;
+  border-radius: 4px;
+  background: #f0f0f2;
+  color: #222;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  transition: background 0.12s, border-color 0.12s, box-shadow 0.12s;
+  white-space: nowrap;
+}
+.fvtt-tts-sendpop-preload:hover:not(:disabled),
+.fvtt-tts-sendpop-direct:hover:not(:disabled) {
+  background: #ffffff;
+  border-color: var(--color-text-hyperlink, #6c8cff);
+  box-shadow: 0 0 8px rgba(108, 140, 255, 0.35);
+}
+.fvtt-tts-sendpop-preload:disabled,
+.fvtt-tts-sendpop-direct:disabled { opacity: 0.55; cursor: wait; }
+/* 预加载完成态: 绿色勾 */
+.fvtt-tts-sendpop-preload.done {
+  background: #dff5e3;
+  border-color: #4caf6d;
+  color: #1d6b36;
+}
+.fvtt-tts-sendpop-preload.done:hover:not(:disabled) {
+  background: #eafbe8;
+  border-color: #4caf6d;
+  box-shadow: 0 0 8px rgba(76, 175, 109, 0.35);
+}
+.fvtt-tts-sendpop-foot {
+  display: flex;
+  gap: 6px;
+  margin-top: 10px;
+}
+.fvtt-tts-sendpop-foot button {
+  flex: 1;
+  padding: 5px 8px;
+  border: 1px solid var(--color-border-dark, #444);
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.3);
+  color: inherit;
+  cursor: pointer;
+  font-size: 12px;
+}
+.fvtt-tts-sendpop-fire { border-color: var(--color-text-hyperlink, #6c8cff) !important; color: #fff; }
+.fvtt-tts-sendpop-fire:hover:not(:disabled) { box-shadow: 0 0 8px rgba(108, 140, 255, 0.5); }
+.fvtt-tts-sendpop-fire:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* 黑白款: 模块 UI 全部字体白色(含下拉/输入框/标签), 粉色主题规则在其后覆盖 */
+#fvtt-tts-floatbar,
+.fvtt-tts-sendpop,
+.fvtt-tts-vm { color: #fff; }
+#fvtt-tts-floatbar select, #fvtt-tts-floatbar select option,
+#fvtt-tts-floatbar button, #fvtt-tts-floatbar input,
+.fvtt-tts-sendpop select, .fvtt-tts-sendpop select option,
+.fvtt-tts-sendpop input, .fvtt-tts-sendpop textarea,
+.fvtt-tts-vm select, .fvtt-tts-vm select option,
+.fvtt-tts-vm input, .fvtt-tts-vm input::placeholder,
+.fvtt-tts-vm textarea, .fvtt-tts-vm label,
+.fvtt-tts-vm span, .fvtt-tts-vm div, .fvtt-tts-vm h2, .fvtt-tts-vm h3 {
+  color: #fff;
+}
+
+/* ============ 粉色系 HUD 主题(配置: HUD 主题 → 粉色系) ============ */
+body.fvtt-tts-pink #fvtt-tts-floatbar,
+body.fvtt-tts-pink .fvtt-tts-sendpop,
+body.fvtt-tts-pink .fvtt-tts-vm {
+  background: #ffd0e2 !important;
+  border-color: #e88ab2 !important;
+  color: #4a2233 !important;
+  box-shadow: 0 4px 16px rgba(170, 70, 120, 0.35) !important;
+}
+body.fvtt-tts-pink .fvtt-tts-sendpop *,
+body.fvtt-tts-pink .fvtt-tts-vm *,
+body.fvtt-tts-pink #fvtt-tts-floatbar * {
+  color: inherit;
+}
+body.fvtt-tts-pink #fvtt-tts-floatbar select,
+body.fvtt-tts-pink #fvtt-tts-floatbar select option,
+body.fvtt-tts-pink .fvtt-tts-sendpop select,
+body.fvtt-tts-pink .fvtt-tts-vm select {
+  background: #fff0f6;
+  border-color: #e88ab2;
+}
+body.fvtt-tts-pink #fvtt-tts-floatbar button,
+body.fvtt-tts-pink .fvtt-tts-sendpop button,
+body.fvtt-tts-pink .fvtt-tts-vm button,
+body.fvtt-tts-pink .fvtt-tts-vm .vm-slot-file {
+  background: #ffe3ee;
+  border-color: #e88ab2;
+}
+body.fvtt-tts-pink #fvtt-tts-floatbar button:hover,
+body.fvtt-tts-pink .fvtt-tts-sendpop button:hover,
+body.fvtt-tts-pink .fvtt-tts-vm button:hover,
+body.fvtt-tts-pink .fvtt-tts-vm .vm-slot-file:hover {
+  border-color: #c96a96;
+  box-shadow: 0 0 6px rgba(201, 106, 150, 0.5);
+}
+body.fvtt-tts-pink .fvtt-tts-sendpop-head,
+body.fvtt-tts-pink .fvtt-tts-vm-head {
+  background: rgba(232, 138, 178, 0.4) !important;
+  border-bottom-color: #e88ab2 !important;
+}
+body.fvtt-tts-pink .fvtt-tts-sendpop-emo {
+  background: #fff0f6;
+  border-color: #e88ab2;
+}
+body.fvtt-tts-pink .fvtt-tts-sendpop-emo.on {
+  border-color: #c96a96 !important;
+  box-shadow: 0 0 8px rgba(201, 106, 150, 0.55);
+}
+body.fvtt-tts-pink .fvtt-tts-sendpop-emo.off { opacity: 0.5; }
+body.fvtt-tts-pink .fvtt-tts-sendpop-tuneline input[type="range"] { accent-color: #c96a96; }
+body.fvtt-tts-pink .fvtt-tts-vm input[type="range"],
+body.fvtt-tts-pink .fvtt-tts-vm input[type="text"] {
+  background: #fff0f6;
+  border-color: #e88ab2;
+  color: inherit;
+}
+body.fvtt-tts-pink .fvtt-tts-vm .fvtt-tts-vm-slot {
+  border-bottom-color: rgba(232, 138, 178, 0.35);
+}
+body.fvtt-tts-pink .fvtt-tts-vm-av {
+  border-color: #e88ab2;
+}
+body.fvtt-tts-pink .fvtt-tts-sendpop-fire {
+  border-color: #c96a96 !important;
+}
+body.fvtt-tts-pink .fvtt-tts-sendpop-openvm {
+  border-color: rgba(201, 106, 150, 0.6);
+}
+/* 情绪立绘: 聊天消息内随语气显示(对标成品软件立绘切换) */
+.fvtt-tts-emotion-avatar {
+  display: block;
+  max-width: 140px;
+  max-height: 140px;
+  margin: 2px 0 6px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  object-fit: contain;
+}
+/* 情绪槽立绘输入框 */
+.fvtt-tts-vm-slot-avatar {
+  width: 100%;
+  margin-top: 3px;
+  padding: 3px 6px;
+  box-sizing: border-box;
+  border: 1px solid var(--color-border-dark, #444);
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.25);
+  color: inherit;
+  font-size: 11px;
+}
