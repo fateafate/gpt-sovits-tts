@@ -225,11 +225,27 @@ export class VoiceManager {
       <div class="fvtt-tts-vm-body"></div>
       <footer class="fvtt-tts-vm-foot">
         <button type="button" class="fvtt-tts-vm-back" style="display:none">${t("vm.back", "返回")}</button>
+        <button type="button" class="fvtt-tts-vm-selftest" title="${t("vm.selfTestTitle", "一键跑全部测试并生成报告文件，供作者排查问题")}">🧪 ${t("vm.selfTest", "自检")}</button>
+        <button type="button" class="fvtt-tts-vm-stress" title="${t("vm.stressTestTitle", "高压测试: 并发/长文本/广播风暴等压力场景")}">⚡ ${t("vm.stressTest", "高压")}</button>
         <span class="fvtt-tts-vm-spacer" style="flex:1"></span>
         <button type="button" class="fvtt-tts-vm-test">${t("vm.test", "试听")}</button>
         <button type="button" class="fvtt-tts-vm-save">${t("vm.save", "保存")}</button>
       </footer>`;
     this.el.querySelector(".fvtt-tts-vm-close").addEventListener("click", () => this.close());
+    this.el.querySelector(".fvtt-tts-vm-selftest").addEventListener("click", () => {
+      try {
+        const fn = game.gptSoVitsTTS && game.gptSoVitsTTS.runSelfTest;
+        if (fn) fn();
+        else if (ui && ui.notifications) ui.notifications.info("模块未就绪，稍后再试");
+      } catch (e) { /* noop */ }
+    });
+    this.el.querySelector(".fvtt-tts-vm-stress").addEventListener("click", () => {
+      try {
+        const fn = game.gptSoVitsTTS && game.gptSoVitsTTS.runStressTest;
+        if (fn) fn();
+        else if (ui && ui.notifications) ui.notifications.info("模块未就绪，稍后再试");
+      } catch (e) { /* noop */ }
+    });
     this.el.addEventListener("keydown", (ev) => { if (ev.key === "Escape") this.close(); });
     makeDraggable(this.el, this.el.querySelector(".fvtt-tts-vm-head"), { persistKey: "fvtt-tts-vm-pos" });
     document.body.appendChild(this.el);
@@ -377,6 +393,28 @@ export class VoiceManager {
       html += `<div class="fvtt-tts-vm-status fvtt-tts-vm-hw">${t("vm.hw", "硬件")}: ${esc(hwTxt)} · ${esc(st.is_half ? "fp16" : "fp32")}</div>`;
     }
 
+    // 语音分配(GM): 列出全部 pl 账号, 每个分配语音运行电脑(默认主持人电脑; 可给该玩家自己或某台服务机)
+    if (isGM) {
+      try {
+        const assigns = safeAssignments();
+        const users = game.users ? game.users.map(u => u.name).filter(Boolean) : [];
+        const runners = (game.gptSoVitsTTS && game.gptSoVitsTTS.getRunners) ? (game.gptSoVitsTTS.getRunners() || []) : [];
+        html += `<section class="fvtt-tts-vm-sec fvtt-tts-vm-sec-voice">
+          <div class="fvtt-tts-vm-title2">${t("vm.voiceAssign", "语音分配（谁的语音由哪台电脑跑）")}</div>
+          <div class="fvtt-tts-vm-hint">${t("vm.voiceAssignHint", "给每个玩家分配语音运行的电脑；默认全部由主持人电脑跑。玩家端自动跟随。")}</div>`;
+        users.forEach(u => {
+          const cur = assigns[u] || "gm";
+          html += `<div class="fvtt-tts-vm-voice-row"><span class="fvtt-tts-vm-voice-name">${esc(u)}</span>
+            <select class="fvtt-tts-vm-voice-sel" data-user="${esc(u)}">
+              <option value="gm" ${cur === "gm" ? "selected" : ""}>${t("vm.voiceGm", "主持人电脑（默认）")}</option>
+              <option value="self" ${cur === "self" ? "selected" : ""}>${t("vm.voiceSelf", "该玩家自己的电脑")}</option>
+              ${runners.map(r => `<option value="${esc(r.url)}" ${cur === r.url ? "selected" : ""}>${esc(r.by || "玩家")}（${esc(r.url)}）</option>`).join("")}
+            </select></div>`;
+        });
+        html += `</section>`;
+      } catch (e) { /* noop */ }
+    }
+
     body.innerHTML = html;
     this._bindMain(body, isGM, chars, active);
   }
@@ -406,6 +444,27 @@ export class VoiceManager {
       });
     }
     body.querySelector(".fvtt-tts-vm-avpick").addEventListener("click", () => this._pickAvatar());
+    // 读取语音分配表(带类型防御: 设置曾被错误存成字符串时按空表处理, 防止坏值传播)
+function safeAssignments() {
+  try {
+    const a = game.settings.get("gpt-sovits-tts", "voiceAssignments");
+    if (a && typeof a === "object" && !Array.isArray(a)) return { ...a };
+  } catch (e) { /* noop */ }
+  return {};
+}
+
+// 语音分配(GM): 选区变化 → 保存 world 分配表(全员自动跟随)
+    body.querySelectorAll(".fvtt-tts-vm-voice-sel").forEach(sel => {
+      sel.addEventListener("change", () => {
+        try {
+          const assigns = safeAssignments();
+          assigns[sel.dataset.user] = sel.value;
+          game.settings.set("gpt-sovits-tts", "voiceAssignments", assigns).then(() => {
+            try { ui.notifications.info(t("vm.voiceSaved", "语音分配已保存")); } catch (e) { /* noop */ }
+          }).catch(() => {});
+        } catch (e) { /* noop */ }
+      });
+    });
     // AI 接入: 输入网址/密钥自动检测模型 + 保存配置
     const aiBaseInp = body.querySelector(".fvtt-tts-vm-ai-base");
     const aiKeyInp = body.querySelector(".fvtt-tts-vm-ai-key");

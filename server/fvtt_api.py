@@ -119,6 +119,7 @@ RESP:
 
 import os
 import sys
+import shutil
 import re
 import time
 import traceback
@@ -141,6 +142,7 @@ from fastapi.responses import StreamingResponse, JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 from io import BytesIO
+import uuid
 from tools.i18n.i18n import I18nAuto
 from GPT_SoVITS.TTS_infer_pack.TTS import TTS, TTS_Config
 from GPT_SoVITS.TTS_infer_pack.text_segmentation_method import get_method_names as get_cut_method_names
@@ -374,9 +376,63 @@ def _fade_edges(arr, sr, fade_ms=18):
     return arr
 
 
-def _boost_head(arr, sr, ms=60, start_gain=0.72):
-    """头部增益补偿(修复合成语音开头偏弱): 前 ms 毫秒从 start_gain 线性恢复 1.0.
-    合成器/融合参考的开头起音常偏弱, 微抬升不产生爆音, 保留抗爆音特性."""
+def _trim_lead_silence_arr(arr, sr, max_trim_s=1.2, thresh=0.015):
+    """裁剪合成音频开头的弱音/静音段(修复"前几个字被吞"):
+    实测 GPT-SoVITS 合成开头常有 300~400ms 接近静音(RMS≈0.0002, 整体 0.23),
+    前几个字埋在静音里 → 听感"吞音"。裁到第一个能量≥thresh 的 20ms 窗,
+    并保留 20ms 缓冲(不硬切第一音素)。增益对静音无效, 必须裁剪。
+    注意: 与参考音频裁剪(_trim_lead_silence)不同, 这是数组版本, 作用于合成结果。"""
+    arr = np.asarray(arr, dtype=np.float32)
+    n = len(arr)
+    max_trim = int(sr * max_trim_s)
+    if n <= max_trim * 2:
+        return arr   # 太短(几乎全是开头)不裁, 防误伤
+    win = max(1, int(sr * 0.02))
+    i = 0
+    while i < min(n, max_trim):
+        seg = arr[i:i + win]
+        rms = float(np.sqrt(np.mean(seg ** 2))) if len(seg) else 0.0
+        if rms >= thresh:
+            break
+        i += win
+    if 0 < i < n:
+        keep = max(0, i - win)   # 回退一个窗作为缓冲(保留首个音素的起始)
+        return arr[keep:]
+    return arr
+
+
+def _to_float_audio(arr):
+    """音频统一转 float32(-1..1): 引擎可能返回 int16 PCM(满幅 32768 域),
+    trim/lift/boost 的阈值都是 float 域, 不归一化会导致单位不匹配、处理永不触发."""
+    arr = np.asarray(arr)
+    if arr.dtype.kind == "i":
+        arr = arr.astype(np.float32) / 32768.0
+    return arr.astype(np.float32)
+
+
+def _lift_weak_head(arr, sr, lift_s=1.5, floor=0.06, max_gain=30.0):
+    """开头弱音段软提升(修复"前几个字轻到听不见"):
+    引擎开头常是 1 秒级的能量渐弱爬坡(0.001→正常), 纯裁剪会硬切字音,
+    增益把开头 lift_s 秒内能量低于 floor 的 20ms 窗按比例抬到 floor(上限 max_gain 防噪声放大),
+    让渐弱起音达到可听水平; 之后 _limit_peak 兜底防削波."""
+    arr = _to_float_audio(arr).copy()
+    win = max(1, int(sr * 0.02))
+    nwin = int(lift_s * sr / win)
+    for k in range(min(nwin, len(arr) // win)):
+        seg = arr[k * win:(k + 1) * win]
+        rms = float(np.sqrt(np.mean(seg ** 2))) if len(seg) else 0.0
+        if 0.0 < rms < floor:
+            g = floor / rms
+            if g > max_gain:
+                g = max_gain
+            arr[k * win:(k + 1) * win] *= g
+    return arr
+
+
+def _boost_head(arr, sr, ms=80, start_gain=1.4):
+    """头部增益补偿(合成语音开头起音偏弱): 前 ms 毫秒从 start_gain 线性回落到 1.0.
+    先经 _trim_lead_silence_arr 裁掉开头静音后, 开头几个字仍可能起音不足,
+    这里温和抬升(+25%)改善听感, 不产生爆音; _limit_peak 再兜底防削波."""
     arr = np.asarray(arr, dtype=np.float32)
     n = int(sr * ms / 1000)
     if len(arr) <= n + 2:
@@ -458,6 +514,58 @@ def _wav_to_mp3(wav_bytes, bitrate="64k"):
         return p.stdout if (p.returncode == 0 and p.stdout) else None
     except Exception:
         return None
+
+
+# 音频缓存目录: 合成音频落盘供全员 URL 拉流播放(Shinsekai 式文件传输, 无 socket 包大小限制)
+_AUDIO_CACHE = os.path.join(os.getcwd(), "audio_cache")
+
+
+def _respond_with_file(audio_bytes, media_type, req=None):
+    """把合成音频存到缓存目录并返回带 X-Audio-Url 响应头的响应(客户端可广播 URL 让全员 HTTP 拉流)."""
+    try:
+        ext = "mp3" if str(media_type) == "audio/mpeg" else "wav"
+        _fn = "%s.%s" % (uuid.uuid4().hex, ext)
+        _p = os.path.join(_AUDIO_CACHE, _fn)
+        with open(_p, "wb") as _f:
+            _f.write(audio_bytes)
+        # 懒清理: 每次合成顺手清掉超过 2 小时的缓存音频(防磁盘堆积)
+        try:
+            _now = time.time()
+            for _old in os.listdir(_AUDIO_CACHE):
+                try:
+                    _op = os.path.join(_AUDIO_CACHE, _old)
+                    if _now - os.path.getmtime(_op) > 7200:
+                        os.remove(_op)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        # Foundry 静态导出: 同一音频再写一份到模块目录 → 玩家端直接走 Foundry 端口(/modules/...)拉流,
+        # 不依赖 9881 端口对局域网开放 — 响应头 X-Fvtt-Audio-Url 提供该路径(客户端优先用它)
+        _fvtt_url = ""
+        try:
+            _xd = os.path.join(os.path.dirname(__file__), "..", "engine", "audio_export")
+            os.makedirs(_xd, exist_ok=True)
+            with open(os.path.join(_xd, _fn), "wb") as _f:
+                _f.write(audio_bytes)
+            _fvtt_url = "/modules/gpt-sovits-tts/engine/audio_export/%s" % _fn
+            # 同样懒清理旧导出(2h)
+            _now2 = time.time()
+            for _old in os.listdir(_xd):
+                try:
+                    _op2 = os.path.join(_xd, _old)
+                    if _now2 - os.path.getmtime(_op2) > 7200:
+                        os.remove(_op2)
+                except Exception:
+                    pass
+        except Exception:
+            _fvtt_url = ""
+        _h = {"X-Audio-Url": "/audio/%s" % _fn}
+        if _fvtt_url:
+            _h["X-Fvtt-Audio-Url"] = _fvtt_url
+        return Response(audio_bytes, media_type=media_type, headers=_h)
+    except Exception:
+        return Response(audio_bytes, media_type=media_type)
 
 
 def _resolve_ref(path):
@@ -800,17 +908,55 @@ def base_model_pair():
 
 
 def activate_character(name):
-    """切换并热加载指定角色(权重+主参考+提示), 成功返回 None, 失败返回错误字符串."""
+    """切换并热加载指定角色(权重+主参考+提示), 成功返回 None, 失败返回错误字符串.
+    优先权重热换(Shinsekai 式, 秒级: 只换 GPT/SoVITS 权重+参考, 不重建推理管线);
+    换权重不可用时回退全量 load_character."""
     global CHAR_CONFIG
     name = os.path.basename(str(name))
     y = os.path.join(_CHARS_ROOT, name, "character.yaml")
     if not os.path.isfile(y):
         return "角色 %s 不存在" % name
     try:
-        old = args.char
-        args.char = y  # load_character 依赖 args.char
-        load_character(y)
-        args.char = old
+        hot_ok = False
+        try:
+            import yaml as _yaml
+            with open(y, "r", encoding="utf-8") as _f:
+                cfg = _yaml.safe_load(_f) or {}
+            base = os.path.dirname(os.path.abspath(y))
+            gpt = args.gpt or _char_path(cfg.get("gpt_model_path", ""))
+            sovits = args.sovits or _char_path(cfg.get("sovits_model_path", ""))
+            ref_raw = cfg.get("refer_audio_path", "") or ""
+            ref_abs = _char_path(ref_raw) if ref_raw else ""
+            if gpt and sovits and os.path.isfile(gpt) and os.path.isfile(sovits) and ref_abs and os.path.isfile(ref_abs):
+                tts_pipeline.init_t2s_weights(gpt)
+                tts_pipeline.init_vits_weights(sovits)
+                tts_pipeline.set_ref_audio(ref_abs)
+                # 更新内存角色元数据(合成默认参考/提示/语气槽/别名映射/人设)
+                CHAR_CONFIG = CHAR_CONFIG or {}
+                CHAR_CONFIG["name"] = str(cfg.get("name", "") or name)
+                CHAR_CONFIG["gpt_model_path"] = gpt
+                CHAR_CONFIG["sovits_model_path"] = sovits
+                CHAR_CONFIG["ref_audio_path"] = ref_raw.replace("\\", "/")
+                CHAR_CONFIG["prompt_text"] = str(cfg.get("prompt_text", "") or "")
+                CHAR_CONFIG["prompt_lang"] = str(cfg.get("prompt_lang", "") or "")
+                CHAR_CONFIG["default_text_lang"] = "auto"
+                CHAR_CONFIG["source_dir"] = base
+                CHAR_CONFIG["source_yaml"] = os.path.abspath(y)
+                CHAR_CONFIG["emotions"] = emotion_slot_state(cfg)
+                CHAR_CONFIG["pronunciation_map"] = cfg.get("pronunciation_map", {}) or {}
+                CHAR_CONFIG["character_setting"] = str(cfg.get("character_setting", "") or "")[:1500]
+                args.char = y
+                hot_ok = True
+                print("角色切换成功(权重热换): %s" % name)
+        except Exception as e:
+            print("权重热换不可用(%s), 回退全量加载" % e)
+            hot_ok = False
+        if not hot_ok:
+            old = args.char
+            args.char = y  # load_character 依赖 args.char
+            load_character(y)
+            args.char = old
+            print("角色切换成功(全量加载): %s" % name)
         return None
     except Exception as e:
         print("切换角色失败 %s: %s" % (name, e))
@@ -857,6 +1003,7 @@ APP.add_middleware(
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-Audio-Url", "X-Fvtt-Audio-Url"],   # 浏览器 fetch 跨源才能读到音频 URL 响应头(否则自检/生产广播都拿不到 URL)
 )
 
 
@@ -1145,6 +1292,17 @@ async def tts_handle(req: dict):
         media_type = "wav"
         req["media_type"] = "wav"   # 引擎/check_params 不支持 mp3: 内部用 wav, 响应前再转码
 
+    # 硬件自适应 batch_size(引擎 batch 并行, =Shinsekai 参数): 显存 >=14GB→6, >=8→3, >=4→2, 否则 1
+    # 长文本按 cut 切出多段时并行推理(多段同时合成), 而不是逐句串行 → 2~4 倍提速
+    try:
+        _bs = int(req.get("batch_size", 0) or 0)
+    except Exception:
+        _bs = 0
+    if _bs <= 1:
+        _vram = float(HW_INFO.get("gpu_mem_total_gb", 0) or 0)
+        _bs = 6 if _vram >= 14 else (3 if _vram >= 8 else (2 if _vram >= 4 else 1))
+    req["batch_size"] = _bs
+
     check_res = check_params(req)
     if check_res is not None:
         return check_res
@@ -1202,59 +1360,18 @@ async def tts_handle(req: dict):
             )
 
         else:
-            # 长文本按句切分逐句合成再拼接(=成品软件做法), 短文本整段一次合成
-            # 台词括号剥离(照搬成品软件): （动作描写）不朗读, 只读正文
+            # 文本清洗(括号动作描写剥离) + 引擎内部切分(cut5) + 硬件自适应 batch 并行
+            # (=Shinsekai 同款参数: 多段同时推理, 而不是逐句串行 → 长文本 2~4 倍提速)
             _text_raw = _clean_tts_text(req.get("text") or "")
             req["text"] = _text_raw
-            _sents = _split_sentences(_text_raw)
-            _do_split = len(_text_raw) > 50 and len(_sents) >= 2
-            if not _do_split:
-                sr, audio_data = next(tts_generator)
-                audio_data = _limit_peak(_boost_head(audio_data, sr))   # 头部增益补偿 + 防削波
-                audio_data = pack_audio(BytesIO(), audio_data, sr, media_type).getvalue()
-            else:
-                _sr0 = None
-                _chunks = []
-                _ok = 0
-                # 并行仅用于 CPU 推理(多核吃满); GPU(cuda)下多线程会互相抢上下文反而更慢 → 串行
-                _use_parallel = "cpu" in str(tts_config.device).lower()
-                def _synth_one(_s):
-                    try:
-                        _r2 = dict(req)
-                        _r2["text"] = _s
-                        _g2 = tts_pipeline.run(_r2)
-                        return next(_g2)
-                    except Exception:
-                        return None
-                _results = []
-                if _use_parallel:
-                    try:
-                        import concurrent.futures as _cf
-                        with _cf.ThreadPoolExecutor(max_workers=min(4, max(1, len(_sents)))) as _ex:
-                            _results = list(_ex.map(_synth_one, _sents))
-                    except Exception:
-                        _results = [_synth_one(s) for s in _sents]  # 回退串行
-                else:
-                    _results = [_synth_one(s) for s in _sents]  # GPU: 串行最快
-                for _sr2a, _a2 in _results:
-                    if _sr2a is None or _a2 is None:
-                        continue
-                    if _ok == 0:
-                        _sr0 = _sr2a
-                    elif _sr2a != _sr0:
-                        continue  # 采样率不一致的段落丢弃(理论不出现)
-                    _chunks.append(_a2)
-                    _ok += 1
-                if _ok == 0:
-                    raise RuntimeError("sentence split synthesis failed")
-                # 拼接防爆音: 段间淡入淡出+静音间隔+头部增益补偿+峰值限制
-                audio_data = _limit_peak(_boost_head(_safe_concat(_chunks, _sr0), _sr0))
-                audio_data = pack_audio(BytesIO(), audio_data, _sr0, media_type).getvalue()
+            sr, audio_data = next(tts_generator)   # 引擎内部按切分+batch 并行合成, 返回整段
+            audio_data = _limit_peak(_boost_head(_lift_weak_head(_trim_lead_silence_arr(_to_float_audio(audio_data), sr), sr), sr))   # 归一化 → 裁纯静音 → 弱起软提升 → 头部增益 → 防削波
+            audio_data = pack_audio(BytesIO(), audio_data, sr, media_type).getvalue()
             if want_mp3:
                 mp3_bytes = _wav_to_mp3(audio_data)
                 if mp3_bytes:
-                    return Response(mp3_bytes, media_type="audio/mpeg")
-            return Response(audio_data, media_type=f"audio/{media_type}")
+                    return _respond_with_file(mp3_bytes, "audio/mpeg", req)
+            return _respond_with_file(audio_data, f"audio/{media_type}", req)
     except Exception as e:
         return JSONResponse(status_code=400, content={"message": "tts failed", "Exception": str(e)})
 
@@ -1416,6 +1533,16 @@ async def root():
     return {"ok": True, "service": "GPT-SoVITS (fvtt_api.py)", "docs": "/docs", "status": "/status"}
 
 
+@APP.get("/audio/{fname}")
+async def audio_file(fname: str):
+    """缓存音频拉流(URL 广播用): 玩家直接 HTTP 拉取合成好的音频, 不走 socket(无大小限制, 局域网直连快)."""
+    fname = os.path.basename(str(fname))
+    p = os.path.join(_AUDIO_CACHE, fname)
+    if not os.path.isfile(p):
+        return JSONResponse(status_code=404, content={"ok": False, "message": "audio not found"})
+    return FileResponse(p, media_type="audio/mpeg" if str(fname).lower().endswith(".mp3") else "audio/wav")
+
+
 @APP.get("/status")
 async def status():
     char = None
@@ -1424,6 +1551,15 @@ async def status():
         for k in ("gpt_model_path", "sovits_model_path", "ref_audio_path"):
             if char.get(k):
                 char[k] = os.path.basename(str(char[k]))
+    lan_ip = ""
+    try:
+        import socket as _sock
+        _s = _sock.socket(_sock.AF_INET, _sock.SOCK_DGRAM)
+        _s.connect(("8.8.8.8", 80))   # UDP 不真发包, 仅取本机对外网卡 IP
+        lan_ip = _s.getsockname()[0]
+        _s.close()
+    except Exception:
+        pass
     return {
         "ok": True,
         "service": "GPT-SoVITS (fvtt_api.py)",
@@ -1432,6 +1568,7 @@ async def status():
         "is_half": bool(getattr(tts_config, "is_half", False)),
         "languages": getattr(tts_config, "languages", []),
         "hw": dict(HW_INFO),
+        "lan_ip": lan_ip,
         "character": char,
     }
 
@@ -1458,6 +1595,7 @@ async def characters():
             "prompt_text": cfg.get("prompt_text", ""),
             "prompt_lang": cfg.get("prompt_lang", ""),
             "setting": str(cfg.get("character_setting", "") or "")[:1500],
+            "avatar": str(cfg.get("avatar", "") or ""),
             "emotions": emotion_slot_state(cfg),
         })
     # 激活角色附带细节(权重路径/模型清单等)
@@ -2255,6 +2393,196 @@ async def diag_endpoint(request: Request):
     return {"ok": True}
 
 
+@APP.post("/selftest")
+async def selftest_endpoint(request: Request):
+    """内置自检(诊断用): 聚合服务端状态 + 客户端上报 → 写 selftest_report.json
+    客户端一键"自检"按钮会调用本端点; 报告文件供作者直接读取排查(不用来回截图/口述)."""
+    client_payload = {}
+    try:
+        body = await request.json()
+        if isinstance(body, dict):
+            client_payload = body
+    except Exception:
+        pass
+    st = {}
+    try:
+        hw = HW_INFO
+        st["hardware"] = {
+            "gpu_name": hw.get("gpu_name", ""),
+            "gpu_mem_total_gb": hw.get("gpu_mem_total_gb"),
+            "gpu_mem_free_gb": hw.get("gpu_mem_free_gb"),
+            "device": str(hw.get("device", "")),
+            "is_half": bool(getattr(tts_config, "is_half", False)),   # 与 /status 同一来源(错误读 HW_INFO.is_half 键不存在显示 false)
+        }
+    except Exception:
+        st["hardware"] = {"err": "HW_INFO 不可用"}
+    chars_out = []
+    try:
+        for ch in list_installed_chars():
+            cfg = read_char_yaml(ch["name"])
+            if not cfg:
+                continue
+            emos = emotion_slot_state(cfg) or []
+            chars_out.append({
+                "name": ch["name"],
+                "avatar": str(cfg.get("avatar", "") or ""),
+                "emotions": len(emos),
+                "emo_with_avatar": sum(1 for e in emos if e.get("avatar")),
+            })
+    except Exception as e:
+        chars_out = [{"err": str(e)}]
+    st["characters"] = {
+        "active": (CHAR_CONFIG.get("name") if isinstance(CHAR_CONFIG, dict) else None),
+        "list": chars_out,
+    }
+    try:
+        ad = _AUDIO_CACHE   # 与服务端实际缓存目录一致(os.getcwd()/audio_cache)
+        st["audio_cache"] = {"dir": ad, "files": len(os.listdir(ad)) if os.path.isdir(ad) else -1}
+    except Exception:
+        st["audio_cache"] = {}
+    try:
+        du = shutil.disk_usage(os.getcwd())
+        st["disk"] = {"free_gb": round(du.free / 1e9, 2)}
+    except Exception:
+        st["disk"] = {}
+    st["server"] = {"pid": os.getpid(), "cwd": os.getcwd(), "python": sys.executable}
+    try:
+        _lf = os.path.join(os.path.dirname(__file__), "tts-requests.log")
+        if os.path.isfile(_lf):
+            with open(_lf, "r", encoding="utf-8", errors="replace") as f:
+                st["recent_logs"] = f.readlines()[-15:]
+    except Exception:
+        st["recent_logs"] = []
+    report = {
+        "time": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "server": st,
+        "client": client_payload,
+    }
+    # 高压测试单独落盘, 避免被低压自检覆盖(两份报告并存, 作者都读)
+    if isinstance(client_payload, dict) and client_payload.get("mode") == "stress":
+        out = os.path.join(os.path.dirname(__file__), "selftest_stress.json")
+    else:
+        out = os.path.join(os.path.dirname(__file__), "selftest_report.json")
+    try:
+        with open(out, "w", encoding="utf-8") as f:
+            json.dump(report, f, ensure_ascii=False, indent=2)
+        return {"ok": True, "file": out}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"ok": False, "message": str(e)})
+
+
+# ============ 传输测试: 服务端作中介确认"广播真实到达其他页面(pl)" — 不依赖 pl→GM 的 socket 回程 ============
+_TRANSFERS = {}
+_TRANSFER_LOCK = threading.Lock()
+
+
+@APP.post("/selftest/transfer-start")
+async def selftest_transfer_start(request: Request):
+    """{id} → 开一个传输记录槽(pl 端收到广播后 HTTP 回写到达)"""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"ok": False, "message": "json required"})
+    tid = str(body.get("id") or "").strip()
+    if not tid:
+        return JSONResponse(status_code=400, content={"ok": False, "message": "id required"})
+    with _TRANSFER_LOCK:
+        _TRANSFERS[tid] = {"arrivals": [], "ts": time.time()}
+        while len(_TRANSFERS) > 20:
+            _TRANSFERS.pop(next(iter(_TRANSFERS)))
+    return {"ok": True, "id": tid}
+
+
+@APP.post("/selftest/transfer-arrive")
+async def selftest_transfer_arrive(request: Request):
+    """{id, from} → pl 端收到 selftest-transfer 广播后回写: 证明该页面确实收到了广播"""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"ok": False, "message": "json required"})
+    tid = str(body.get("id") or "").strip()
+    fr = str(body.get("from") or "").strip()[:30]
+    if not tid:
+        return JSONResponse(status_code=400, content={"ok": False, "message": "id required"})
+    with _TRANSFER_LOCK:
+        st = _TRANSFERS.get(tid)
+        if st is not None:
+            if fr and fr not in st["arrivals"]:
+                st["arrivals"].append(fr)
+            return {"ok": True, "arrivals": st["arrivals"]}
+    return JSONResponse(status_code=404, content={"ok": False, "message": "transfer id 不存在或已过期"})
+
+
+@APP.get("/selftest/transfer-result")
+async def selftest_transfer_result(request: Request):
+    """?id= → 查询该次传输的到达名单"""
+    tid = str(request.query_params.get("id") or "").strip()
+    with _TRANSFER_LOCK:
+        st = _TRANSFERS.get(tid)
+        if st is not None:
+            return {"ok": True, "id": tid, "arrivals": st["arrivals"], "age_s": int(time.time() - st.get("ts", 0))}
+    return JSONResponse(status_code=404, content={"ok": False, "message": "transfer id 不存在或已过期"})
+
+
+@APP.post("/llm/pick-role")
+async def llm_pick_role_endpoint(request: Request):
+    """{base?, key, model?, text, roles: [名字]} → {ok, role}
+    无指定角色时, 让 LLM 从角色列表里选出最像这段台词说话者的角色(仅用于聊天立绘展示, 不改朗读音色)."""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"ok": False, "message": "json body required"})
+    base = str(body.get("base") or "").strip() or "https://api.openai.com/v1"
+    key = str(body.get("key") or "").strip()
+    model = str(body.get("model") or "").strip() or "gpt-4o-mini"
+    text = str(body.get("text") or "")[:800]
+    roles = body.get("roles") or []
+    roles = [str(r).strip() for r in roles if str(r).strip()][:20]
+    if not key:
+        return JSONResponse(status_code=400, content={"ok": False, "message": "api key 未配置"})
+    if not roles:
+        return {"ok": False, "role": ""}
+    sys_prompt = (
+        "你是跑团主持人。给你一段聊天台词和可选角色名列表，判断这段台词最可能是由哪个角色说出的，"
+        "只看说话人身份（语气/内容/自称/语境），不修改选角。只输出角色名本身，不要任何解释、标点或格式。"
+    )
+    user_content = "可选角色: %s\n台词: %s" % ("、".join(roles), text or "（只有动作或空白）")
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": sys_prompt},
+            {"role": "user", "content": user_content},
+        ],
+        "temperature": 0.2,
+        "max_tokens": 40,
+    }
+    url = base.rstrip("/") + "/chat/completions"
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json", "Authorization": "Bearer %s" % key},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except Exception as e:
+        return JSONResponse(status_code=502, content={"ok": False, "message": "LLM 请求失败: %s" % e})
+    content = ""
+    try:
+        msg = (data.get("choices") or [{}])[0].get("message", {}) or {}
+        content = str(msg.get("content") or "").strip()
+    except Exception:
+        content = ""
+    # 模糊匹配: LLM 输出需落到可选名单里(允许带引号/多余空白)
+    best = ""
+    for rn in roles:
+        if rn and (content == rn or rn in content or content in rn):
+            best = rn
+            break
+    return {"ok": bool(best), "role": best}
+
+
 @APP.post("/llm/style")
 async def llm_style_endpoint(request: Request):
     """{base?, key, model?, text, style, role?, setting?, emotions?} → {ok, speed_factor, split?}
@@ -2448,10 +2776,47 @@ if __name__ == "__main__":
         print("GPT-SoVITS (FVTT edition) listening on %s:%s" % (host, port))
         print("  /tts      文字合成语音   POST/GET  (角色包已加载时只传 text 即可)")
         print("  /asr      语音听写       POST raw audio bytes?lang=zh|ja|en")
+        print("  /audio/   合成音频拉流(URL 广播播放)")
         print("  /status   状态查询")
         print("  /docs     API 文档")
         print("浏览器里 Foundry 模块请把 serverUrl 指向: http://<本机IP或127.0.0.1>:%s" % port)
         print("=" * 60)
+        # 音频缓存目录: 启动清空旧文件
+        try:
+            os.makedirs(_AUDIO_CACHE, exist_ok=True)
+            for _f in os.listdir(_AUDIO_CACHE):
+                try:
+                    os.remove(os.path.join(_AUDIO_CACHE, _f))
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        # 热身: 服务就绪后预合成一句短语音(最多重试 3 次), 把 BERT/模型首次初始化前置 → 之后朗读不再冷启动
+        try:
+            def _warmup_worker():
+                for _i in range(3):
+                    try:
+                        _wreq = {
+                            "text": "你好，很高兴见到你。", "text_lang": "zh",
+                            "media_type": "wav", "text_split_method": "cut5",
+                            "batch_size": 1, "streaming_mode": False,
+                            "speed_factor": 1.0, "top_k": 15, "top_p": 1.0, "temperature": 0.1,
+                            "repetition_penalty": 1.05, "sample_steps": 32,
+                        }
+                        if CHAR_CONFIG:
+                            _wreq["ref_audio_path"] = CHAR_CONFIG.get("ref_audio_path") or ""
+                            _wreq["prompt_text"] = CHAR_CONFIG.get("prompt_text") or ""
+                            _wreq["prompt_lang"] = CHAR_CONFIG.get("prompt_lang") or ""
+                        _wg = tts_pipeline.run(_wreq)
+                        next(_wg)
+                        print("热身预合成完成(首次朗读将不再冷启动)")
+                        return
+                    except Exception as _we:
+                        time.sleep(20)
+            _wt = threading.Thread(target=_warmup_worker, daemon=True)
+            _wt.start()
+        except Exception:
+            pass
         uvicorn.run(app=APP, host=host, port=port, workers=1)
     except Exception:
         traceback.print_exc()

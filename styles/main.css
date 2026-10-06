@@ -598,6 +598,14 @@
   color: #fff;
 }
 
+/* header 玩家头像随"立绘图片大小"设置(只控制被替换成立绘的头像, 不碰其他 header 元素) */
+.message-header img[data-fvtt-orig-src],
+.message-sender img[data-fvtt-orig-src] {
+  max-width: var(--fvtt-tts-header-avatar-size, 36px);
+  max-height: var(--fvtt-tts-header-avatar-size, 36px);
+  width: auto;
+  height: auto;
+}
 /* ============ 粉色系 HUD 主题(配置: HUD 主题 → 粉色系) ============ */
 body.fvtt-tts-pink #fvtt-tts-floatbar,
 body.fvtt-tts-pink .fvtt-tts-sendpop,
@@ -669,12 +677,27 @@ body.fvtt-tts-pink .fvtt-tts-sendpop-openvm {
 /* 情绪立绘: 聊天消息内随语气显示(对标成品软件立绘切换) */
 .fvtt-tts-emotion-avatar {
   display: block;
-  max-width: 140px;
-  max-height: 140px;
+  max-width: var(--fvtt-tts-portrait-size, 140px);
+  max-height: var(--fvtt-tts-portrait-size, 140px);
   margin: 2px 0 6px;
   border-radius: 6px;
   border: 1px solid rgba(255, 255, 255, 0.15);
   object-fit: contain;
+  flex: 0 0 auto;
+}
+/* 角色指示物(悬浮条角色下拉旁的当前角色立绘小图标)
+   注意: 仅悬浮条内做内联子项, 不绝对定位、不改宿主布局(避免覆盖 fixed 导致界面位移) */
+.fvtt-tts-char-indicator {
+  width: 30px;
+  height: 30px;
+  object-fit: cover;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  flex: 0 0 auto;
+  margin-left: 2px;
+  vertical-align: middle;
+  pointer-events: none;
 }
 /* 情绪槽立绘输入框 */
 .fvtt-tts-vm-slot-avatar {
@@ -687,4 +710,23 @@ body.fvtt-tts-pink .fvtt-tts-sendpop-openvm {
   background: rgba(0, 0, 0, 0.25);
   color: inherit;
   font-size: 11px;
+}
+
+/* 语音分配(GM)区块 */
+.fvtt-tts-vm-voice-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0;
+}
+.fvtt-tts-vm-voice-name {
+  flex: 0 0 120px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fvtt-tts-vm-voice-sel {
+  flex: 1;
+  min-width: 0;
 }

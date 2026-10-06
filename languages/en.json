@@ -1,5 +1,24 @@
 {
   "settings": {
+    "portraitSize": {
+      "name": "Portrait Size",
+      "hint": "Display size of portrait images in chat messages (up to 3x default)",
+      "small": "Small (90px)",
+      "medium": "Medium (140px, default)",
+      "large": "Large (280px)",
+      "xl": "Extra Large (420px, 3x)"
+    },
+    "portraitMode": { "name": "Portrait display mode", "hint": "Message image = show the character portrait above the message; Indicator = show a small portrait beside the floatbar / chat input for the bound role; Both; None = disable." },
+    "portraitMode.message": "Message image",
+    "portraitMode.indicator": "Role indicator",
+    "portraitMode.both": "Both",
+    "portraitMode.none": "None",
+    "voiceRunner.gm": "GM's PC",
+    "voiceRunner.gmAuto": "GM's PC (auto)",
+    "voiceRunner": { "name": "Voice Runner (whose PC runs TTS)", "hint": "Self = run TTS locally; another player = your speech is synthesized by that PC (they must run the TTS service and broadcast it). Switching auto-updates the server URL." },
+    "voiceRunner.self": "Self (local service)",
+    "voiceRunner.current": "Current URL",
+    "aiPickAvatar": { "name": "Chat Portrait: AI-pick role when unset", "hint": "When a message has no speaking role, use AI to pick the best-matching character from the role list and show its portrait in chat. Off = only show portraits for roles." },
     "enabled": { "name": "Enable Module", "hint": "Master switch. When off, nothing is spoken and the status light hides." },
     "engine": { "name": "TTS Engine", "hint": "GPT-SoVITS: local server synthesis (best voice; start server/start-tts-server.bat first). Web Speech: browser system voice (zero config, robotic, for testing/fallback)." },
     "serverUrl": { "name": "TTS Server URL", "hint": "Default auto = use this machine at http://127.0.0.1:9881. For LAN multiplayer: other players' browsers must reach the machine (GM) running the TTS service, e.g. http://192.168.1.5:9881, and the GM must start the server bound to 0.0.0.0 so everyone hears the same voice." },
@@ -141,6 +160,15 @@
     "emotionNone": "Default"
   },
   "vm": {
+    "stressTest": "Stress",
+    "stressTestTitle": "Stress test: concurrency/long text/sequential synthesis/broadcast storm/bulk portraits",
+    "selfTest": "Self-test",
+    "selfTestTitle": "Run all tests and write a report file for the author to diagnose",
+    "voiceAssign": "Voice Assignment (whose PC runs whose voice)",
+    "voiceAssignHint": "Assign a voice-running PC for each player; defaults to the GM's PC. Players follow automatically.",
+    "voiceGm": "GM's PC (default)",
+    "voiceSelf": "This player's own PC",
+    "voiceSaved": "Voice assignment saved",
     "title": "Voice Settings",
     "close": "Close",
     "test": "Test",

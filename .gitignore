@@ -34,3 +34,6 @@ _tools/cmp/
 .DS_Store
 Thumbs.db
 desktop.ini
+# ===== 自检/高压测试报告(运行数据, 不入库) =====
+server/selftest_*.json
+server/tmp_selftest.json

@@ -157,6 +157,7 @@ function pickVoice(lang) {
 }
 
 /* ---------- GPT-SoVITS 服务端合成 ---------- */
+// 返回 { url(blob URL), audioUrl(服务端缓存文件相对路径, 空=无), blob(仅 asBlob=true 时) }
 export async function gptSovitsSynth(text, lang, { serverUrl, speedFactor = 1, overrides = null, mediaType = "wav", asBlob = false } = {}) {
   const base = String(serverUrl || "http://127.0.0.1:9880").replace(/\/+$/, "");
   const payload = {
@@ -191,7 +192,17 @@ export async function gptSovitsSynth(text, lang, { serverUrl, speedFactor = 1, o
       throw new Error(`TTS 服务返回 ${resp.status}: ${detail}`);
     }
     const blob = await resp.blob();
-    return asBlob ? blob : URL.createObjectURL(blob);
+    let audioUrl = "";
+    try { audioUrl = resp.headers.get("X-Fvtt-Audio-Url") || resp.headers.get("X-Audio-Url") || ""; } catch (e) { /* noop */ }
+    // 服务端返回相对路径 → 拼完整 URL: /modules/... = Foundry 静态(拼页面 origin, pl 端必达); /audio/... = TTS 服务(拼 serverUrl)
+    if (audioUrl && !/^https?:\/\//i.test(audioUrl)) {
+      try {
+        if (audioUrl.startsWith("/modules/") || audioUrl.startsWith("/data/")) audioUrl = new URL(audioUrl, window.location.origin).href;
+        else audioUrl = new URL(audioUrl, serverUrl).href;
+      } catch (e) { /* noop */ }
+    }
+    if (asBlob) return { blob, audioUrl };
+    return { url: URL.createObjectURL(blob), audioUrl };
   } finally {
     clearTimeout(timer);
   }

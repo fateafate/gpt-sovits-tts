@@ -1,5 +1,24 @@
 {
   "settings": {
+    "portraitSize": {
+      "name": "立绘图片大小",
+      "hint": "聊天消息中立绘的展示尺寸(最大可到默认的 3 倍)",
+      "small": "小 (90px)",
+      "medium": "中 (140px, 默认)",
+      "large": "大 (280px)",
+      "xl": "特大 (420px, 3倍)"
+    },
+    "portraitMode": { "name": "立绘展示方式", "hint": "消息内插图=在消息内容上方显示角色立绘；角色指示物=悬浮条/聊天输入框旁显示当前绑定角色的立绘小图标；都不=关闭立绘。" },
+    "portraitMode.message": "消息内插图",
+    "portraitMode.indicator": "角色指示物",
+    "portraitMode.both": "两者都要",
+    "portraitMode.none": "都不显示",
+    "voiceRunner.gm": "主持人电脑",
+    "voiceRunner.gmAuto": "主持人电脑（自动）",
+    "voiceRunner": { "name": "语音运行者（谁的电脑跑语音）", "hint": "选自己=本机跑 TTS 服务；选其他玩家=你的语音合成交给那台电脑（该玩家需开着 TTS 服务并已广播声明）。切换后本机服务地址自动跟随。" },
+    "voiceRunner.self": "自己（本机服务）",
+    "voiceRunner.current": "当前地址",
+    "aiPickAvatar": { "name": "聊天立绘：无角色时 AI 选角色", "hint": "消息没有指定朗读角色时，用 AI 从角色列表选最像说话者的角色，在聊天里显示它的立绘；关闭则只显示有角色的立绘。" },
     "enabled": { "name": "启用模块", "hint": "总开关。关闭后不再朗读、不显示状态灯。" },
     "engine": { "name": "朗读引擎 (TTS Engine)", "hint": "GPT-SoVITS: 本地服务合成(音色佳, 需先启动 server/start-tts-server.bat)；Web Speech: 浏览器系统语音(零配置, 音色机械, 用于测试/兜底)。" },
     "serverUrl": { "name": "TTS 服务地址 (TTS Server URL)", "hint": "默认 auto=自动使用本机 http://127.0.0.1:9881。局域网多人时：其他玩家的浏览器要访问运行 TTS 服务那台电脑(GM)的地址，如 http://192.168.1.5:9881，并让 GM 用 0.0.0.0 启动服务，全员才能听到同一音色。" },
@@ -141,6 +160,15 @@
     "emotionNone": "默认"
   },
   "vm": {
+    "stressTest": "高压",
+    "stressTestTitle": "高压测试: 并发/长文本/连续合成/广播风暴/批量立绘等压力场景",
+    "selfTest": "自检",
+    "selfTestTitle": "一键跑全部测试并生成报告文件，供作者排查问题",
+    "voiceAssign": "语音分配（谁的语音由哪台电脑跑）",
+    "voiceAssignHint": "给每个玩家分配语音运行的电脑；默认全部由主持人电脑跑。玩家端自动跟随。",
+    "voiceGm": "主持人电脑（默认）",
+    "voiceSelf": "该玩家自己的电脑",
+    "voiceSaved": "语音分配已保存",
     "title": "语音设置",
     "close": "关闭",
     "test": "试听",
