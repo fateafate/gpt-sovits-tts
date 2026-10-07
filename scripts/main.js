@@ -851,6 +851,7 @@ async function maybeSpeak(message) {
       if (fl.speedTestAck) return;   // 🚄 速度测试回执消息: 不朗读
       if (fl.speedTestPing || fl.speedTestPingAck) return;   // 🫀 心跳消息: 不朗读(防 🫀 被当语音合成)
       if (fl.selfTest) return;   // 🔬 玩家自测消息: 不朗读(由 GM 代理合成写回其自身 flags, 玩家端经 updateChatMessage 播放)
+      if (fl.playerSelfTestResult) return;   // 🔬 玩家自测结果回执: 不朗读(仅展示)
       if (fl.lang) flLang = fl.lang;   // 作者最终朗读语种(全员一致, 防"日语+中文"混读)
       if (fl.ref || fl.promptText || fl.auxRef) {
         overrides = {};
@@ -2676,6 +2677,16 @@ function finishSelfTest(steps) {
     const head = (okN === tot) ? "玩家自测通过 ✅" : ("自测 " + okN + "/" + tot + (fails.length ? "（失败: " + fails.join("、") + "）" : ""));
     try { ui.notifications.info("🔬 " + head); } catch (e) { /* noop */ }
     try { window.__gptSovits = window.__gptSovits || {}; window.__gptSovits.playerSelfTestResult = { ts: Date.now(), steps, ok: okN === tot }; console.log("[gpt-sovits-tts][自测]", head, steps); } catch (e) { /* noop */ }
+    // 🔊 落盘 + 回执: 尽力写服务端玩家报告(serverUrl 可达时; frp/MixedContent 静默失败) + 聊天回执(可靠, GM 可看到)
+    const uName = (() => { try { return (game.user && game.user.name) || "player"; } catch (e) { return "player"; } })();
+    const payload = { ts: Date.now(), user: uName, role: "player", kind: "playerSelfTest", ok: okN === tot, pass: okN, total: tot, fail: fails, steps };
+    try {
+      fetch(`${getCfg().serverUrl.replace(/\/+$/, "")}/speedtest/report`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload), signal: AbortSignal.timeout(8000) }).catch(() => { /* 直连不可达(Mixed Content) → 走聊天回执 */ });
+    } catch (e) { /* noop */ }
+    try {
+      const mark = okN === tot ? "✅" : "⚠️";
+      ChatMessage.create({ content: `${mark} 🔬 ${uName} 玩家自测：${okN}/${tot}${fails.length ? " · 失败: " + fails.join("、") : ""}`, speaker: { alias: uName }, flags: { [MODULE]: { playerSelfTestResult: { from: uName, ts: Date.now(), ok: okN === tot, pass: okN, total: tot, fails, steps } } } });
+    } catch (e) { /* noop */ }
   } catch (e) { /* noop */ }
 }
 
