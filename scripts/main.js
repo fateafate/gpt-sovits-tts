@@ -3042,6 +3042,16 @@ async function runSpeedTest() {
     out.batches.i3 = { rtts, avgMs: Math.round(rtts.filter(x => x >= 0).reduce((a, b) => a + b, 0) / Math.max(1, rtts.filter(x => x >= 0).length)) };
     out.conclusions.push(`I3 API 往返: /status RTT 均值 ${out.batches.i3.avgMs}ms(5 次)`);
   } catch (e) { out.batches.i3 = { err: String(e).slice(0, 80) }; }
+  // S1 合成缓存命中(问题项: 服务器合成长尾/重复合成): 同文本+同参数连测两次, 第二次应毫秒级命中(不重复烧 GPU)
+  if (fullMode) try {
+    const cacheText = "语音合成缓存验证，同样的句子再合一次。" + (Date.now() % 90000 + 10000);
+    const _car = { serverUrl: cfg.serverUrl, speedFactor: 1.0, mediaType: "mp3", asBlob: false, role: "" };
+    const r1 = await gptSovitsSynth(cacheText, "zh", _car);
+    const r2 = await gptSovitsSynth(cacheText, "zh", _car);
+    const hit = !!(r2.ms >= 0 && r1.ms > 0 && r2.ms < r1.ms * 0.3);
+    out.batches.s1 = { firstMs: r1.ms, secondMs: r2.ms, cacheHit: hit };
+    out.conclusions.push(`S1 合成缓存: 首次 ${r1.ms}ms → 二次 ${r2.ms}ms${hit ? " ✓命中(缓存生效, 重复台词秒回)" : " (未命中, 二次仍全量合成 — 连续两次同文本应走缓存)"}`);
+  } catch (e) { out.batches.s1 = { err: String(e).slice(0, 80) }; }
   // pl 回执明细并入 GM 报告(pl 经 Foundry socket 回执, GM 提交时合并 → 一次读全)
   try { out.plAcks = window.__fvttTTSAcks || []; } catch (e) { out.plAcks = []; }
   // 双端播放验证汇总: GM 端/pl 端各播放了多少段(每段一次, 验证双方都能正常听到且不重复)

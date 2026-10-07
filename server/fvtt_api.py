@@ -527,11 +527,64 @@ def _wav_to_mp3(wav_bytes, bitrate="64k"):
 # 音频缓存目录: 合成音频落盘供全员 URL 拉流播放(Shinsekai 式文件传输, 无 socket 包大小限制)
 _AUDIO_CACHE = os.path.join(os.getcwd(), "audio_cache")
 
+# 合成缓存: 同文本+同角色(参考/提示词/模型)+同参数 → 命中直接返回同一份音频(毫秒级), 消除"重复台词/两端同请求"的重复合成
+_SYNTH_CACHE = {}
+_SYNTH_CACHE_MAX = 64
+
+
+def _synth_cache_key(req):
+    """计算合成缓存键(影响听感的参数全进键; streaming/非mp3wav 不缓存)."""
+    try:
+        if not isinstance(req, dict) or not req.get("text"):
+            return None
+        if req.get("streaming_mode") in (True, 1, 2, 3):
+            return None
+        mm = str(req.get("media_type") or "wav")
+        if mm not in ("mp3", "wav"):
+            return None
+        sub = {
+            "text": str(req.get("text") or ""),
+            "text_lang": str(req.get("text_lang") or "auto"),
+            "ref": str(req.get("ref_audio_path") or ""),
+            "aux": sorted([str(x) for x in (req.get("aux_ref_audio_paths") or [])]),
+            "prompt_text": str(req.get("prompt_text") or ""),
+            "prompt_lang": str(req.get("prompt_lang") or ""),
+            "speed": float(req.get("speed_factor") or 1.0),
+            "media": mm,
+            "split": str(req.get("text_split_method") or ""),
+            "frag": float(req.get("fragment_interval") or 0.3),
+            "seed": -1 if int(req.get("seed") or -1) == -1 else int(req.get("seed") or -1),
+            "gpt": os.path.basename(str((CHAR_CONFIG or {}).get("gpt_model_path") or "")),
+            "svc": os.path.basename(str((CHAR_CONFIG or {}).get("sovits_model_path") or "")),
+        }
+        import hashlib as _hashlib
+        import json as _json
+        return _hashlib.sha256(_json.dumps(sub, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+    except Exception:
+        return None
+
 
 def _respond_with_file(audio_bytes, media_type, req=None):
-    """把合成音频存到缓存目录并返回带 X-Audio-Url 响应头的响应(客户端可广播 URL 让全员 HTTP 拉流)."""
+    """把合成音频存到缓存目录并返回带 X-Audio-Url 响应头的响应(客户端可广播 URL 让全员 HTTP 拉流).
+    同参数请求命中合成缓存时直接复用同一份音频(不重复合成, 毫秒返回)."""
     try:
         ext = "mp3" if str(media_type) == "audio/mpeg" else "wav"
+        _ck = _synth_cache_key(req)
+        if _ck and _ck in _SYNTH_CACHE:
+            _hit = _SYNTH_CACHE[_ck]
+            # 文件可能已被 2h 懒清理删掉 → 命中时重写(同字节, 快)后返回
+            try:
+                _p0 = os.path.join(_AUDIO_CACHE, _hit["fn"])
+                with open(_p0, "wb") as _f:
+                    _f.write(audio_bytes)
+                _xd0 = os.path.join(os.path.dirname(__file__), "..", "engine", "audio_export")
+                os.makedirs(_xd0, exist_ok=True)
+                with open(os.path.join(_xd0, _hit["fn"]), "wb") as _f:
+                    _f.write(audio_bytes)
+            except Exception:
+                pass
+            _h = {"X-Audio-Url": "/audio/%s" % _hit["fn"], "X-Fvtt-Audio-Url": _hit["url"], "X-Fvtt-Cache": "hit"}
+            return Response(audio_bytes, media_type=media_type, headers=_h)
         _fn = "%s.%s" % (uuid.uuid4().hex, ext)
         _p = os.path.join(_AUDIO_CACHE, _fn)
         with open(_p, "wb") as _f:
@@ -568,9 +621,16 @@ def _respond_with_file(audio_bytes, media_type, req=None):
                     pass
         except Exception:
             _fvtt_url = ""
+        if _ck:
+            _SYNTH_CACHE[_ck] = {"fn": _fn, "url": _fvtt_url, "bytes": audio_bytes, "ts": time.time()}
+            if len(_SYNTH_CACHE) > _SYNTH_CACHE_MAX:
+                _oldest = min(_SYNTH_CACHE.items(), key=lambda kv: kv[1]["ts"])[0]
+                _SYNTH_CACHE.pop(_oldest, None)
         _h = {"X-Audio-Url": "/audio/%s" % _fn}
         if _fvtt_url:
             _h["X-Fvtt-Audio-Url"] = _fvtt_url
+        if _ck:
+            _h["X-Fvtt-Cache"] = "miss"
         return Response(audio_bytes, media_type=media_type, headers=_h)
     except Exception:
         return Response(audio_bytes, media_type=media_type)
@@ -1781,6 +1841,7 @@ async def status():
         "languages": getattr(tts_config, "languages", []),
         "hw": dict(HW_INFO),
         "lan_ip": lan_ip,
+        "synth_cache": {"size": len(_SYNTH_CACHE), "max": _SYNTH_CACHE_MAX},
         "character": char,
         "pool": {"size": len(TTS_POOL), "max": MAX_MODEL_POOL, "active": list(TTS_POOL.keys())},
     }
