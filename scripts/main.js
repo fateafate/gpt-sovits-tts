@@ -3119,8 +3119,9 @@ async function runSpeedTest() {
     out.batches.i3 = { rtts, avgMs: Math.round(rtts.filter(x => x >= 0).reduce((a, b) => a + b, 0) / Math.max(1, rtts.filter(x => x >= 0).length)) };
     out.conclusions.push(`I3 API 往返: /status RTT 均值 ${out.batches.i3.avgMs}ms(5 次)`);
   } catch (e) { out.batches.i3 = { err: String(e).slice(0, 80) }; }
-  // S1 合成缓存命中(问题项: 服务器合成长尾/重复合成): 同文本+同参数连测两次, 第二次应毫秒级命中(不重复烧 GPU)
-  if (fullMode) try {
+  // S1 合成缓存命中(问题项: 服务器合成长尾/重复合成): 同文本+同参数连测两次, 第二次应毫秒级命中(不重复烧 GPU).
+  // 每次用随机文本 → 首次 miss 第二次 hit(不依赖上次的缓存); 始终运行(不放 fullMode)
+  try {
     const cacheText = "语音合成缓存验证，同样的句子再合一次。" + (Date.now() % 90000 + 10000);
     const _car = { serverUrl: cfg.serverUrl, speedFactor: 1.0, mediaType: "mp3", asBlob: false, role: "" };
     const r1 = await gptSovitsSynth(cacheText, "zh", _car);
