@@ -120,6 +120,7 @@
     "langTip": "Reading output language (also the auto-translate target)",
     "langSet": "Reading language switched",
     "send": "Send to chat (and read aloud)",
+    "selfTest": "Player self-test (verify this device can receive & play GM voice)",
     "sendFail": "Chat input not found",
     "sendEmpty": "Input is empty",
     "cmdHint": "Commands (lines starting with /) must be sent with Enter",

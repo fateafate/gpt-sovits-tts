@@ -850,6 +850,7 @@ async function maybeSpeak(message) {
       if (fl.speedTest) return;   // 🚄 速度测试消息: 不朗读(仅测传输)
       if (fl.speedTestAck) return;   // 🚄 速度测试回执消息: 不朗读
       if (fl.speedTestPing || fl.speedTestPingAck) return;   // 🫀 心跳消息: 不朗读(防 🫀 被当语音合成)
+      if (fl.selfTest) return;   // 🔬 玩家自测消息: 不朗读(由 GM 代理合成写回其自身 flags, 玩家端经 updateChatMessage 播放)
       if (fl.lang) flLang = fl.lang;   // 作者最终朗读语种(全员一致, 防"日语+中文"混读)
       if (fl.ref || fl.promptText || fl.auxRef) {
         overrides = {};
@@ -1039,8 +1040,14 @@ function buildUI() {
       <select class="fvtt-tts-emotion"></select>
       <button type="button" class="fvtt-tts-voice" title="${_L("ui.voiceMgr", "语音设置（角色/语气/模型/语速）")}"><i class="fa-solid fa-sliders"></i></button>
       <button type="button" class="fvtt-tts-mic" title="${_L("ui.mic", "语音听写(点击开始/停止)")}"><i class="fa-solid fa-microphone"></i></button>
+      <button type="button" class="fvtt-tts-selftest" title="${_L("ui.selfTest", "玩家自测(验证本机能否正常收到并播放 GM 语音)")}"><i class="fa-solid fa-stethoscope"></i></button>
       <button type="button" class="fvtt-tts-send" title="${_L("ui.send", "发送到聊天框（选语气并自动朗读）")}"><i class="fa-solid fa-paper-plane"></i></button>`;
     document.body.appendChild(bar);
+    // 🔬 玩家自测按钮: 玩家自己发起"合成→代理写回→玩家官方通道播放"全链路自测, 诊断本机是否正常
+    const stBtn = bar.querySelector(".fvtt-tts-selftest");
+    if (stBtn) {
+      stBtn.addEventListener("click", (ev) => { ev.stopPropagation(); try { runPlayerSelfTest(); } catch (e) { console.error(e); } });
+    }
   }
   // 语种选择(朗读输出语言 = 自动翻译目标): 中/日/英/韩/粤 + 自动
   const langSel = bar.querySelector(".fvtt-tts-lang");
@@ -2602,6 +2609,76 @@ async function runStressTest() {
   return out;
 }
 
+/* ============ 🔬 玩家自测(仅玩家端可点: 验证本机能否收到并官方通道播放 GM 语音) ============ */
+async function runPlayerSelfTest() {
+  const steps = [];
+  const pass = (k, v, ok) => { steps.push({ k, v, ok: ok !== false }); };
+  try {
+    const patch = (() => { try { return window.__fvttTTSPatch || ""; } catch (e) { return ""; } })();
+    pass("模块加载", "patch=" + (patch || "?"), !!patch);
+    const conn = !!(game && game.ready && game.user && game.user.id);
+    pass("Foundry 连接", conn ? "已连接" : "未连接", conn);
+    if (!conn) { finishSelfTest(steps); return; }
+    // GM 端分支: GM 自己就是代理, 直接"本地合成→官方通道播放"自测(等同试听), 不走代理消息
+    if (game.user && game.user.isGM) {
+      let ok2 = false;
+      try { ok2 = await speak("语音合成与播放测试正常。", { lang: "zh", skipAiEmotion: true }); } catch (e) { /* noop */ console.error(e); }
+      await new Promise(r => setTimeout(r, 1000));
+      let impl = "";
+      try { impl = window.__fvttTTSPlayImpl || ""; } catch (e) { /* noop */ }
+      pass("合成播出", ok2 ? "成功 ✓" : "失败", !!ok2);
+      pass("播放通道", impl === "official" ? "官方界面通道 ✓" : impl ? ("走" + impl) : "未检测到播放", impl === "official");
+      pass("说明", "GM 端本地直连自测", true);
+      finishSelfTest(steps); return;
+    }
+    let gmOnline = false, gmName = "";
+    try { game.users.forEach(u => { if (u && u.isGM) { gmName = u.name || ""; if (!u.isObserver && u.active) gmOnline = true; } }); } catch (e) { /* noop */ }
+    pass("GM 在线", gmName ? (gmOnline ? "在线(" + gmName + ")" : "GM存在但非活动") : "无GM在线", gmOnline);
+    let role = "";
+    try { const p = loadVoiceProfile(); role = (p && p.current) || ""; } catch (e) { /* noop */ }
+    const sentAt = Date.now();
+    let msgId = "";
+    try {
+      const m = await ChatMessage.create({ content: "🔬 玩家自测", speaker: { alias: (game.user && game.user.name) || "玩家" }, flags: { [MODULE]: { synthRequest: { text: "玩家自测，语音合成与播放正常。", lang: "zh", provider: "gpt-sovits" }, role: role || "", selfTest: { ts: sentAt } } } });
+      msgId = (m && m.id) ? m.id : "";
+      pass("请求已发送", "等待 GM/服务器合成", !!msgId);
+    } catch (e) { pass("请求发送失败", String(e).slice(0, 60), false); try { ui.notifications.error("🔬 玩家自测: 请求发送失败"); } catch (e2) { /* noop */ } return; }
+    // 轮询自己的消息 flags 是否被 GM 代理写回音频
+    let audioUrl = "", audioData = "", arriveAt = 0, deadline = sentAt + 30000;
+    while (Date.now() < deadline) {
+      try {
+        const m = game.messages.get(msgId);
+        const f = (m && m.flags && m.flags[MODULE]) || {};
+        if (f.audioData || f.audioUrl) { audioUrl = f.audioUrl || ""; audioData = f.audioData || ""; arriveAt = Date.now(); break; }
+      } catch (e) { /* noop */ }
+      await new Promise(r => setTimeout(r, 300));
+    }
+    if (audioUrl || audioData) {
+      pass("音频写回", "(发送到收到 " + (arriveAt - sentAt) + "ms) " + (audioData ? "内嵌" : "URL"), true);
+    } else {
+      pass("音频写回", "超时未收到(代理不通/合成排队/无GM代理)", false);
+    }
+    await new Promise(r => setTimeout(r, 1500));
+    let impl = "";
+    try { impl = window.__fvttTTSPlayImpl || ""; if (!impl) { const c0 = window.__fvttTTSCnt || {}; impl = (c0.official || 0) > (c0.native || 0) ? "official" : (c0.native || 0) > 0 ? "native" : ""; } } catch (e) { /* noop */ }
+    pass("播放通道", impl === "official" ? "官方界面通道 ✓" : impl ? ("走" + impl) : "未检测到播放", impl === "official");
+    pass("总耗时", ((Date.now() - sentAt) / 1000).toFixed(1) + "s(发送→播放)", !!audioUrl || !!audioData);
+    finishSelfTest(steps);
+  } catch (e) {
+    console.error("[gpt-sovits-tts][自测] 异常:", e);
+    finishSelfTest(steps);
+  }
+}
+function finishSelfTest(steps) {
+  try {
+    const okN = steps.filter(s => s.ok).length, tot = steps.length;
+    const fails = steps.filter(s => !s.ok).map(s => s.k);
+    const head = (okN === tot) ? "玩家自测通过 ✅" : ("自测 " + okN + "/" + tot + (fails.length ? "（失败: " + fails.join("、") + "）" : ""));
+    try { ui.notifications.info("🔬 " + head); } catch (e) { /* noop */ }
+    try { window.__gptSovits = window.__gptSovits || {}; window.__gptSovits.playerSelfTestResult = { ts: Date.now(), steps, ok: okN === tot }; console.log("[gpt-sovits-tts][自测]", head, steps); } catch (e) { /* noop */ }
+  } catch (e) { /* noop */ }
+}
+
 /* ============ 🚄 批量速度测试(分批: 合成/传输/加载 + 压满显卡峰值性能) ============ */
 async function runSpeedTest() {
   const cfg = getCfg();
@@ -3113,6 +3190,8 @@ function setupAPI() {
     runStressTest: () => runStressTest(),
     // 批量速度测试: 分批测合成/传输/加载速度 + 压满显卡(峰值性能) → speed_report.json
     runSpeedTest: () => runSpeedTest(),
+    // 玩家自测: 玩家端一键验证"本机能否收到并官方通道播放 GM 语音"(GM 端为本地合成自测)
+    runPlayerSelfTest: () => runPlayerSelfTest(),
     // 语音运行者服务声明列表(供语音管理器 GM 分配面板使用)
     getRunners: () => {
       const out = [];
