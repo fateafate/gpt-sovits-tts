@@ -2868,8 +2868,13 @@ async def speedtest_report(request: Request):
         body = await request.json()
     except Exception:
         return JSONResponse(status_code=400, content={"ok": False, "message": "bad json"})
-    who = str(body.get("user") or "gm")[:24].replace("\\", "_").replace("/", "_")
-    _f = os.path.join(os.path.dirname(__file__), "speed_report.json" if who == "gm" else "speed_report_%s.json" % who)
+    who = str(body.get("user") or "unknown")[:24].replace("\\", "_").replace("/", "_")
+    kind = str(body.get("kind") or "")
+    # 🔊 玩家自测结果用独立文件落盘(player_selftest_<user>.json), 绝不覆盖速度报告的 speed_report_*.json
+    if kind == "playerSelfTest":
+        _f = os.path.join(os.path.dirname(__file__), "player_selftest_%s.json" % who)
+    else:
+        _f = os.path.join(os.path.dirname(__file__), "speed_report.json" if who == "gm" else "speed_report_%s.json" % who)
     try:
         with open(_f, "w", encoding="utf-8") as f:
             json.dump(body, f, ensure_ascii=False, indent=2)
