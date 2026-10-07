@@ -1194,7 +1194,7 @@ APP.add_middleware(
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["X-Audio-Url", "X-Fvtt-Audio-Url"],   # 浏览器 fetch 跨源才能读到音频 URL 响应头(否则自检/生产广播都拿不到 URL)
+    expose_headers=["X-Audio-Url", "X-Fvtt-Audio-Url", "X-Fvtt-Cache"],   # 浏览器 fetch 跨源才能读到音频 URL/缓存 响应头(否则自检拿不到缓存命中判定)
 )
 
 

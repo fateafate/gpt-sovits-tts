@@ -3143,8 +3143,10 @@ async function runSpeedTest() {
     };
     const r1 = await doT();
     const r2 = await doT();
-    const hit = r1.ok && r2.ok && r2.cache === "hit";
-    out.batches.s1 = { firstMs: r1.ms, secondMs: r2.ms, c1: r1.cache, c2: r2.cache, cacheHit: hit };
+    // 命中判定: 缓存命中会复用同一段 audio url(必同); 头亦可读 X-Fvtt-Cache(已暴露给跨源)
+    const sameUrl = !!(r1.url && r2.url && r1.url === r2.url && r1.ok && r2.ok);
+    const hit = sameUrl || (r1.ok && r2.ok && r2.cache === "hit");
+    out.batches.s1 = { firstMs: r1.ms, secondMs: r2.ms, c1: r1.cache, c2: r2.cache, sameUrl, cacheHit: hit };
     out.conclusions.push(`S1 合成缓存: 首次 ${r1.ms}ms(${r1.cache}) → 二次 ${r2.ms}ms(${r2.cache})${hit ? " ✓命中(缓存生效, 重复台词秒回)" : " (未命中)"}`);
   } catch (e) { out.batches.s1 = { err: String(e).slice(0, 80) }; }
   // pl 回执明细并入 GM 报告(pl 经 Foundry socket 回执, GM 提交时合并 → 一次读全)
