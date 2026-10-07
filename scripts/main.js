@@ -3130,18 +3130,22 @@ async function runSpeedTest() {
     out.batches.i3 = { rtts, avgMs: Math.round(rtts.filter(x => x >= 0).reduce((a, b) => a + b, 0) / Math.max(1, rtts.filter(x => x >= 0).length)) };
     out.conclusions.push(`I3 API 往返: /status RTT 均值 ${out.batches.i3.avgMs}ms(5 次)`);
   } catch (e) { out.batches.i3 = { err: String(e).slice(0, 80) }; }
-  // S1 合成缓存命中(问题项: 服务器合成长尾/重复合成): 同文本+同参数连测两次, 第二次应毫秒级命中(不重复烧 GPU).
-  // 每次用随机文本 → 首次 miss 第二次 hit(不依赖上次的缓存); 始终运行(不放 fullMode)
+  // S1 合成缓存命中(问题项: 服务器合成长尾/重复合成): GM 端直连 9881, 同文本连发两次 /tts,
+  // 读 X-Fvtt-Cache 头判定二次是否命中; 不经 socket 代理(避免计时污染/误判)。
   try {
+    const _b = getCfg().serverUrl.replace(/\/+$/, "") + "/tts";
     const cacheText = "语音合成缓存验证，同样的句子再合一次。" + (Date.now() % 90000 + 10000);
-    const _car = { serverUrl: cfg.serverUrl, speedFactor: 1.0, mediaType: "mp3", asBlob: false, role: "" };
-    const tA = Date.now(); const r1 = await gptSovitsSynth(cacheText, "zh", _car); const tB = Date.now(); const ms1 = tB - tA;
-    const tC = Date.now(); const r2 = await gptSovitsSynth(cacheText, "zh", _car); const tD = Date.now(); const ms2 = tD - tC;
-    const ok1 = !!(r1 && (r1.dataUri || r1.audioUrl || r1.url));
-    const ok2 = !!(r2 && (r2.dataUri || r2.audioUrl || r2.url));
-    const hit = !!(ok1 && ok2 && ms1 > 0 && ms2 < ms1 * 0.3);
-    out.batches.s1 = { firstMs: ms1, secondMs: ms2, ok1, ok2, cacheHit: hit };
-    out.conclusions.push(`S1 合成缓存: 首次 ${ms1}ms → 二次 ${ms2}ms${hit ? " ✓命中(缓存生效, 重复台词秒回)" : " (未命中 — 若是首次跑需先重启TTS服务让缓存代码加载, 并确认 /status 有 synth_cache)"}`);
+    const mk = () => JSON.stringify({ text: cacheText, text_lang: "zh", speed_factor: 1.0, streaming_mode: false, media_type: "mp3", allow_short_ref: true });
+    const doT = async () => {
+      const t0 = Date.now();
+      const r = await fetch(_b, { method: "POST", headers: { "Content-Type": "application/json" }, body: mk(), signal: AbortSignal.timeout(90000) });
+      return { ok: r.ok, ms: Date.now() - t0, cache: (r.headers.get("X-Fvtt-Cache") || "miss").trim(), url: r.headers.get("X-Fvtt-Audio-Url") || "" };
+    };
+    const r1 = await doT();
+    const r2 = await doT();
+    const hit = r1.ok && r2.ok && r2.cache === "hit";
+    out.batches.s1 = { firstMs: r1.ms, secondMs: r2.ms, c1: r1.cache, c2: r2.cache, cacheHit: hit };
+    out.conclusions.push(`S1 合成缓存: 首次 ${r1.ms}ms(${r1.cache}) → 二次 ${r2.ms}ms(${r2.cache})${hit ? " ✓命中(缓存生效, 重复台词秒回)" : " (未命中)"}`);
   } catch (e) { out.batches.s1 = { err: String(e).slice(0, 80) }; }
   // pl 回执明细并入 GM 报告(pl 经 Foundry socket 回执, GM 提交时合并 → 一次读全)
   try { out.plAcks = window.__fvttTTSAcks || []; } catch (e) { out.plAcks = []; }
