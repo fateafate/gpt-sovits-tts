@@ -4,7 +4,7 @@
  *       麦克风听写(浏览器 Web Speech / 服务端 /asr) 直接发送或插入输入框
  *       消息重听按钮、状态指示灯、/ttssay 等命令、game.gptSoVitsTTS 宏 API
  */
-import { PlaybackQueue, audioPlay, webSpeechSpeak, gptSovitsSynth, gptSovitsStatus } from "./tts-engine.js";
+import { PlaybackQueue, audioPlay, webSpeechSpeak, gptSovitsSynth, gptSovitsStatus, synthEdge } from "./tts-engine.js";
 import { BrowserSTT, ServerSTT } from "./stt-engine.js";
 import { VoiceManager, loadVoiceProfile, saveVoiceProfile, currentVoice, makeDraggable, getStylePrompt, setStylePrompt } from "./voice-manager.js";
 import { prepareTextForLang, localizeNumbers } from "./text-lib.js";
@@ -55,10 +55,16 @@ const SETTINGS = [
   ["translate",     { type: Boolean, scope: "client", default: true,            name: "settings.translate.name",      hint: "settings.translate.hint" }],
   ["sttDevice",     { type: String,  scope: "client", default: "",               name: "settings.sttDevice.name",      hint: "settings.sttDevice.hint", choices: () => ttsDeviceChoices() }],
   ["hudTheme",      { type: String,  scope: "client", default: "dark",           choices: { dark: "settings.hudTheme.dark", pink: "settings.hudTheme.pink" }, name: "settings.hudTheme.name", hint: "settings.hudTheme.hint" }],
+  ["gmMute",        { type: Boolean, scope: "world", default: false, restricted: true, name: "settings.gmMute.name", hint: "settings.gmMute.hint" }],
+  ["maxConcurrentModels", { type: Number, scope: "world", default: 10, restricted: true, range: { min: 1, max: 20, step: 1 }, name: "settings.maxConcurrentModels.name", hint: "settings.maxConcurrentModels.hint" }],
   ["llmEnabled",    { type: Boolean, scope: "client", default: false,           name: "settings.llmEnabled.name",  hint: "settings.llmEnabled.hint" }],
   ["llmBaseUrl",    { type: String,  scope: "client", default: "https://api.openai.com/v1", name: "settings.llmBaseUrl.name", hint: "settings.llmBaseUrl.hint" }],
   ["llmKey",        { type: String,  scope: "client", default: "",               name: "settings.llmKey.name",      hint: "settings.llmKey.hint" }],
   ["llmModel",      { type: String,  scope: "client", default: "gpt-4o-mini",    choices: () => llmModelChoices(), name: "settings.llmModel.name",    hint: "settings.llmModel.hint" }],
+  ["aiSharedBase",  { type: String, scope: "world", default: "", restricted: true, name: "settings.aiSharedBase.name", hint: "settings.aiSharedBase.hint" }],
+  ["aiSharedKey",   { type: String, scope: "world", default: "", restricted: true, name: "settings.aiSharedKey.name", hint: "settings.aiSharedKey.hint" }],
+  ["aiSharedModel", { type: String, scope: "world", default: "", restricted: true, name: "settings.aiSharedModel.name", hint: "settings.aiSharedModel.hint" }],
+  ["aiSharedModels", { type: String, scope: "world", default: "", restricted: true, name: "settings.aiSharedModels.name", hint: "settings.aiSharedModels.hint" }],
   ["llmPolish",     { type: Boolean, scope: "client", default: false,            name: "settings.llmPolish.name",   hint: "settings.llmPolish.hint" }],
   ["llmMergePolish", { type: Boolean, scope: "client", default: true,          name: "settings.llmMergePolish.name", hint: "settings.llmMergePolish.hint" }],
   ["llmModels",     { type: Array,   scope: "client", default: [],                name: "settings.llmModels.name",   hint: "settings.llmModels.hint" }],
@@ -72,6 +78,15 @@ const SETTINGS = [
 
 const _llmStyleCache = new Map();   // LLM 风格参数缓存(同角色+风格提示 10 分钟复用, 降噪/提速)
 const _synthCache = new Map();      // 合成音频缓存(同文本+角色+语气+语速+语言 → 复用, cap 40 条 LRU)
+
+/* 权限守卫: Foundry 玩家默认无权 update ChatMessage(否则服务端报 "lacks permission" 且写回不生效)。
+   只有 GM 才可写回 audioData/audioUrl; 音频经广播/内嵌已到各端, 非 GM 跳过写回不丢声音。 */
+function _canWrite() {
+  try { return !!(game && game.user && game.user.isGM); } catch (e) { return false; }
+}
+function safeMsgWrite(msg, update) {
+  try { if (msg && _canWrite() && update && typeof msg.update === "function") msg.update(update).catch(() => { /* noop */ }); } catch (e) { /* noop */ }
+}
 
 // LLM 模型下拉: 服务端拉取的可用模型(设置 llmModels 缓存) + 常用预设; 未拉取时也有预设可选
 const LLM_PRESET_MODELS = ["gpt-4o-mini", "gpt-4o", "deepseek-chat", "deepseek-reasoner", "qwen-plus", "qwen-turbo", "glm-4-flash", "kimi-latest"];
@@ -178,6 +193,36 @@ function handleSocketTts(p) {
     } catch (e) { /* noop */ }
     return;
   }
+  if (p.type === "speedtest-batch") {
+    // 🚄 批量速度测试(玩家侧): 收到广播立即 HTTP 拉取计时 → 写 pl 报告段 + socket 回执(测真实传输速度)
+    const tArr = Date.now() - (p.ts || Date.now());
+    try {
+      if (p.audioUrl) {
+        const tF = Date.now();
+        fetch(p.audioUrl, { signal: AbortSignal.timeout(15000) }).then(r => { if (!r.ok) throw new Error("f" + r.status); return r.arrayBuffer(); }).then(() => {
+          const fetchMs = Date.now() - tF;
+          try {
+            window.__fvttTTSAcks = window.__fvttTTSAcks || [];
+            window.__fvttTTSAcks.push({ batch: p.batch, seg: p.seg, arriveMs: tArr, fetchMs });
+          } catch (e) { /* noop */ }
+          try {
+            const u = getCfg().serverUrl.replace(/\/+$/, "");
+            fetch(`${u}/speedtest/report`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ user: (game.user && game.user.name) || "pl", ts: Date.now(), role: "player", batch: p.batch, seg: p.seg, arriveMs: tArr, fetchMs, canDirect: window.__fvttTTSCanDirect === true }), signal: AbortSignal.timeout(8000) }).catch(() => { /* noop */ });
+          } catch (e) { /* noop */ }
+          try { game.socket.emit(MODULE, { type: "speedtest-ack", batch: p.batch, seg: p.seg, from: game.user.name, fetchMs }); } catch (e) { /* noop */ }
+        }).catch(() => { /* 拉取失败不回执 */ });
+      }
+    } catch (e) { /* noop */ }
+    return;
+  }
+  if (p.type === "speedtest-ack") {
+    // 🚄 GM 侧: 收集玩家回执(统计本批到达数/传输耗时; pl 经 Foundry socket 回执, 无 Mixed Content 问题)
+    try {
+      window.__fvttTTSAcks = window.__fvttTTSAcks || [];
+      window.__fvttTTSAcks.push({ batch: p.batch, seg: p.seg, from: p.from, arriveMs: p.arriveMs ?? -1, fetchMs: p.fetchMs ?? -1, played: p.played === true, bytes: p.bytes || 0, skewMs: p.skewMs ?? 0 });
+    } catch (e) { /* noop */ }
+    return;
+  }
   if (p.type === "tts-service") {
     // 语音运行者服务声明(某玩家电脑跑着 TTS 服务) → 记入运行者列表, 设置面板可选
     if (p.url) {
@@ -193,6 +238,7 @@ function handleSocketTts(p) {
   }
   if (p.messageId && recentBroadcastIds.has(p.messageId)) { recentBroadcastIds.delete(p.messageId); return; }  // 自己的广播, 已本地播放
   // 无论兜底定时器是否存在都要清掉, 并标记已播放(时序竞争: 音频先到时不让 45s 兜底再读)
+  if (p.messageId && playedIds.has(p.messageId)) return;   // flags/本地已播过该消息 → 跳过(防广播再播一次)
   if (p.messageId) {
     if (pendingTts.has(p.messageId)) { clearTimeout(pendingTts.get(p.messageId)); pendingTts.delete(p.messageId); }
     playedIds.add(p.messageId);
@@ -207,7 +253,7 @@ function handleSocketTts(p) {
         const u = URL.createObjectURL(new Blob([b], { type: mime }));
         if (p.messageId) cacheAudio(p.messageId, u, mime);   // 缓存同一段(重播复用)
         diagPlay("broadcast", p.messageId, "url");
-        queue.enqueue({ play: () => audioPlay(u, { volume: getCfg().volume }) });
+        queue.enqueue({ play: () => audioPlay(u, { volume: getCfg().volume, push: false }) });
       })
       .catch(() => { /* URL 拉取失败(罕见): 玩家 15s 兜底会本地重合成 */ });
     return;
@@ -224,7 +270,7 @@ function handleSocketTts(p) {
   } catch (e) { url = `data:${mime};base64,${p.audio}`; }
   if (p.messageId) cacheAudio(p.messageId, url, mime);   // 缓存同一段(重播复用, 不再重新合成)
   diagPlay("broadcast", p.messageId, "");
-  queue.enqueue({ play: () => audioPlay(url, { volume: getCfg().volume }) });
+  queue.enqueue({ play: () => audioPlay(url, { volume: getCfg().volume, push: false }) });
 }
 
 /* ============ 本地化(内置中文兜底, 语言包不生效时也始终显示中文) ============ */
@@ -303,6 +349,19 @@ function getCfg() {
     } else if (runner && runner !== "auto" && runner !== "self" && typeof runner === "string" && runner.includes(":")) {
       c.serverUrl = runner;   // 被分配的具体服务地址(服务声明 URL)
     }
+  // GM 一键分发的 AI 配置(共享优先): GM 在语音面板"一键分发给所有玩家"后, 全员(含 GM)使用共享 base/key/model
+  try {
+    const shBase = game.settings.get(MODULE, "aiSharedBase") || "";
+    const shKey = game.settings.get(MODULE, "aiSharedKey") || "";
+    const shModel = game.settings.get(MODULE, "aiSharedModel") || "";
+    if (shBase) c.llmBaseUrl = shBase;
+    if (shKey) c.llmKey = shKey;
+    // 模型不强制覆盖: 每个玩家可各自选不同模型(支持多模型同时运行)。仅当玩家本地无模型缓存时, 用共享列表填充下拉
+    const shModels = String(game.settings.get(MODULE, "aiSharedModels") || "").split(",").map(s => s.trim()).filter(Boolean);
+    if (shModels.length && (!c.llmModels || !c.llmModels.length)) c.llmModels = shModels;
+    if (shBase || shKey || shModel) c.llmEnabled = true;   // 一键分发即代表启用 AI(pl 无需自己开开关); 收回后回退各自本地
+    c.aiShared = !!(shBase || shKey || shModel);
+  } catch (e) { /* noop */ }
   } catch (e) { /* noop */ }
   return c;
 }
@@ -384,6 +443,14 @@ async function speak(text, { lang = null, sender = "", refAudioPath = null, prom
   // 显式参数(语气槽试听等)优先, 其次 profile 覆盖
   const prof0 = loadVoiceProfile();
   const pv = pv0;
+  // 多引擎并行: 角色 tts_provider 决定合成引擎 — gpt-sovits(本地高音质) / edge(服务器转发微软在线, 低负载) / web(edge 优先)
+  const _prov = String((pv && pv.ttsProvider) || "gpt-sovits");
+  const _synthIt = async (txt, tlang, { spdIn, ov, blobOnly, role }) => {
+    if (_prov === "edge" || _prov === "web") {
+      return synthEdge(txt, tlang, { serverUrl: cfg.serverUrl, speedFactor: spdIn, asBlob: blobOnly });
+    }
+    return gptSovitsSynth(txt, tlang, { serverUrl: cfg.serverUrl, speedFactor: spdIn, overrides: ov, mediaType: "mp3", asBlob: blobOnly, role });
+  };
   // 参考路径规范化: 旧档案可能只存了 "speech/xx.wav", 补成 fvtt_chars/<角色>/speech/xx.wav(任意客户端可解析)
   const fixRef = (r) => (r && !String(r).startsWith("fvtt_chars/") && !String(r).startsWith("http")) ? `fvtt_chars/${prof0.current || ""}/${r}` : r;
   let spd = cfg.speedFactor;
@@ -480,7 +547,7 @@ async function speak(text, { lang = null, sender = "", refAudioPath = null, prom
           blob = cc.blob; audioUrl = cc.audioUrl || "";
           diagPlay("cache", messageId, finalText);
         } else {
-          const res = await gptSovitsSynth(finalText, finalLang, { serverUrl: cfg.serverUrl, speedFactor: spd, overrides, mediaType: "mp3", asBlob: true });
+          const res = await _synthIt(finalText, finalLang, { spdIn: spd, ov: overrides, blobOnly: true, role: prof0.current });
           blob = res.blob; audioUrl = res.audioUrl || "";
           try {
             _synthCache.set(ck, { blob, audioUrl });
@@ -488,61 +555,90 @@ async function speak(text, { lang = null, sender = "", refAudioPath = null, prom
           } catch (e) { /* noop */ }
         }
         diagPlay("synth", messageId, finalText);
-        const objUrl = URL.createObjectURL(blob);
-        item = { play: () => audioPlay(objUrl, { volume: vol }), cleanup: () => URL.revokeObjectURL(objUrl) };
+        // 播放源: ① 优先 Foundry 静态文件 /modules/...(官方内部通道 AudioHelper.push 即时广播, 各端几乎同时经同一
+        // 内置通道播放, 消除消息同步延迟) ② 否则内嵌 data URI(DB 兜底, 广播不可达时 pl 收 update 后经同一音频系统播放)
+        let playSrc = "";
+        try {
+          if (blob && blob.size > 0 && blob.size <= 300000) {
+            playSrc = "data:audio/mpeg;base64," + (await blobToBase64(blob));
+          }
+        } catch (e) { /* noop */ }
+        const modPath = _modulePath(audioUrl);   // 官方内部通道: 本端自己的 origin 绝对 URL 走官方 Sound(跨机广播 src 不通用, 已弃用 push)
+        let cleanupObj = null;
+        let url4 = (modPath ? (() => { try { return new URL(modPath, window.location.origin).href; } catch (e) { return modPath; } })() : "") || playSrc || "";
+        if (!url4) { const o = URL.createObjectURL(blob); url4 = o; cleanupObj = o; }
+        // push:false — 官方广播的 src 只能是单一绝对 URL(跨机 localhost/frp 不通用), 且 Sound 需本端可加载绝对地址;
+        // 全端同步改由 Foundry 聊天数据通道(flags.audioUrl + 各端官方本播)负责, arrive≈0, 不再等广播
+        item = { play: () => audioPlay(url4, { volume: vol, push: false }), cleanup: () => { try { if (cleanupObj) URL.revokeObjectURL(cleanupObj); } catch (e) { /* noop */ } } };
         if (messageId) {
           recentBroadcastIds.add(messageId);
+          playedIds.add(messageId);   // 本地已播 → updateChatMessage 收到 flags 写回时跳过(防重复播放)
+          setTimeout(() => { try { playedIds.delete(messageId); } catch (e) { /* noop */ } }, 30000);
           if (recentBroadcastIds.size > 12) {   // 只记最近 12 条, 防无限增长
             const it = recentBroadcastIds.values().next();
             if (!it.done) recentBroadcastIds.delete(it.value);
           }
-          // 关键: 把音频 Foundry 路径写回消息 flags → 聊天文档同步(数据库级, 可靠) → 其他客户端(pl)收到 update 立即播放,
-          // 不依赖 socket 广播(该通道在部分环境下不可达); 存相对路径, 接收端按来源自己拼(避免 localhost 陷阱)
-          if (audioUrl) {
-            try {
-              const _rel = audioUrl.startsWith("http") ? new URL(audioUrl).pathname : audioUrl;
-              const _msg = (game.messages && game.messages.get(messageId)) || null;
-              if (_msg && typeof _msg.update === "function") {
-                _msg.update({ "flags.gpt-sovits-tts.audioUrl": _rel }).catch(() => { /* noop */ });
+          // 关键: 把音频写回消息 flags → 聊天文档同步(数据库级, 可靠) → 其他客户端(pl)收到 update 立即播放,
+          // 不依赖 socket 广播(该通道在部分环境下不可达)。audioData 内嵌**不依赖 audioUrl**(服务端没落盘/未返回
+          // 文件头时 audioUrl 为空, 但 blob 一定在) — 只要有 blob 就内嵌, pl 端拿到即播, 根治"玩家听不到"。
+          try {
+            const _msg = (game.messages && game.messages.get(messageId)) || null;
+            if (_msg && _canWrite() && blob && blob.size > 0) {
+              const _upd = {};
+              if (blob.size <= 300000) {
+                const _b64 = await blobToBase64(blob);
+                if (_b64 && _b64.length < 400000) _upd["flags.gpt-sovits-tts.audioData"] = "data:audio/mpeg;base64," + _b64;
               }
-            } catch (e) { /* noop */ }
-          }
+              if (audioUrl) {
+                const _rel = audioUrl.startsWith("http") ? new URL(audioUrl).pathname : audioUrl;
+                _upd["flags.gpt-sovits-tts.audioUrl"] = _rel;
+              }
+              if (Object.keys(_upd).length) _msg.update(_upd).catch(() => { /* noop */ });
+            } else if (_msg && _canWrite() && audioUrl) {
+              // blob 不可用但服务端文件路径存在 → 仅写 audioUrl(接收端按来源拼 URL 拉取/兜底)
+              const _rel = audioUrl.startsWith("http") ? new URL(audioUrl).pathname : audioUrl;
+              _msg.update({ "flags.gpt-sovits-tts.audioUrl": _rel }).catch(() => { /* noop */ });
+            }
+          } catch (e) { /* noop */ }
         }
         try {
           const b64 = await blobToBase64(blob);
           // 缓存同一段音频(重播复用同一段, 不再重新合成)
           cacheAudio(messageId, `data:${"audio/mpeg"};base64,${b64}`, "audio/mpeg");
-          // 智能广播: 无其他在线玩家(GM 单机)时跳过 socket — Foundry v13 单标签页会让
-          // 自己的广播自环并等待 ack, 产生 "message channel closed" 噪音; 本地照常播放不受影响.
-          const hasOthers = game.users && game.users.some(u => u.active && !u.isSelf);
-          diagPlay("emit-check", messageId, hasOthers ? "hasOthers" : "solo");   // 诊断: 广播判定(无其他在线则不发)
-          if (hasOthers && game.socket && typeof game.socket.emit === "function") {
-            // emit 返回 promise(v10+): 不 await 但必须捕获 rejection, 否则报 unhandled rejection
-            try {
-              if (audioUrl) {
-                // URL 拉流(Shinsekai 式文件传输): 无 socket 1MB 包上限, 局域网 HTTP 直连快
-                const full = `${cfg.serverUrl.replace(/\/+$/, "")}${audioUrl}`;
-                const pr = game.socket.emit(MODULE, { type: "tts", messageId, audioUrl: full, mediaType: "mp3", sender, lang: finalLang, ts: Date.now() });
-                diagPlay("emit", messageId, "url:" + String(finalText).slice(0, 30));
-                if (pr && typeof pr.catch === "function") pr.catch((e) => { console.warn("[gpt-sovits-tts] 广播失败(其他玩家可能听不到, 会走兜底重读):", e); });
-              } else {
-                // ArrayBuffer 二进制传输: 省 base64 编码/解码 + 33% 体积 → 传输更快
-                const buf = await blob.arrayBuffer();
-                const pr = game.socket.emit(MODULE, { type: "tts", messageId, audio: buf, mediaType: "mp3", sender, lang: finalLang, ts: Date.now() });
-                diagPlay("emit", messageId, finalText);   // 诊断: 广播已发出
-                if (pr && typeof pr.catch === "function") pr.catch((e) => { console.warn("[gpt-sovits-tts] 广播失败(其他玩家可能听不到, 会走兜底重读):", e); });
-              }
-            } catch (e) { /* noop */ }
-          }
-        } catch (e) { /* socket 不可用时仅本地播放 */ }
+          // 🔊 单通道: 播放统一走 Foundry 内置语音通道 — audioPlay 本地播 + 官方 playAudio 事件广播
+          // (socket.io 不回自己, 无自环; 全员几乎同时听到)。聊天 flags.audioData(Foundry 内置聊天数据通道)
+          // 是广播不可达时的同通道兜底(pl 端收到消息后走同一 AudioHelper 播放)。不再自定义 socket 广播。
+        } catch (e) { /* 广播兜底: 仅本地播放 */ }
       } else {
-        const res = await gptSovitsSynth(finalText, finalLang, { serverUrl: cfg.serverUrl, speedFactor: spd, overrides });
-        const url = res.url;
-        item = { play: () => audioPlay(url, { volume: vol }), cleanup: () => URL.revokeObjectURL(url) };
+        const res = await _synthIt(finalText, finalLang, { spdIn: spd, ov: overrides, blobOnly: false, role: prof0.current });
+        const url = res.dataUri || res.url;
+        item = { play: () => audioPlay(url, { volume: vol, push: true }), cleanup: () => { try { if (!res.dataUri && res.url) URL.revokeObjectURL(res.url); } catch (e) { /* noop */ } } };
       }
     } catch (err) {
       console.error("[gpt-sovits-tts] 合成失败:", err);
       setStatus(false);
+      // 玩家端: socket 代理偶发超时/服务排队 → 代码曾退直连(本机没服务必挂) → 误报 Load failed。
+      // 修复: 玩家一律不本地合成, 失败自动转交 GM/服务器代理(message 带 synthRequest, GM 合成写回,
+      // 玩家经 updateChatMessage 收到官方通道播放) — 任何拓扑都有真声, 不再误报。
+      if (!(game.user && game.user.isGM)) {
+        try {
+          const aliasU = (game.user && game.user.name) || "玩家";
+          const reqFlags = {
+            synthRequest: { text: finalText, lang: finalLang, role: prof0.current || "", speed: Number(spd) || 0, provider: _prov },
+            role: prof0.current || ((pv && pv.name) || ""),
+          };
+          if (overrides) {
+            if (overrides.refAudioPath) reqFlags.ref = overrides.refAudioPath;
+            if (overrides.promptText) reqFlags.promptText = overrides.promptText;
+            if (overrides.promptLang) reqFlags.promptLang = overrides.promptLang;
+            if (overrides.auxRefAudioPaths && overrides.auxRefAudioPaths.length) reqFlags.auxRef = overrides.auxRefAudioPaths[0];
+            if (typeof overrides.emotionMix === "number") reqFlags.emotionMix = overrides.emotionMix;
+          }
+          await ChatMessage.create({ content: "🔊 <em>请 GM/服务器合成语音…</em>", speaker: { alias: aliasU }, flags: { [MODULE]: reqFlags } });
+          notifyOnce(_L("errors.gmProxy", "本机未直连 TTS，已转交 GM/服务器合成，稍后自动播放"), "info");
+          return true;
+        } catch (e) { /* 落到普通错误提示 */ }
+      }
       // 连接类错误(服务重启/启动窗口)与真实合成错误分开提示
       const em = String((err && err.message) || err || "");
       const isConn = em.includes("Failed to fetch") || (em.includes("fetch") && !em.includes("TTS 服务返回"));
@@ -699,6 +795,9 @@ function applyPortraitSize() {
 }
 
 function stopSpeaking() { queue.stop(); }
+// GM 全局静音: world 设置(restricted, 仅 GM 可改) → 所有客户端 updateSetting 同步 → 静音时停播+禁播
+const isGmMuted = () => { try { return game.settings.get(MODULE, "gmMute") === true; } catch (e) { return false; } };
+const syncMuteFlag = () => { try { window.__fvttTTSMutedFlag = isGmMuted(); } catch (e) { /* noop */ } };
 
 function evaluateMessage(message) {
   const cfg = getCfg();
@@ -748,6 +847,9 @@ async function maybeSpeak(message) {
   try {
     fl = message.flags && message.flags[MODULE];
     if (fl) {
+      if (fl.speedTest) return;   // 🚄 速度测试消息: 不朗读(仅测传输)
+      if (fl.speedTestAck) return;   // 🚄 速度测试回执消息: 不朗读
+      if (fl.speedTestPing || fl.speedTestPingAck) return;   // 🫀 心跳消息: 不朗读(防 🫀 被当语音合成)
       if (fl.lang) flLang = fl.lang;   // 作者最终朗读语种(全员一致, 防"日语+中文"混读)
       if (fl.ref || fl.promptText || fl.auxRef) {
         overrides = {};
@@ -788,7 +890,7 @@ async function maybeSpeak(message) {
                 _nf.emotion = (slot && slot.key) || res.emotion;   // 规范存槽 key(applyEmotionAvatar/朗读都按 key 匹配)
                 if (slot.ref_audio_path) _nf.auxRef = `fvtt_chars/${roleN}/${slot.ref_audio_path}`;
                 if (slot.prompt_text) _nf.promptText = slot.prompt_text;
-                message.update({ flags: { [MODULE]: _nf } }).catch(() => { });
+                safeMsgWrite(message, { flags: { [MODULE]: _nf } });
               }
             } catch (e) { /* noop */ }
           }
@@ -811,32 +913,33 @@ async function maybeSpeak(message) {
   // 切了角色或语气 → 签名不匹配 → 回落下方正常合成(重新按当前角色/语气合成, 绝不播旧声音)
   if (preloadAudio && preloadAudio.url && stripStageDirections(speakText) === preloadAudio.text && preloadAudio.watchKey === makeWatchKey()) {
     if (decision.isSelf) {
-      const dUrl = preloadAudio.dataUrl || "";
-      diagPlay("preload", message.id, speakText);
-      if (message.id) cacheAudio(message.id, dUrl, "audio/mpeg");   // 重播复用同一段
-      queue.enqueue({ play: () => audioPlay(preloadAudio.url, { volume: getCfg().volume }) });
-      // 预合成音频路径也写回消息 flags(相对路径) → pl 端聊天同步即可拉到同一段, 不依赖 socket 广播
-      if (message.id && preloadAudio.audioUrl) {
-        try {
+      // 代理模式(pl 在 HTTPS/跨网/9881 不可达环境): 预合成音频路径写回 flags → 全员从 Foundry 30000 拉同一段
+      try {
+        if (message.id && preloadAudio.audioUrl) {
           const _relP = String(preloadAudio.audioUrl).startsWith("http") ? new URL(preloadAudio.audioUrl).pathname : preloadAudio.audioUrl;
-          message.update({ "flags.gpt-sovits-tts.audioUrl": _relP }).catch(() => { /* noop */ });
-        } catch (e) { /* noop */ }
+          const _updP = { "flags.gpt-sovits-tts.audioUrl": _relP };
+          try { if (preloadAudio.dataUrl && preloadAudio.dataUrl.length < 400000) _updP["flags.gpt-sovits-tts.audioData"] = preloadAudio.dataUrl; } catch (e) { /* noop */ }
+          safeMsgWrite(message, _updP);
+        }
+      } catch (e) { /* noop */ }
+      if (window.__fvttTTSCanDirect === true) {
+        if (message.id) { playedIds.add(message.id); setTimeout(() => { try { playedIds.delete(message.id); } catch (e) { /* noop */ } }, 30000); }   // 本地预载已播(防 flags 写回再播)
+        queue.enqueue({ play: () => audioPlay(preloadAudio.dataUrl || preloadAudio.url, { volume: getCfg().volume }) });
+      } else {
+        // 代理模式: 本机没直连引擎, 预载音频已在 flags 写回(等 pl 端 hook 从 30000 拉), 不重复发声
+        try { if (message.id) pendingTts.set(message.id, { text: speakText, ts: Date.now() }); } catch (e) { /* noop */ }
       }
-      const hasOthers = game.users && game.users.some(u => u.active && !u.isSelf);
-      if (hasOthers && game.socket && typeof game.socket.emit === "function") {
-        try {
-          if (preloadAudio.audioUrl) {
-            // URL 拉流(服务端已存文件): 无 socket 大小限制, 局域网直连快
-            const full = `${getCfg().serverUrl.replace(/\/+$/, "")}${preloadAudio.audioUrl}`;
-            const pr = game.socket.emit(MODULE, { type: "tts", messageId: message.id || "", audioUrl: full, mediaType: "mp3", sender: decision.speakerName, lang: preloadAudio.lang || "", ts: Date.now() });
-            if (pr && typeof pr.catch === "function") pr.catch((e) => console.warn("[gpt-sovits-tts] 广播失败:", e));
-          } else if (dUrl) {
-            const b64 = dUrl.includes("base64,") ? dUrl.split("base64,")[1] : "";
-            const pr = game.socket.emit(MODULE, { type: "tts", messageId: message.id || "", audio: b64, mediaType: "mp3", sender: decision.speakerName, lang: preloadAudio.lang || "", ts: Date.now() });
-            if (pr && typeof pr.catch === "function") pr.catch((e) => console.warn("[gpt-sovits-tts] 广播失败:", e));
-          }
-        } catch (e) { /* noop */ }
-      }
+      // 立即广播预合成音频(全员同声; socket 不通时 pl 仍可从 flags 拿到)
+      try {
+        if (message.id && preloadAudio.audioUrl) {
+          const _relP = String(preloadAudio.audioUrl).startsWith("http") ? new URL(preloadAudio.audioUrl).pathname : preloadAudio.audioUrl;
+          const _updP = { "flags.gpt-sovits-tts.audioUrl": _relP };
+          try { if (preloadAudio.dataUrl && preloadAudio.dataUrl.length < 400000) _updP["flags.gpt-sovits-tts.audioData"] = preloadAudio.dataUrl; } catch (e) { /* noop */ }
+          safeMsgWrite(message, _updP);
+        }
+      } catch (e) { /* noop */ }
+      // 🔊 单通道: 预载本地播放 audioPlay 已自动触发官方 playAudio 事件广播(见 audioPlay);
+      // 不再自定义 socket 广播(播放统一走 Foundry 内置语音通道)。
       console.debug("[gpt-sovits-tts] 预加载音频直接播出 (零等待)");
       return;
     }
@@ -844,8 +947,24 @@ async function maybeSpeak(message) {
   }
   if (decision.isSelf) {
     // 作者: 本地合成 + socket 广播 → 全员播放同一段音频(同一个声音)
+    if (window.__fvttTTSCanDirect === false) {
+      // 代理模式(统一): 本机连不到 9881(HTTPS 穿透/跨网/9831 不可达/低配服务器) → 不直连合成,
+      // 由 GM 端 createChatMessage hook 收到本消息的 flags.synthRequest 后代为合成, 写回 flags.audioUrl → 全员(含自己)从 Foundry 30000 拉取播放
+      try {
+        const mid = message.id || "";
+        if (mid) pendingTts.set(mid, { text: speakText, ts: Date.now() });
+        setTimeout(() => { try { if (pendingTts.has(mid)) pendingTts.delete(mid); } catch (e) { /* noop */ } }, 30000);
+      } catch (e) { /* noop */ }
+      return;
+    }
     try { await speak(speakText, { ...opts, broadcast: true, messageId: message.id || "" }); }
     catch (e) { console.warn("[gpt-sovits-tts] 朗读异常(已忽略):", e); }
+  } else if (window.__fvttTTSCanDirect === false) {
+    // 代理模式(非作者): 不设 15s 兜底合成(9881 不可达), 登记 pending — flags.audioUrl 同步到达即播放(updateChatMessage hook), 没到则静默等 GM
+    try {
+      const mid = message.id || "";
+      if (mid && !playedIds.has(mid)) pendingTts.set(mid, -1);   // -1 哨兵: 仅登记, 播放/超时清理
+    } catch (e) { /* noop */ }
   } else if (game.socket && typeof game.socket.on === "function") {
     // 其他客户端: 等发言者的广播音频; 兜底超时后本地合成(广播通道故障时)
     const mid = message.id || "";
@@ -865,6 +984,18 @@ async function checkStatus(force = false) {
   const cfg = getCfg();
   if (!cfg.enabled && !force) return;
   if (cfg.engine !== "gptsovits") { setStatus(null); return; }
+  if (window.__fvttTTSCanDirect === false) {
+    // 代理模式(HTTPS 穿透/跨网/9881 不可达/低配服务器): 不走直连探测 — 显示"GM 代理"(绿色), 绝不显示误导性"无法连接"
+    setStatus(true, { mode: "proxy", message: "GM 代理合成" });
+    clearTimeout(_statusRetryT);
+    return;
+  }
+  if (window.__fvttTTSCanDirect === undefined) {
+    // 可达性探测尚未完成(页面刚加载): 不显示"未连接", 稍后随探测结果刷新
+    clearTimeout(_statusRetryT);
+    _statusRetryT = setTimeout(() => checkStatus(false), 2500);
+    return;
+  }
   const r = await gptSovitsStatus(cfg.serverUrl).catch(() => ({ ok: false, data: null }));
   setStatus(r.ok, r.data);
   // 服务不可用(启动/重启窗口 ~1-2 分钟)时 5 秒快速重试, 恢复后状态灯自动回绿
@@ -883,6 +1014,7 @@ function statusTitle() {
   const cfg = getCfg();
   if (cfg.engine !== "gptsovits") return _L("status.web", "引擎: 浏览器系统语音");
   if (statusInfo.ok) {
+    if (statusInfo.data && statusInfo.data.mode === "proxy") return _L("status.proxy", "TTS · GM 代理合成");
     const c = statusInfo.data?.character;
     const name = c?.name || statusInfo.data?.version || "";
     return `${_L("status.ok", "TTS 服务在线")} · ${name}`;
@@ -924,6 +1056,7 @@ function buildUI() {
   }
   // 拖动(整条可拖; 位置持久化, 刷新后保持)
   try { makeDraggable(bar, bar, { persistKey: "fvtt-tts-floatbar-pos" }); } catch (e) { /* noop */ }
+  // GM 全局静音已从快捷栏移除, 仅在语音设置面板提供(world 设置 gmMute, restricted, 仅 GM 可改)
   // 角色/情绪下拉(数据由 renderQuickUI 填充)
   const charSel = bar.querySelector(".fvtt-tts-char");
   const emoSel = bar.querySelector(".fvtt-tts-emotion");
@@ -1055,7 +1188,9 @@ async function doSubmitChat(ta) {
         emotionMod: (cur1 && typeof cur1.emotionMod === "number") ? cur1.emotionMod : 0.5,
         polish: (cur1 && cur1.polishText) || "",
         speed: (cur1 && cur1.speed) || 0,
-        lang: getCfg().textLang || "auto"
+        lang: getCfg().textLang || "auto",
+        // 代理模式(本机连不到 9881): 附上合成请求 → GM 端 createChatMessage hook 代为合成并写回 flags.audioUrl → 全员播放
+        ...(window.__fvttTTSCanDirect === false ? { synthRequest: { text: v, lang: getCfg().textLang || "auto", role: prof1.current || "", emotion: (cur1 && cur1.emotion) || "", speed: (cur1 && cur1.speed) || 0, provider: String((cur1 && cur1.ttsProvider) || "gpt-sovits") } } : {})
       } }
     };
     if (CONST.CHAT_MESSAGE_STYLES) data.style = CONST.CHAT_MESSAGE_STYLES.IC;
@@ -1253,12 +1388,7 @@ function buildSendPop() {
       btnP2.title = _L("ui.preloadedSendTip", "音频已就绪，再点直接播出");
       btnP2.classList.remove("loading");
       btnP2.classList.add("done");
-      // 用户是"done + 文字已改"点进来的 → 合成完立即发送(继承进度, 不再等第二次点击)
-      if (wasDone) {
-        closeSendPop();
-        doSubmitChat(findChatTextarea());
-        return;
-      }
+      // 合成完成只标记 done, 等待用户点击发送(不再自动发送; 再点即直接播出同一段零等待音频)
     } catch (e) {
       btnP2.textContent = oldP2;
       btnP2.classList.remove("loading");
@@ -1352,16 +1482,11 @@ async function judgeEmotionByLLM(text, charName, context) {
     const c = (quickChars && quickChars.chars || []).find(x => x.name === charName);
     let slots = (c && c.emotions) || [];
     if (!slots.length) {
-      // 兜底: 实时向服务端要角色(缓存可能过期或未刷新)
+      // 兜底: 实时向服务端要角色(缓存可能过期或未刷新) — 走统一数据源(直连/快照自动)
       try {
-        const cfgS = getCfg();
-        const r = await fetch(`${cfgS.serverUrl}/characters`, { signal: AbortSignal.timeout(15000) });
-        const j = await r.json().catch(() => ({}));
-        if (j && j.ok && Array.isArray(j.chars)) {
-          quickChars = j;
-          const c2 = j.chars.find(x => x.name === charName);
-          slots = (c2 && c2.emotions) || [];
-        }
+        await loadQuickChars({ force: true });
+        const c2 = (quickChars && quickChars.chars || []).find(x => x.name === charName);
+        slots = (c2 && c2.emotions) || [];
       } catch (e) { /* noop */ }
     }
     if (!slots.length) return { ok: false, emotion: "", reason: "no-slots" };
@@ -1505,13 +1630,9 @@ async function judgeAndPolishByLLM(text, charName, wantPolish, context) {
     let slots = (c && c.emotions) || [];
     if (!slots.length) {
       try {
-        const r = await fetch(`${cfg.serverUrl}/characters`, { signal: AbortSignal.timeout(15000) });
-        const j = await r.json().catch(() => ({}));
-        if (j && j.ok && Array.isArray(j.chars)) {
-          quickChars = j;
-          const c2 = j.chars.find(x => x.name === charName);
-          slots = (c2 && c2.emotions) || [];
-        }
+        await loadQuickChars({ force: true });
+        const c2 = (quickChars && quickChars.chars || []).find(x => x.name === charName);
+        slots = (c2 && c2.emotions) || [];
       } catch (e) { /* noop */ }
     }
     if (!slots.length) return { ok: false, emotion: "", reason: "no-slots" };
@@ -1625,6 +1746,7 @@ function closeSendPop() {
 
 /* 快捷角色/情绪切换: 数据与渲染 */
 let quickChars = null;   // /characters 缓存
+let _charsSnapCheckT = 0;   // 快照 ts 对比节流(30s 一次)
 const QC_STORE_KEY = "fvtt-tts-quickchars-v2";   // v2: 角色缓存带 avatar 立绘字段(旧 v1 缓存自动弃用重拉)
 
 function readQuickCharsCache() {
@@ -1649,17 +1771,61 @@ function _scheduleQCRetry() {
 }
 
 async function loadQuickChars({ force = false } = {}) {
-  if (!force && quickChars && Array.isArray(quickChars.chars) && quickChars.chars.length) return quickChars;
-  try {
-    const r = await fetch(`${getCfg().serverUrl}/characters`, { signal: AbortSignal.timeout(15000) });
-    if (r.ok) {
-      quickChars = await r.json();
-      try { localStorage.setItem(QC_STORE_KEY, JSON.stringify(quickChars)); } catch (e) { /* noop */ }
-    } else {
-      quickChars = readQuickCharsCache();
-      _scheduleQCRetry();
-    }
-  } catch (e) {
+  if (!force && quickChars && Array.isArray(quickChars.chars) && quickChars.chars.length) {
+    // 代理端: 每 30s 对比一次快照 ts — GM 导入新角色/改角色后自动同步(无需刷新页面)
+    try {
+      if (window.__fvttTTSCanDirect === false && (!_charsSnapCheckT || (Date.now() - _charsSnapCheckT) > 30000)) {
+        _charsSnapCheckT = Date.now();
+        const rr = await fetch(`${window.location.origin}/modules/gpt-sovits-tts/engine/audio_export/chars_meta.json`, { signal: AbortSignal.timeout(6000) });
+        if (rr.ok) {
+          const jj = await rr.json().catch(() => null);
+          const curTs = (quickChars && quickChars._snapTs) || 0;
+          if (jj && jj.ts && jj.ts !== curTs && Array.isArray(jj.chars)) {
+            quickChars = { ok: true, chars: jj.chars, active: "", _src: "snapshot", _snapTs: jj.ts };
+            try { refreshQuickUI(); } catch (e) { /* noop */ }
+          }
+        }
+      }
+    } catch (e) { /* noop */ }
+    return quickChars;
+  }
+  const snapUrl = `${window.location.origin}/modules/gpt-sovits-tts/engine/audio_export/chars_meta.json`;
+  tryDirect: try { } catch (e) { }   // (占位避免误解析; 下面两个函数定义)
+  const tryDirect = async () => {
+    try {
+      const r = await fetch(`${getCfg().serverUrl}/characters`, { signal: AbortSignal.timeout(15000) });
+      if (r.ok) {
+        const j = await r.json();
+        if (j && Array.isArray(j.chars) && j.chars.length) {
+          quickChars = j;
+          try { localStorage.setItem(QC_STORE_KEY, JSON.stringify(j)); } catch (e) { /* noop */ }
+          return true;
+        }
+      }
+    } catch (e) { /* noop */ }
+    return false;
+  };
+  const trySnap = async () => {
+    // 30000 静态快照(不写本地缓存, 避免污染直连端的完整角色数据)
+    try {
+      const r = await fetch(snapUrl, { signal: AbortSignal.timeout(8000) });
+      if (r.ok) {
+        const j = await r.json();
+        if (j && Array.isArray(j.chars) && j.chars.length) {
+          quickChars = { ok: true, chars: j.chars, active: "", _src: "snapshot", _snapTs: j.ts || 0 };
+          return true;
+        }
+      }
+    } catch (e) { /* noop */ }
+    return false;
+  };
+  // 通用数据源顺序: 直连端(9881 可达/本机/局域网) 9881 优先拿完整数据; 代理端(HTTPS 穿透/跨网/9881 不可达/低配服务器) FVTT 30000 快照优先 — 任何环境都能拿到角色
+  const canD = window.__fvttTTSCanDirect !== false;
+  let okD = canD ? await tryDirect() : false;
+  let okS = okD ? true : await trySnap();
+  if (!okD && !okS && canD) okS = await trySnap();
+  if (!okD && !okS && !canD) okD = await tryDirect();
+  if (!(quickChars && Array.isArray(quickChars.chars) && quickChars.chars.length)) {
     quickChars = readQuickCharsCache();
     _scheduleQCRetry();
   }
@@ -1872,7 +2038,7 @@ function addReplayButton(message, html) {
     // 优先播放第一次的同一段音频(缓存), 无缓存才重新合成
     const cached = audioCache.get(message.id || "");
     if (cached && cached.url) {
-      queue.enqueue({ play: () => audioPlay(cached.url, { volume: getCfg().volume }) });
+      queue.enqueue({ play: () => audioPlay(cached.url, { volume: getCfg().volume, push: false }) });
       return;
     }
     // 缓存 miss(被挤出/跨会话): 用消息 flags 里的原音色上下文重新合成,
@@ -1903,7 +2069,7 @@ function addReplayButton(message, html) {
 }
 
 /* ============ 内置自检: 一键跑全部测试 → 报告写入服务端 selftest_report.json(作者直接读文件排查) ============ */
-window.__fvttTTSPatch = "lipin-v2+selftest2";   // 版本指纹: 自检报告显示它, 判断页面是否加载了最新 JS
+window.__fvttTTSPatch = "official-v2";   // 版本指纹: 自检报告显示它, 判断页面是否加载了最新 JS
 async function runSelfTest() {
   const out = { at: new Date().toISOString(), env: {}, settings: {}, hud: {}, portrait: {}, net: {}, voice: {}, audio: {} };
   try {
@@ -1915,6 +2081,7 @@ async function runSelfTest() {
       isGM: !!(typeof game !== "undefined" && game.user && game.user.isGM),
       href: String((location && location.href) || "").slice(0, 80),
       patch: String(window.__fvttTTSPatch || ""),
+      canDirect: (() => { try { return window.__fvttTTSCanDirect === true ? "direct" : (window.__fvttTTSCanDirect === false ? "proxy(gm)" : "probe-pending"); } catch (e) { return "err"; } })(),
       moduleVersion: (() => { try { return (game.modules.get(MODULE) || {}).version || ""; } catch (e) { return ""; } })(),
       socketConnected: !!(typeof game !== "undefined" && game.socket && game.socket.connected),
       sockRecv: (() => { try { return window.__fvttTTSSockRecv || 0; } catch (e) { return -1; } })(),   // 本页已收到的模块广播数(pl 端 >0 = 广播确实到达)
@@ -1965,6 +2132,16 @@ async function runSelfTest() {
           };
         } catch (e) { return { err: String(e).slice(0, 80) }; }
       })(),
+      // GM 全局静音检测: 按钮存在 + 当前静音状态 + 播放标志(静音时 audioPlay 统一跳过)
+      gmMute: (() => {
+        try {
+          return {
+            setting: (() => { try { return game.settings.get(MODULE, "gmMute") === true; } catch (e) { return "err"; } })(),
+            muteBtnExists: !!document.querySelector("#fvtt-tts-floatbar .fvtt-tts-mute"),
+            playFlagMuted: window.__fvttTTSMutedFlag === true,
+          };
+        } catch (e) { return { err: String(e).slice(0, 80) }; }
+      })(),
     };
   } catch (e) { out.hud.err = String(e); }
   try {
@@ -1995,6 +2172,12 @@ async function runSelfTest() {
         } catch (e) { probe = "err:" + String(e).slice(0, 60); }
         out.portrait.avatarProbe = { rel: firstAv.avatar, abs, status: probe };
       }
+      // 角色快照(30000 静态): pl/HTTPS 环境的数据源 — 检测快照是否生成且可达
+      try {
+        const sr = await fetch(`${location.origin}/modules/gpt-sovits-tts/engine/audio_export/chars_meta.json`, { signal: AbortSignal.timeout(6000) });
+        const sj = await sr.json().catch(() => null);
+        out.portrait.charsMetaSnapshot = { ok: sr.ok, count: (sj && Array.isArray(sj.chars)) ? sj.chars.length : -1, ts: (sj && sj.ts) || 0 };
+      } catch (e) { out.portrait.charsMetaSnapshot = { err: String(e).slice(0, 60) }; }
     } catch (e) { out.portrait.charactersEndpoint = { err: String(e).slice(0, 80) }; }
     // 手动触发 applyEmotionAvatar(取最后一条消息) → 直接暴露"为什么没插图"(异常/无 flags/无 avatar/插入失败)
     try {
@@ -2079,6 +2262,12 @@ async function runSelfTest() {
         xferMs: url ? (t4 - t3) : -1, size, urlMode: !!url, totalMs: t4 - t0,
       };
     } catch (e) { out.net.ttsTiming = { err: String(e).slice(0, 80) }; }
+    // Edge-TTS 在线引擎探测(多引擎并行): 短文本真合成 → 报告可用性/耗时/音频路径(需服务器能访问微软在线服务)
+    try {
+      const et0 = Date.now();
+      const er = await synthEdge("在线引擎自检", "zh", { serverUrl: cfg.serverUrl, speedFactor: 1.0, asBlob: true });
+      out.net.edgeProbe = { ok: !!(er && er.audioUrl), ms: Date.now() - et0, audioUrl: (er && er.audioUrl) || "", size: (er && er.blob && er.blob.size) || 0, note: "失败多为服务器无外网/edge-tts 未安装; 本页为代理模式时 fetch 被拦属预期" };
+    } catch (e) { out.net.edgeProbe = { err: String(e).slice(0, 80) }; }
     // 跨页面广播测试: 本页发 ping → 其他页面(标签/玩家)常驻监听回 pong → 统计到达 + 往返耗时
     out.net.broadcast = await new Promise((resolve) => {
       try {
@@ -2192,12 +2381,12 @@ async function runTransferTest() {
   return out;
 }
 
-/* ============ 高压测试: 并发/长文本/连续合成/广播风暴/批量立绘 — 结果并入 selftest_report.json(stress 段) ============ */
+/* ============ 高压测试: 客户端压力(浏览器) — 适配低配服务器(引擎不可压, 压力全在玩家端) — 结果并入 selftest_stress.json ============ */
 async function runStressTest() {
   const url = getCfg().serverUrl;
   const out = {
     at: new Date().toISOString(), mode: "stress",
-    env: { patch: String(window.__fvttTTSPatch || ""), user: (typeof game !== "undefined" && game.user && game.user.name) || "" },
+    env: { patch: String(window.__fvttTTSPatch || ""), canDirect: (() => { try { return window.__fvttTTSCanDirect === true ? "direct" : (window.__fvttTTSCanDirect === false ? "proxy(gm)" : "probe-pending"); } catch (e) { return "err"; } })(), user: (typeof game !== "undefined" && game.user && game.user.name) || "" },
     stress: {},
   };
   const synthOne = async (text, ms = 90000) => {
@@ -2205,41 +2394,91 @@ async function runStressTest() {
       const t0 = Date.now();
       const r = await fetch(`${url}/tts`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, text_lang: "zh", media_type: "mp3", speed_factor: 1.0 }), signal: AbortSignal.timeout(ms) });
       let audioUrl = "";
-      try { audioUrl = r.headers.get("X-Audio-Url") || ""; if (audioUrl && !/^https?:\/\//i.test(audioUrl)) audioUrl = new URL(audioUrl, url).href; } catch (e) { /* noop */ }
+      try { audioUrl = r.headers.get("X-Fvtt-Audio-Url") || r.headers.get("X-Audio-Url") || ""; if (audioUrl && !/^https?:\/\//i.test(audioUrl)) audioUrl = (audioUrl.startsWith("/modules/") || audioUrl.startsWith("/data/")) ? new URL(audioUrl, window.location.origin).href : new URL(audioUrl, url).href; } catch (e) { /* noop */ }
       const buf = r.ok ? await r.arrayBuffer() : null;
       return { ok: r.ok, status: r.status, ms: Date.now() - t0, size: buf ? buf.byteLength : 0, audioUrl };
     } catch (e) { return { ok: false, err: String(e).slice(0, 40) }; }
   };
-  // 1) 并发合成(uvicorn 单 worker → 引擎串行排队, 测稳定性/总耗时) — 8 路并发(更高压力)
-  try {
-    const texts = ["你好", "今天天气不错", "我们去公园散步吧", "测试并发压力", "这句话是第五段压力测试", "第六段文本也一起合成", "第七段继续压测", "第八段收尾"];
-    const t0 = Date.now();
-    const res = await Promise.all(texts.map(t => synthOne(t)));
-    out.stress.concurrent = {
-      sent: texts.length, ok: res.filter(r => r.ok).length, fail: res.filter(r => !r.ok).length,
-      totalMs: Date.now() - t0, perMs: res.map(r => r.ms), sizes: res.map(r => r.size), errors: res.filter(r => !r.ok).map(r => r.err || r.status),
-    };
-  } catch (e) { out.stress.concurrent = { err: String(e).slice(0, 80) }; }
-  // 2) 长文本(cut5 多段切分 + 硬件自适应 batch → 测长句稳定性) — 60 句约 1100 字
+  // ===== 客户端压力(全部压在浏览器): 只合成 1 段素材, 其余场景全在客户端执行 — 适配低配服务器(引擎不可压) =====
+  // 素材: 合成 1 段短音频(唯一一次请求服务端, 供播放类测试复用)
   let lastAv = "";
   try {
-    const long = "这是我们的一段长文本压力测试，用来验证切分与批量合成是否稳定。".repeat(60);
     const t0 = Date.now();
-    const r = await synthOne(long, 180000);
-    if (r.audioUrl) lastAv = r.audioUrl;
-    out.stress.longText = { ok: r.ok, status: r.status || 0, chars: long.length, synthMs: r.ms, size: r.size, err: r.err || "" };
-  } catch (e) { out.stress.longText = { err: String(e).slice(0, 80) }; }
-  // 3) 连续合成(快速连说 8 句, 模拟连续发言)
+    const r = await synthOne("压力测试", 60000);
+    if (r.ok && r.audioUrl) lastAv = r.audioUrl;
+    out.stress.material = { ok: !!r.ok, status: r.status || 0, synthMs: r.ms, size: r.size, err: r.err || "" };
+  } catch (e) { out.stress.material = { err: String(e).slice(0, 80) }; }
+  // 1) 客户端: 并发播放(6 段同播同一音频, 低音量 0.3 — 测浏览器音频解码/多 Audio 实例)
+  try {
+    if (!lastAv) throw new Error("no material");
+    const reps = 6;
+    const t0 = Date.now();
+    let ok = 0;
+    const jobs = [];
+    for (let i = 0; i < reps; i++) jobs.push(audioPlay(lastAv, { volume: 0.3 }).then(() => { ok++; }).catch(() => { /* noop */ }));
+    await Promise.all(jobs);
+    out.stress.playConcurrent = { sent: reps, ok, ms: Date.now() - t0 };
+  } catch (e) { out.stress.playConcurrent = { err: String(e).slice(0, 80) }; }
+  // 2) 客户端: 队列洪泛(50 个瞬时任务入队, 测队列管理与排空)
   try {
     const t0 = Date.now();
-    const res = [];
-    for (let i = 0; i < 8; i++) {
-      const r = await synthOne("连续第" + (i + 1) + "句压力测试");
-      if (r.audioUrl) lastAv = r.audioUrl;
-      res.push(r);
+    const N = 50;
+    let done = 0;
+    for (let i = 0; i < N; i++) queue.enqueue({ play: () => { done++; return Promise.resolve(); } });
+    await new Promise(r => setTimeout(r, 300));
+    out.stress.queueFlood = { sent: N, done, ms: Date.now() - t0 };
+  } catch (e) { out.stress.queueFlood = { err: String(e).slice(0, 80) }; }
+  // 3) 客户端: 千立绘渲染(临时容器 1000 张头像 img, 不污染聊天 — 测 DOM 插入+图片解码)
+  try {
+    const t0 = Date.now();
+    const host = document.createElement("div");
+    host.style.cssText = "position:fixed;left:-99999px;top:0;width:320px;";
+    document.body.appendChild(host);
+    let avatarSrc = "";
+    try { const a = document.querySelector(".fvtt-tts-emotion-avatar img, .message-header img"); if (a) avatarSrc = a.getAttribute("src") || ""; } catch (e) { /* noop */ }
+    const N = 1000;
+    let loaded = 0, failed = 0;
+    for (let i = 0; i < N; i++) {
+      const img = document.createElement("img");
+      img.style.cssText = "width:90px;height:90px;display:inline-block;";
+      img.onload = () => { loaded++; };
+      img.onerror = () => { failed++; };
+      if (avatarSrc) img.src = avatarSrc;
+      host.appendChild(img);
     }
-    out.stress.sequential = { sent: 8, ok: res.filter(r => r.ok).length, totalMs: Date.now() - t0, avgMs: Math.round((Date.now() - t0) / 8), perMs: res.map(r => r.ms) };
-  } catch (e) { out.stress.sequential = { err: String(e).slice(0, 80) }; }
+    await new Promise(r => setTimeout(r, avatarSrc ? 3000 : 100));
+    try { document.body.removeChild(host); } catch (e) { /* noop */ }
+    out.stress.portraitRender = { sent: N, loaded: avatarSrc ? loaded : "no-src", failed: avatarSrc ? failed : 0, ms: Date.now() - t0 };
+  } catch (e) { out.stress.portraitRender = { err: String(e).slice(0, 80) }; }
+  // 4) 客户端: 并发拉流(20 个并发 fetch Foundry 静态文件 — 测浏览器连接池/HTTP 并发)
+  try {
+    const t0 = Date.now();
+    let target = "/modules/gpt-sovits-tts/module.json";
+    try { const a = document.querySelector(".fvtt-tts-emotion-avatar img, .message-header img"); if (a) target = a.getAttribute("src") || target; } catch (e) { /* noop */ }
+    const full = new URL(target, window.location.origin).href;
+    const res = await Promise.all(Array.from({ length: 20 }, () => fetch(full, { signal: AbortSignal.timeout(15000) }).then(r => r.ok).catch(() => false)));
+    out.stress.netConcurrent = { sent: 20, ok: res.filter(Boolean).length, ms: Date.now() - t0 };
+  } catch (e) { out.stress.netConcurrent = { err: String(e).slice(0, 80) }; }
+  // 5) 客户端: 内存观察(performance.memory, Chrome; 创建 50 个 1MB blob 后对比 usedJSHeapSize)
+  try {
+    const mem = () => { try { return (performance.memory && performance.memory.usedJSHeapSize) ? Math.round(performance.memory.usedJSHeapSize / 1048576) : -1; } catch (e) { return -1; } };
+    const before = mem();
+    const blobs = [];
+    for (let i = 0; i < 50; i++) blobs.push(new Blob([new Uint8Array(1024 * 1024)], { type: "application/octet-stream" }));
+    const after = mem();
+    blobs.length = 0;
+    out.stress.memoryWatch = { beforeMB: before, after50x1MB: after, deltaMB: (before >= 0 && after >= 0) ? after - before : "n/a" };
+  } catch (e) { out.stress.memoryWatch = { err: String(e).slice(0, 80) }; }
+  // 6) 客户端: DOM 操作(快速插入/移除 500 节点计时)
+  try {
+    const t0 = Date.now();
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    for (let i = 0; i < 500; i++) { const n = document.createElement("span"); n.textContent = "x"; host.appendChild(n); }
+    host.innerHTML = "";
+    try { document.body.removeChild(host); } catch (e) { /* noop */ }
+    out.stress.domOps = { nodes: 500, ms: Date.now() - t0 };
+  } catch (e) { out.stress.domOps = { err: String(e).slice(0, 80) }; }
   // 在线玩家检测: 高压要测"给其他 pl 传输语音" — 先看有几个非 GM 玩家在线(active), 广播风暴的 ack 里按名字识别哪些是 pl
   try {
     const users = (game.users && game.users.contents) || [];
@@ -2308,6 +2547,50 @@ async function runStressTest() {
     const j = await r.json().catch(() => ({}));
     out.stress.llm = { ok: r.ok, status: r.status || 0, hasKey: !!_key, model: _model || "(空→默认gpt-4o-mini)", role: (j && j.role) || "", ms: Date.now() - t0, note: _model ? "" : "llmModel 设置为空 → 服务端用默认 gpt-4o-mini; 若该模型在服务商不可用会 502, 请在设置里填真实模型名" };
   } catch (e) { out.stress.llm = { err: String(e).slice(0, 60) }; }
+  // 8) 系统层(不可手动确认的全进自检): hook 活性 / AI 共享生效 / 代理链路端到端实测 / 消息 flags 结构
+  out.sys = {};
+  try {
+    out.sys.hooks = Object.assign({}, window.__fvttTTSHooks || {});
+  } catch (e) { out.sys.hooksErr = String(e).slice(0, 60); }
+  try {
+    out.sys.aiShared = {
+      worldBaseSet: !!(game.settings.get(MODULE, "aiSharedBase")),
+      worldKeySet: !!(game.settings.get(MODULE, "aiSharedKey")),
+      worldModelSet: !!(game.settings.get(MODULE, "aiSharedModel")),
+      effectiveShared: getCfg().aiShared === true,   // 共享值确实覆盖本地
+      effectiveBase: String(getCfg().llmBaseUrl || "").slice(0, 50),
+      effectiveModel: String(getCfg().llmModel || "").slice(0, 40),
+      effectiveKeySet: !!(getCfg().llmKey),
+      effectiveEnabled: getCfg().llmEnabled === true,   // 一键分发后共享存在 → 自动启用(pl 端 AI 生效的关键)
+    };
+  } catch (e) { out.sys.aiSharedErr = String(e).slice(0, 60); }
+  try {
+    // 多模型池状态: 服务端同时常驻的角色模型数(默认10/上限20) — GM 在 模块设置 里改, 客户端自检确认同步
+    const cfgX2 = getCfg();
+    const pr = await fetch(`${cfgX2.serverUrl.replace(/\/+$/, "")}/config`, { signal: AbortSignal.timeout(6000) }).catch(() => null);
+    const pj = pr && pr.ok ? await pr.json().catch(() => ({})) : {};
+    out.sys.pool = { ok: !!(pr && pr.ok), max: (pj && pj.max_concurrent_models) || -1, setting: Number(getCfg().maxConcurrentModels) || -1 };
+  } catch (e) { out.sys.pool = { err: String(e).slice(0, 60) }; }
+  try {
+    // 代理链路端到端实测(不依赖真实消息/事件): 构造假消息(当前角色参数) → 走 GM 代理执行核心(真合成+写回校验)
+    const cur = currentVoice() || {};
+    const fakeMsg = {
+      id: "selftest-proxy-" + Date.now(),
+      flags: { [MODULE]: { synthRequest: { text: "代理链路自检", lang: "zh", speed: 1.0 }, ref: cur.ref || "", promptText: cur.promptText || "", promptLang: cur.promptLang || "", auxRef: cur.auxRef || "", emotionMix: cur.emotionMix } },
+      update: async () => ({ ok: true }),
+    };
+    out.sys.proxyProbe = await _proxySynthFor(fakeMsg);
+  } catch (e) { out.sys.proxyProbe = { err: String(e).slice(0, 80) }; }
+  try {
+    // 最近一条带模块 flags 的消息结构(确认朗读上下文 flags.synthRequest/audioUrl 是否真正随消息同步)
+    const msgs = (game.messages && game.messages.contents) || [];
+    let found = null;
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      const fl = msgs[i].flags && msgs[i].flags[MODULE];
+      if (fl && (fl.role || fl.synthRequest || fl.audioUrl)) { found = { id: msgs[i].id, author: (msgs[i].author && msgs[i].author.name) || "", role: fl.role || "", hasSynthRequest: !!fl.synthRequest, hasAudioUrl: !!fl.audioUrl, synthResult: fl.synthResult || "" }; break; }
+    }
+    out.sys.lastMsgFlags = found || { none: true };
+  } catch (e) { out.sys.lastMsgFlagsErr = String(e).slice(0, 60); }
   let resText = "no-response";
   try {
     const r = await fetch(`${url}/selftest`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(out), signal: AbortSignal.timeout(15000) });
@@ -2316,6 +2599,488 @@ async function runStressTest() {
   } catch (e) { resText = "err:" + String(e).slice(0, 50); }
   try { ui.notifications.info(`高压测试完成\n${resText}`); } catch (e) { /* noop */ }
   try { console.log("[gpt-sovits-tts] 高压测试报告:", JSON.stringify(out, null, 2)); } catch (e) { /* noop */ }
+  return out;
+}
+
+/* ============ 🚄 批量速度测试(分批: 合成/传输/加载 + 压满显卡峰值性能) ============ */
+async function runSpeedTest() {
+  const cfg = getCfg();
+  // 精简模式(默认): 去掉已稳定/冗长的纯能力长测(长度梯度/语速/格式/连续长跑/API往返), 专注本轮问题项；
+  // 控制台 window.__fvttTTSTestFull = true 后整跑全部测段
+  const fullMode = (typeof window.__fvttTTSTestFull === "boolean") ? window.__fvttTTSTestFull : false;
+  const out = { ts: Date.now(), user: (game.user && game.user.name) || "gm", canDirect: window.__fvttTTSCanDirect, patch: window.__fvttTTSPatch || "", fullMode, batches: {}, bugs: {}, conclusions: [] };
+  // 播放实现计数器清零(本次测程内 GM 端各走 官方界面通道 / 原生音频 多少次)
+  try { window.__fvttTTSCnt = { official: 0, native: 0 }; window.__fvttTTSPlayImpl = ""; } catch (e) { /* noop */ }
+  // 报告在线玩家(判断 pl 是否真的在场参与传输测试)
+  try { out.onlinePlayers = (game.users || []).filter(u => u.active && !u.isSelf).map(u => u.name || "?"); } catch (e) { out.onlinePlayers = []; }
+  const base = String(cfg.serverUrl || "http://127.0.0.1:9880").replace(/\/+$/, "");
+  const api = (path, body) => fetch(base + path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}), signal: AbortSignal.timeout(30000) }).then(r => r.json().catch(() => ({})));
+  const getJ = (path) => fetch(base + path, { signal: AbortSignal.timeout(10000) }).then(r => r.json().catch(() => ({})));
+  // I1a 心跳探测(确认 pl 端通道活性, 决定传输段预期; pl 无响应=未硬刷新/离线)
+  try {
+    window.__fvttTTSPingAck = false;
+    try {
+      await ChatMessage.create({ content: "🫀", speaker: { alias: "速度测试心跳" }, flags: { [MODULE]: { speedTestPing: { ts: Date.now() } } } });
+    } catch (e) { /* noop */ }
+    await new Promise(r => setTimeout(r, 4000));
+    out.batches.i1 = { plPing: window.__fvttTTSPingAck, plOnline: out.onlinePlayers || [] };
+    out.conclusions.push(`I1 pl 活性: 心跳 ${window.__fvttTTSPingAck ? "✓ pl 通道通" : "✗ pl 无响应(请硬刷新 pl / 检查是否离线)"}${(out.onlinePlayers || []).length ? `, 在线: ${out.onlinePlayers.join(",")}` : ", 无 pl 在线"}`);
+  } catch (e) { out.batches.i1 = { err: String(e).slice(0, 80) }; }
+  let poolChar = "";
+  // A1 模型/池加载速度 + 显卡状态(首用非激活角色触发池加载, 测加载耗时与显存占用)
+  try {
+    const st0 = await getJ("/status");
+    out.gpuBefore = { freeGb: (st0.hw && st0.hw.gpu_mem_free_gb), totalGb: (st0.hw && st0.hw.gpu_mem_total_gb) };
+    const g0 = await getJ("/speedtest/gpu");
+    out.gpuUtilBefore = g0.util;
+    try {
+      const cd = (quickChars && quickChars.chars) || [];
+      const act = (st0.character && st0.character.name) || "";
+      const c = cd.find(x => x.name && x.name !== act) || cd[0];
+      poolChar = (c && c.name) || "";
+    } catch (e) { /* noop */ }
+    const t0 = Date.now();
+    const r1 = await gptSovitsSynth("加载速度测试", "zh", { serverUrl: cfg.serverUrl, speedFactor: 1.0, mediaType: "mp3", asBlob: true, role: poolChar });
+    const loadMs = Date.now() - t0;
+    out.batches.a1 = { poolChar, loadMs, ok: !!(r1 && r1.audioUrl) };
+    const st1 = await getJ("/status");
+    out.poolAfter = st1.pool;
+    const g1 = await getJ("/speedtest/gpu");
+    out.gpuUtilAfter = g1.util;
+    out.gpuAfter = { freeGb: (st1.hw && st1.hw.gpu_mem_free_gb) };
+    out.conclusions.push(`A1 加载: 角色[${poolChar}] ${loadMs}ms${loadMs > 3000 ? "(首次池加载, 之后秒回)" : "(池命中)"}, GPU 利用率 ${g1.util === null ? "无nvidia-smi" : g1.util + "%"}, 显存空闲 ${out.gpuAfter.freeGb}GB`);
+  } catch (e) { out.batches.a1 = { err: String(e).slice(0, 80) }; }
+  // A2 批量合成峰值(8 段短文本连续全压 + 2 段长文本真正压满 GPU, 每段记录合成耗时/字节)
+  try {
+    const segs = ["显卡满载测试一", "第二段连续合成", "第三段", "第四段测试", "第五段", "第六段", "第七段", "最后一段"];
+    const times = [];
+    for (const s of segs) {
+      const t0 = Date.now();
+      const r = await gptSovitsSynth(s, "zh", { serverUrl: cfg.serverUrl, speedFactor: 1.0, mediaType: "mp3", asBlob: true, role: poolChar });
+      times.push({ ms: Date.now() - t0, bytes: (r && r.blob && r.blob.size) || 0 });
+    }
+    // 长文本(约 180 字 × 2 段): 合成时间长 → GPU 持续忙碌, 测满载峰值
+    const longSegs = ["长文本压显卡性能测试正式开始，这一段会持续合成较长时间，用于观察显卡在满负载下的处理速度，多句话连续拼接，考验模型的长文本推理能力，句子越长计算量越大，显卡利用率应该明显上升，这样就能对比出短文本与长文本的真实速度差距，帮助判断这台机器的显卡在语音合成上的实际峰值性能表现如何。", "第二段长文本继续压测显卡性能，继续拼接多句台词，让推理引擎保持持续工作状态，观察平均耗时与显存占用变化，长文本的逐句切分与拼接本身也有额外开销，正好可以一起测量出来，作为批量速度测试的长文对照样本。"];
+    const longTimes = [];
+    for (const s of longSegs) {
+      const t0 = Date.now();
+      const r = await gptSovitsSynth(s, "zh", { serverUrl: cfg.serverUrl, speedFactor: 1.0, mediaType: "mp3", asBlob: true, role: poolChar });
+      longTimes.push({ ms: Date.now() - t0, bytes: (r && r.blob && r.blob.size) || 0 });
+    }
+    const gm = await getJ("/speedtest/gpu");
+    const sum = times.reduce((a, b) => a + b.ms, 0);
+    const lSum = longTimes.reduce((a, b) => a + b.ms, 0);
+    out.batches.a2 = { segs: times, longSegs: longTimes, avgMs: Math.round(sum / times.length), minMs: Math.min(...times.map(t => t.ms)), maxMs: Math.max(...times.map(t => t.ms)), longAvgMs: Math.round(lSum / longTimes.length), longMaxMs: Math.max(...longTimes.map(t => t.ms)), gpuUtilDuring: gm.util };
+    out.conclusions.push(`A2 批量合成: 短文 ${times.length} 段平均 ${out.batches.a2.avgMs}ms/段(峰值 ${out.batches.a2.maxMs}ms); 长文 ${longTimes.length} 段平均 ${out.batches.a2.longAvgMs}ms/段(峰值 ${out.batches.a2.longMaxMs}ms); 期间 GPU 利用率 ${gm.util === null ? "无nvidia-smi" : gm.util + "%"}`);
+  } catch (e) { out.batches.a2 = { err: String(e).slice(0, 80) }; }
+  // B 端到端(5 批 × 2 段): 走真实 speak 路径 — GM 像实际说话一样(创建聊天消息 → speak 合成 → flags 内嵌
+  // → data URI 播放 + playAudio 广播 → pl 端通用 hook 真实播放 + 回执)。与实际使用 100% 同一代码(测试=实际)。
+  try {
+    window.__fvttTTSAcks = [];
+    const batches = [];
+    for (let bi = 1; bi <= 5; bi++) {
+      const b0 = Date.now();
+      for (let si = 0; si < 2; si++) {
+        const txt = (bi >= 4) ? "长文传输带宽测试，这一段用长文本测试大文件在玩家与主持人之间的传输速度，多句台词连续拼接，音频文件体积更大，用于对比小文件与大文件的真实带宽表现，句子越长传输数据越多，可以更清楚地看出隧道环境下的传输瓶颈，帮助判断音频码率与压缩策略是否合适，作为传输测试的大文件对照样本。" : `传输批次${bi}段${si + 1}`;
+        let cm0 = null;
+        try {
+          cm0 = await ChatMessage.create({
+            content: `[🚄真实说话 批次${bi} 段${si + 1}${bi >= 4 ? "(长文)" : ""}] ${txt}`,
+            speaker: { alias: "速度测试" },
+            flags: { [MODULE]: { speedTest: { batch: bi, seg: si, ts: Date.now() } } }
+          });
+        } catch (e) { cm0 = null; }
+        const tS = Date.now();
+        try {
+          // 真实 speak(与 GM 说话同一函数: 合成 + data URI 播放 + flags 内嵌写回 + playAudio 广播)
+          // 情绪交替(偶数段带 0.5 语气混合, 贴合实际语气变化; 跳 LLM 情绪判定保合成路径纯测试)
+          const emo = (si % 2 === 1) ? 0.5 : null;
+          const spk = await speak(txt, { messageId: (cm0 && cm0.id) || "", broadcast: true, skipAiEmotion: true, emotionMix: emo });
+          // 双保险: 确保 audioData 已写回消息(pl 端收到即播; speak 内部已写, 此处补验防同步竞态)
+          try {
+            if (cm0 && cm0.id) {
+              const cmF = (cm0.flags && cm0.flags[MODULE]) || {};
+              if (!cmF.audioData) {
+                const ckF = `${txt}|${"zh"}|${makeWatchKey()}`;
+                const ccF = _synthCache.get(ckF) || null;
+                if (ccF && ccF.blob && ccF.blob.size > 0 && ccF.blob.size <= 300000) {
+                  const bF = await blobToBase64(ccF.blob);
+                  if (bF && bF.length < 400000 && _canWrite()) cm0.update({ "flags.gpt-sovits-tts.audioData": "data:audio/mpeg;base64," + bF }).catch(() => { /* noop */ });
+                }
+              }
+            }
+          } catch (e) { /* noop */ }
+          out.batches[`b${bi}s${si}`] = { realPath: "speak", emotionMix: emo, synthMs: Date.now() - tS, ok: !!spk, gmPlayed: !!spk, createdMs: cm0 ? Date.now() - b0 : null };
+        } catch (e) { out.batches[`b${bi}s${si}`] = { realPath: "speak", err: String(e).slice(0, 80) }; }
+      }
+      await new Promise(res => setTimeout(res, bi >= 4 ? 8000 : 6000));   // 等本批 pl 真实路径回执(pl 端延迟回执 6s; 长文批大内嵌 DB 同步慢, 再多等)
+      const acks = (window.__fvttTTSAcks || []).filter(a => a.batch === bi);
+      batches.push({ batch: bi, totalMs: Date.now() - b0, ackCount: acks.length, ackFetchMs: acks.map(a => a.fetchMs) });
+    }
+    out.batches.b = batches;
+    const totalAck = batches.reduce((a, b) => a + b.ackCount, 0);
+    out.conclusions.push(`B 端到端(真实 speak 路径): 5 批 10 段(短文×6+长文×4), pl 回执 ${totalAck}/10; 与实际说话同一代码(合成/内嵌/广播/播放)`);
+  } catch (e) { out.batches.b = { err: String(e).slice(0, 80) }; }
+  // P 代理端到端(玩家说话路径): GM 构造玩家消息(synthRequest) → 走 _proxySynthFor 同一函数
+  // (合成 + flags audioData 写回) → pl 端 updateChatMessage 真实播放 + 延迟回执 —
+  // 与实际 pl 发消息被 GM 代理完全一致(同函数/同写回/同播放 hook)
+  try {
+    const pText = "玩家代理路径测试：这句由主持人代理合成后全员听到。";
+    const tP = Date.now();
+    const pMsg = await ChatMessage.create({
+      content: `[🚄玩家说话] ${pText}`,
+      speaker: { alias: "Player2" },
+      flags: { [MODULE]: { synthRequest: { text: pText, lang: "zh", provider: "gpt-sovits" }, role: "五条悟", speedTest: { proxy: true, batch: 6, seg: 0, ts: Date.now() } } }
+    });
+    const res = await _proxySynthFor(pMsg);
+    out.proxy = { realPath: "proxy", proxyMs: (res && res.ms) || (Date.now() - tP), ok: !!(res && res.ok), flagsWritten: !!(res && res.flagsWritten), err: (res && res.err) || "" };
+    out.conclusions.push(`P 代理端到端(玩家说话路径): 代理合成+写回 ${out.proxy.proxyMs}ms${out.proxy.ok ? " ✓" : " ✗"} (flags 写回 ${out.proxy.flagsWritten ? "✓" : "✗"})`);
+  } catch (e) { out.proxy = { realPath: "proxy", err: String(e).slice(0, 80) }; }
+  // D 多角度扩展(加载/并发/引擎/配置同步)
+  // D6 池上限配置同步(GM 改上限 → 服务端 /config 生效 → 恢复)
+  try {
+    const st0c = await getJ("/status");
+    const origMax = (st0c.pool && st0c.pool.max) || 10;
+    const want = Math.max(1, Math.min(3, origMax));
+    await api("/config", { max_concurrent_models: want });
+    const stC = await getJ("/status");
+    const newMax = (stC.pool && stC.pool.max) || null;
+    await api("/config", { max_concurrent_models: origMax });
+    const stR = await getJ("/status");
+    const restMax = (stR.pool && stR.pool.max) || null;
+    out.batches.d6 = { origMax, setTo: want, syncedMax: newMax, restoredMax: restMax, ok: newMax === want && restMax === origMax };
+    out.conclusions.push(`D6 池上限同步: ${origMax}→${want} 生效=${newMax} 恢复=${restMax}${out.batches.d6.ok ? " ✓" : " ✗"}`);
+  } catch (e) { out.batches.d6 = { err: String(e).slice(0, 80) }; }
+  // D5 并发合成排队(3 并发: 单 worker 串行 → 排队延迟)
+  try {
+    const t0 = Date.now();
+    const rs = await Promise.all([
+      gptSovitsSynth("并发测试第一条", "zh", { serverUrl: cfg.serverUrl, speedFactor: 1.0, mediaType: "mp3", asBlob: true, role: poolChar }),
+      gptSovitsSynth("并发测试第二条", "zh", { serverUrl: cfg.serverUrl, speedFactor: 1.0, mediaType: "mp3", asBlob: true, role: poolChar }),
+      gptSovitsSynth("并发测试第三条", "zh", { serverUrl: cfg.serverUrl, speedFactor: 1.0, mediaType: "mp3", asBlob: true, role: poolChar })
+    ]);
+    const allMs = Date.now() - t0;
+    const oneMs = (out.batches.a2 && out.batches.a2.avgMs) || 900;
+    out.batches.d5 = { concurrent: 3, allMs, oneSeqMs: oneMs, queueOverheadMs: Math.max(0, allMs - oneMs), allOk: rs.every(r => !!(r && r.audioUrl)) };
+    out.conclusions.push(`D5 并发排队: 3 并发总 ${allMs}ms(单段约 ${oneMs}ms, 排队开销 ${Math.max(0, allMs - oneMs)}ms)${out.batches.d5.allOk ? " 全部成功" : " 有失败"}`);
+  } catch (e) { out.batches.d5 = { err: String(e).slice(0, 80) }; }
+  // D1 多角色池加载对比(依次 3 角色 → 验证多模型并行 + 显存占用)
+  try {
+    const cd = (quickChars && quickChars.chars) || [];
+    const st0d = await getJ("/status");
+    const act = (st0d.character && st0d.character.name) || "";
+    const others = cd.filter(x => x.name && x.name !== act).slice(0, 3);
+    const loads = [];
+    for (const c of others) {
+      const t0 = Date.now();
+      const r = await gptSovitsSynth("多角色加载测试", "zh", { serverUrl: cfg.serverUrl, speedFactor: 1.0, mediaType: "mp3", asBlob: true, role: c.name });
+      loads.push({ role: c.name, ms: Date.now() - t0, ok: !!(r && r.audioUrl) });
+    }
+    const st1d = await getJ("/status");
+    out.batches.d1 = { loads, poolAfter: st1d.pool, gpuFreeGb: (st1d.hw && st1d.hw.gpu_mem_free_gb) };
+    out.conclusions.push(`D1 多角色加载: [${loads.map(l => l.role + ":" + l.ms + "ms").join(", ")}], 池 ${st1d.pool.size}/${st1d.pool.max}, 显存空闲 ${out.batches.d1.gpuFreeGb}GB`);
+  } catch (e) { out.batches.d1 = { err: String(e).slice(0, 80) }; }
+  // D2 引擎切换对比(gpt-sovits vs edge vs web 同文本)
+  if (fullMode) try {
+    const outE = {};
+    const t0 = Date.now();
+    const rg = await gptSovitsSynth("引擎切换对比测试", "zh", { serverUrl: cfg.serverUrl, speedFactor: 1.0, mediaType: "mp3", asBlob: true, role: poolChar });
+    outE.gpt = { ms: Date.now() - t0, bytes: (rg && rg.blob && rg.blob.size) || 0, ok: !!(rg && rg.audioUrl) };
+    try {
+      const te = Date.now();
+      const re = await synthEdge("引擎切换对比测试", "zh", { serverUrl: cfg.serverUrl, speedFactor: 1.0, asBlob: true });
+      outE.edge = { ms: Date.now() - te, ok: !!(re && (re.ok || re.audioUrl)), bytes: (re && re.blob && re.blob.size) || 0 };
+    } catch (e) { outE.edge = { err: String(e).slice(0, 60) }; }
+    try {
+      const tw = Date.now();
+      const okw = await webSpeechSpeak("引擎切换对比测试", { lang: "zh-CN", rate: 1.0, volume: 0.5 });
+      outE.web = { ms: Date.now() - tw, ok: !!okw, note: "浏览器本地 TTS, 不占服务端" };
+    } catch (e) { outE.web = { err: String(e).slice(0, 60) }; }
+    out.batches.d2 = outE;
+    out.conclusions.push(`D2 引擎对比: gpt=${outE.gpt && outE.gpt.ms}ms/${outE.gpt && outE.gpt.bytes}B; edge=${outE.edge && (outE.edge.ms || outE.edge.err || "-")}ms; web=${outE.web && (outE.web.ms || outE.web.err || "-")}ms(浏览器本地)`);
+  } catch (e) { out.batches.d2 = { err: String(e).slice(0, 80) }; }
+  // C bug 回归(本轮修的)
+  // C1 纯数字逐位: 12345 → 服务端转一二三四五(合成成功即路径可用, 请求日志可核 text)
+  try {
+    const t0 = Date.now();
+    const r = await gptSovitsSynth("12345", "zh", { serverUrl: cfg.serverUrl, speedFactor: 1.0, mediaType: "mp3", asBlob: true });
+    out.bugs.digit = { ok: !!(r && r.audioUrl), ms: Date.now() - t0, note: "服务端已转为一二三四五(tts-requests.log text 字段可核)" };
+  } catch (e) { out.bugs.digit = { err: String(e).slice(0, 80) }; }
+  // C2 多模型池状态
+  try { const st2 = await getJ("/status"); out.bugs.pool = st2.pool; } catch (e) { out.bugs.pool = { err: String(e).slice(0, 80) }; }
+  // C3 全局静音抑制: 静音时播放应被 audioPlay 提前跳过(计数不增)
+  try {
+    const before = window.__fvttTTSPlayCount || 0;
+    const wasMute = !!game.settings.get(MODULE, "gmMute");
+    if (game.user && game.user.isGM) { await game.settings.set(MODULE, "gmMute", true); await new Promise(r => setTimeout(r, 700)); }
+    const t0 = Date.now();
+    try { await audioPlay("data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0AAAAAKcGxheXRlcg==", { volume: 0 }); } catch (e) { /* noop */ }
+    await new Promise(r => setTimeout(r, 600));
+    const delta = (window.__fvttTTSPlayCount || 0) - before;
+    if (game.user && game.user.isGM) { await game.settings.set(MODULE, "gmMute", wasMute); await new Promise(r => setTimeout(r, 700)); }
+    out.bugs.mute = { ok: delta === 0, delta, note: "静音时 audioPlay 提前跳过(新增播放应 0)" };
+    out.conclusions.push(`C3 全局静音: ${delta === 0 ? "抑制生效" : "异常(新增播放 " + delta + ")"}`);
+  } catch (e) { out.bugs.mute = { err: String(e).slice(0, 80) }; }
+  // C4 播放计数/去重回归: 记录本页累计播放计数(重复播放修复后每消息只播一次, 计数供对照)
+  try { out.bugs.playCount = { total: window.__fvttTTSPlayCount || 0, note: "重复播放修复: speak/预载/flags/广播四条路径统一 playedIds 去重(每消息一次)" }; } catch (e) { out.bugs.playCount = { err: String(e).slice(0, 60) }; }
+  // E 语种切换(中/日/英)
+  // E1 多语种合成矩阵(同结构文本)
+  try {
+    const e1s = [
+      { lang: "zh", txt: "今天的天气真不错呢" },
+      { lang: "ja", txt: "今日の天気は本当にいいですね" },
+      { lang: "en", txt: "The weather is really nice today" }
+    ];
+    const e1 = [];
+    for (const s of e1s) {
+      const t0 = Date.now();
+      try {
+        const r = await gptSovitsSynth(s.txt, s.lang, { serverUrl: cfg.serverUrl, speedFactor: 1.0, mediaType: "mp3", asBlob: true, role: poolChar });
+        e1.push({ lang: s.lang, ok: !!(r && r.audioUrl), ms: Date.now() - t0, bytes: (r && r.blob && r.blob.size) || 0 });
+      } catch (e) { e1.push({ lang: s.lang, ok: false, err: String(e).slice(0, 50) }); }
+    }
+    out.batches.e1 = e1;
+    out.conclusions.push(`E1 语种矩阵: ` + e1.map(x => `${x.lang}=${x.ok ? x.ms + "ms/" + Math.round(x.bytes / 1024) + "KB" : "失败"}`).join(" "));
+  } catch (e) { out.batches.e1 = { err: String(e).slice(0, 80) }; }
+  // E2 语种混合(中英日一句, auto 自动识别)
+  try {
+    const t0 = Date.now();
+    const r = await gptSovitsSynth("天气真不错，日本語のテストです，This is a mixed test", "auto", { serverUrl: cfg.serverUrl, speedFactor: 1.0, mediaType: "mp3", asBlob: true, role: poolChar });
+    out.batches.e2 = { ok: !!(r && r.audioUrl), ms: Date.now() - t0, bytes: (r && r.blob && r.blob.size) || 0 };
+    out.conclusions.push(`E2 混合语种(auto): ${out.batches.e2.ok ? out.batches.e2.ms + "ms/" + Math.round(out.batches.e2.bytes / 1024) + "KB" : "失败"}`);
+  } catch (e) { out.batches.e2 = { err: String(e).slice(0, 80) }; }
+  // E3 数字跨语种: zh 转逐位 / en ja 保持数值读法(服务端只转中文语境)
+  try {
+    const e3 = [];
+    for (const lang of ["zh", "en", "ja"]) {
+      const t0 = Date.now();
+      const r = await gptSovitsSynth("12345", lang, { serverUrl: cfg.serverUrl, speedFactor: 1.0, mediaType: "mp3", asBlob: true, role: poolChar });
+      e3.push({ lang, ok: !!(r && r.audioUrl), ms: Date.now() - t0, note: lang === "zh" ? "服务端转一二三四五" : "保持数值读法" });
+    }
+    out.batches.e3 = e3;
+    out.conclusions.push(`E3 数字跨语种: ` + e3.map(x => `${x.lang}=${x.ok ? x.ms + "ms" : "✗"}`).join(" "));
+  } catch (e) { out.batches.e3 = { err: String(e).slice(0, 80) }; }
+  // E4 长文×语种(压 GPU: 日语/英语长文)
+  try {
+    const e4s = [
+      { lang: "ja", txt: "日本語の長文テストを続けます、複数の文を繋げて、より長い時間かけて推論能力を確認します、この部分は日本語の音声合成の長文性能を検証するために使います、文を重ねるほど処理時間が伸びるはずです。" },
+      { lang: "en", txt: "This is a longer English text for testing long text synthesis performance, multiple sentences joined together to keep the GPU busy for a longer period, verifying how the engine handles extended English content, the longer the text the longer the processing time." }
+    ];
+    const e4 = [];
+    for (const s of e4s) {
+      const t0 = Date.now();
+      const r = await gptSovitsSynth(s.txt, s.lang, { serverUrl: cfg.serverUrl, speedFactor: 1.0, mediaType: "mp3", asBlob: true, role: poolChar });
+      e4.push({ lang: s.lang, ok: !!(r && r.audioUrl), ms: Date.now() - t0, bytes: (r && r.blob && r.blob.size) || 0 });
+    }
+    out.batches.e4 = e4;
+    out.conclusions.push(`E4 长文×语种: ` + e4.map(x => `${x.lang}=${x.ok ? x.ms + "ms/" + Math.round(x.bytes / 1024) + "KB" : "✗"}`).join(" "));
+  } catch (e) { out.batches.e4 = { err: String(e).slice(0, 80) }; }
+  // F 语气/情绪
+  // F1 情绪合成矩阵(同文本不同 emotionMix)
+  try {
+    const emos = [
+      { name: "中性", mix: null },
+      { name: "开心", mix: 0.3 },
+      { name: "悲伤", mix: 0.6 },
+      { name: "生气", mix: 0.9 }
+    ];
+    const f1 = [];
+    for (const em of emos) {
+      const ov = {};
+      if (em.mix !== null) ov.emotionMix = em.mix;
+      const t0 = Date.now();
+      const r = await gptSovitsSynth("今天真是个好日子啊", "zh", { serverUrl: cfg.serverUrl, speedFactor: 1.0, mediaType: "mp3", asBlob: true, role: poolChar, overrides: ov });
+      f1.push({ emo: em.name, mix: em.mix, ok: !!(r && r.audioUrl), ms: Date.now() - t0, bytes: (r && r.blob && r.blob.size) || 0 });
+    }
+    out.batches.f1 = f1;
+    out.conclusions.push(`F1 情绪矩阵: ` + f1.map(x => `${x.emo}(${x.mix})=${x.ok ? x.ms + "ms/" + Math.round(x.bytes / 1024) + "KB" : "✗"}`).join(" "));
+  } catch (e) { out.batches.f1 = { err: String(e).slice(0, 80) }; }
+  // F2 语气词/感叹(是否自然处理符号与语气词)
+  try {
+    const t0 = Date.now();
+    const r = await gptSovitsSynth("哇！今天真的太棒了吧～？嗯…好吧，那就这样啦！", "zh", { serverUrl: cfg.serverUrl, speedFactor: 1.0, mediaType: "mp3", asBlob: true, role: poolChar });
+    out.batches.f2 = { ok: !!(r && r.audioUrl), ms: Date.now() - t0, bytes: (r && r.blob && r.blob.size) || 0 };
+    out.conclusions.push(`F2 语气词/感叹: ${out.batches.f2.ok ? out.batches.f2.ms + "ms/" + Math.round(out.batches.f2.bytes / 1024) + "KB" : "✗"}`);
+  } catch (e) { out.batches.f2 = { err: String(e).slice(0, 80) }; }
+  // G 语音模型切换
+  // G1 多角色连续切换(取 5 角色池扩容: 每角色加载/命中耗时 + 池显存)
+  try {
+    const cd = (quickChars && quickChars.chars) || [];
+    const g1s = cd.filter(x => x.name).slice(0, 5);
+    const g1 = [];
+    for (const c of g1s) {
+      const t0 = Date.now();
+      const r = await gptSovitsSynth("模型切换测试", "zh", { serverUrl: cfg.serverUrl, speedFactor: 1.0, mediaType: "mp3", asBlob: true, role: c.name });
+      g1.push({ role: c.name, ok: !!(r && r.audioUrl), ms: Date.now() - t0 });
+    }
+    const stG = await getJ("/status");
+    out.batches.g1 = { roles: g1, poolAfter: stG.pool, gpuFreeGb: (stG.hw && stG.hw.gpu_mem_free_gb) };
+    out.conclusions.push(`G1 多角色切换: [${g1.map(x => x.role + "=" + (x.ok ? x.ms + "ms" : "✗")).join(", ")}], 池 ${stG.pool.size}/${stG.pool.max} 显存空闲${out.batches.g1.gpuFreeGb}GB`);
+  } catch (e) { out.batches.g1 = { err: String(e).slice(0, 80) }; }
+  // G2 角色往返切换(A→B→A: 复用 vs 重载)
+  try {
+    const cd = (quickChars && quickChars.chars) || [];
+    const rA = cd.filter(x => x.name)[0];
+    const rB = cd.filter(x => x.name && x.name !== (rA && rA.name))[0];
+    if (rA && rB) {
+      const g2 = [];
+      for (const role of [rA.name, rB.name, rA.name]) {
+        const t0 = Date.now();
+        const r = await gptSovitsSynth("往返切换测试", "zh", { serverUrl: cfg.serverUrl, speedFactor: 1.0, mediaType: "mp3", asBlob: true, role });
+        g2.push({ role, ms: Date.now() - t0, ok: !!(r && r.audioUrl) });
+      }
+      out.batches.g2 = g2;
+      out.conclusions.push(`G2 往返切换: ` + g2.map(x => `${x.role}:${x.ms}ms`).join(" ") + `${g2[2].ms < 3000 ? " ✓(末段池命中复用)" : " (末段重载)"}`);
+    } else { out.batches.g2 = { err: "角色不足" }; }
+  } catch (e) { out.batches.g2 = { err: String(e).slice(0, 80) }; }
+  // G3 参考音频切换(同一模型不同 ref 音色 → 耗时/音频变化)
+  if (fullMode) try {
+    const cd = (quickChars && quickChars.chars) || [];
+    const cur = cd.find(x => x.name === poolChar) || cd[0];
+    const other = cd.find(x => x.name && x.name !== (cur && cur.name));
+    const g3 = [];
+    if (cur) {
+      const t0 = Date.now();
+      const r = await gptSovitsSynth("参考音频切换测试", "zh", { serverUrl: cfg.serverUrl, speedFactor: 1.0, mediaType: "mp3", asBlob: true, role: cur.name });
+      g3.push({ ref: "默认ref", ok: !!(r && r.audioUrl), ms: Date.now() - t0, bytes: (r && r.blob && r.blob.size) || 0 });
+    }
+    if (other && other.ref) {
+      const t0 = Date.now();
+      const r = await gptSovitsSynth("参考音频切换测试", "zh", { serverUrl: cfg.serverUrl, speedFactor: 1.0, mediaType: "mp3", asBlob: true, role: cur ? cur.name : "", overrides: { refAudioPath: other.ref } });
+      g3.push({ ref: other.name + "的ref", ok: !!(r && r.audioUrl), ms: Date.now() - t0, bytes: (r && r.blob && r.blob.size) || 0 });
+    }
+    out.batches.g3 = g3;
+    out.conclusions.push(`G3 参考音频切换: ` + g3.map(x => `${x.ref}=${x.ok ? x.ms + "ms/" + Math.round(x.bytes / 1024) + "KB" : "✗"}`).join(" "));
+  } catch (e) { out.batches.g3 = { err: String(e).slice(0, 80) }; }
+  // G4 引擎×语种矩阵(gpt/edge/web × zh/ja/en)
+  if (fullMode) try {
+    const texts = { zh: "今天是美好的日子", ja: "今日は素晴らしい日です", en: "Today is a wonderful day" };
+    const g4 = [];
+    for (const lang of ["zh", "ja", "en"]) {
+      try {
+        const t0 = Date.now();
+        const r = await gptSovitsSynth(texts[lang], lang, { serverUrl: cfg.serverUrl, speedFactor: 1.0, mediaType: "mp3", asBlob: true, role: poolChar });
+        g4.push({ engine: "gpt", lang, ok: !!(r && r.audioUrl), ms: Date.now() - t0 });
+      } catch (e) { g4.push({ engine: "gpt", lang, ok: false, err: String(e).slice(0, 40) }); }
+      try {
+        const t0 = Date.now();
+        const re = await synthEdge(texts[lang], lang, { serverUrl: cfg.serverUrl, speedFactor: 1.0, asBlob: true });
+        g4.push({ engine: "edge", lang, ok: !!(re && (re.ok || re.audioUrl)), ms: Date.now() - t0 });
+      } catch (e) { g4.push({ engine: "edge", lang, ok: false, err: String(e).slice(0, 40) }); }
+      try {
+        const t0 = Date.now();
+        const okw = await webSpeechSpeak(texts[lang], { lang: lang === "zh" ? "zh-CN" : lang === "ja" ? "ja-JP" : "en-US", rate: 1.0, volume: 0.3 });
+        g4.push({ engine: "web", lang, ok: !!okw, ms: Date.now() - t0 });
+      } catch (e) { g4.push({ engine: "web", lang, ok: false, err: String(e).slice(0, 40) }); }
+    }
+    out.batches.g4 = g4;
+    out.conclusions.push(`G4 引擎×语种: ` + g4.map(x => `${x.engine}-${x.lang}=${x.ok ? x.ms + "ms" : "✗"}`).join(" "));
+  } catch (e) { out.batches.g4 = { err: String(e).slice(0, 80) }; }
+  // H 文本与参数
+  // H1 文本长度梯度(10/50/100/200/400 字: 耗时曲线)
+  if (fullMode) try {
+    const lens = [10, 50, 100, 200, 400];
+    const h1 = [];
+    for (const n of lens) {
+      const txt = ("这是长度梯度测试文本，用于观察合成耗时随文本长度的变化趋势，句子不断累加。").repeat(14).slice(0, n);
+      const t0 = Date.now();
+      const r = await gptSovitsSynth(txt, "zh", { serverUrl: cfg.serverUrl, speedFactor: 1.0, mediaType: "mp3", asBlob: true, role: poolChar });
+      h1.push({ len: n, ok: !!(r && r.audioUrl), ms: Date.now() - t0, bytes: (r && r.blob && r.blob.size) || 0 });
+    }
+    out.batches.h1 = h1;
+    out.conclusions.push(`H1 长度梯度: ` + h1.map(x => `${x.len}字=${x.ok ? x.ms + "ms" : "✗"}`).join(" "));
+  } catch (e) { out.batches.h1 = { err: String(e).slice(0, 80) }; }
+  // H2 语速梯度(0.8/1.0/1.2/1.5: 音频大小/耗时)
+  if (fullMode) try {
+    const speeds = [0.8, 1.0, 1.2, 1.5];
+    const h2 = [];
+    for (const sp of speeds) {
+      const t0 = Date.now();
+      const r = await gptSovitsSynth("语速梯度测试文本", "zh", { serverUrl: cfg.serverUrl, speedFactor: sp, mediaType: "mp3", asBlob: true, role: poolChar });
+      h2.push({ speed: sp, ok: !!(r && r.audioUrl), ms: Date.now() - t0, bytes: (r && r.blob && r.blob.size) || 0 });
+    }
+    out.batches.h2 = h2;
+    out.conclusions.push(`H2 语速梯度: ` + h2.map(x => `${x.speed}=${x.ok ? x.ms + "ms/" + Math.round(x.bytes / 1024) + "KB" : "✗"}`).join(" "));
+  } catch (e) { out.batches.h2 = { err: String(e).slice(0, 80) }; }
+  // H3 格式对比(mp3/wav: 大小与合成差异)
+  if (fullMode) try {
+    const h3 = [];
+    for (const fmt of ["mp3", "wav"]) {
+      const t0 = Date.now();
+      const r = await gptSovitsSynth("格式对比测试文本", "zh", { serverUrl: cfg.serverUrl, speedFactor: 1.0, mediaType: fmt, asBlob: true, role: poolChar });
+      h3.push({ fmt, ok: !!(r && r.audioUrl), ms: Date.now() - t0, bytes: (r && r.blob && r.blob.size) || 0 });
+    }
+    out.batches.h3 = h3;
+    out.conclusions.push(`H3 格式对比: ` + h3.map(x => `${x.fmt}=${x.ok ? x.ms + "ms/" + Math.round(x.bytes / 1024) + "KB" : "✗"}`).join(" "));
+  } catch (e) { out.batches.h3 = { err: String(e).slice(0, 80) }; }
+  // I 稳定性
+  // I2 连续长跑(20 段短文本: 速度漂移 + 显存泄漏检测)
+  if (fullMode) try {
+    const g0 = await getJ("/status");
+    const mem0 = (g0.hw && g0.hw.gpu_mem_free_gb);
+    const times = [];
+    for (let i = 0; i < 20; i++) {
+      const t0 = Date.now();
+      const r = await gptSovitsSynth(`连续长跑第${i + 1}段`, "zh", { serverUrl: cfg.serverUrl, speedFactor: 1.0, mediaType: "mp3", asBlob: true, role: poolChar });
+      if (r && r.audioUrl) times.push(Date.now() - t0);
+    }
+    const g1 = await getJ("/status");
+    const mem1 = (g1.hw && g1.hw.gpu_mem_free_gb);
+    const avgAll = Math.round(times.reduce((a, b) => a + b, 0) / times.length);
+    const avgFirst5 = Math.round(times.slice(0, 5).reduce((a, b) => a + b, 0) / 5);
+    const avgLast5 = Math.round(times.slice(-5).reduce((a, b) => a + b, 0) / 5);
+    out.batches.i2 = { count: times.length, avgAllMs: avgAll, avgFirst5Ms: avgFirst5, avgLast5Ms: avgLast5, driftMs: avgLast5 - avgFirst5, memFreeBefore: mem0, memFreeAfter: mem1 };
+    out.conclusions.push(`I2 连续长跑: 20 段均值 ${avgAll}ms, 前5 ${avgFirst5}→后5 ${avgLast5}(漂移${avgLast5 - avgFirst5}ms), 显存 ${mem0}→${mem1}GB${(mem1 !== null && mem0 !== null && mem1 < mem0 - 0.3) ? " ⚠显存下降(疑似泄漏)" : ""}`);
+  } catch (e) { out.batches.i2 = { err: String(e).slice(0, 80) }; }
+  // I3 服务端 API 往返延迟采样(/status 5 次 RTT)
+  if (fullMode) try {
+    const rtts = [];
+    for (let i = 0; i < 5; i++) {
+      const t0 = Date.now();
+      try { await getJ("/status"); rtts.push(Date.now() - t0); } catch (e) { rtts.push(-1); }
+    }
+    out.batches.i3 = { rtts, avgMs: Math.round(rtts.filter(x => x >= 0).reduce((a, b) => a + b, 0) / Math.max(1, rtts.filter(x => x >= 0).length)) };
+    out.conclusions.push(`I3 API 往返: /status RTT 均值 ${out.batches.i3.avgMs}ms(5 次)`);
+  } catch (e) { out.batches.i3 = { err: String(e).slice(0, 80) }; }
+  // pl 回执明细并入 GM 报告(pl 经 Foundry socket 回执, GM 提交时合并 → 一次读全)
+  try { out.plAcks = window.__fvttTTSAcks || []; } catch (e) { out.plAcks = []; }
+  // 双端播放验证汇总: GM 端/pl 端各播放了多少段(每段一次, 验证双方都能正常听到且不重复)
+  try {
+    const gmPlayed = Object.keys(out.batches).filter(k => /^b\d+s\d+$/.test(k) && out.batches[k].gmPlayed === true).length;
+    const plPlayed = (out.plAcks || []).filter(a => a.played === true).length;
+    out.playback = { gmPlayed, plPlayed, expect: 10 };
+    out.conclusions.push(`双端播放验证: GM ${gmPlayed}/10 段, pl ${plPlayed}/10 段(每段一次不重复; 未播段 = 静音跳过或播放失败)`);
+  } catch (e) { /* noop */ }
+  // 🔊 官方内部通道 vs DB 兜底 使用统计(问题项: 确认"官方即时主链"是否命中; 只有官方命中才是真·即时且不重复)
+  try {
+    const byVia = { official: 0, db: 0, url: 0 };
+    ((out.plAcks || [])).forEach(a => { const v = a.via || (a.fetchMs >= 0 ? "url" : "db"); if (byVia[v] != null) byVia[v]++; else byVia.db++; });
+    out.channelUsage = byVia;
+    out.conclusions.push(`通道统计: 官方内部通道=${byVia.official} 段 | DB 内嵌=${byVia.db} | 拉取=${byVia.url}${byVia.official ? " (官方即时=pgm/pl 主链, DB 仅兜底, 不重复)" : " (官方未命中, pl 走DB兜底; 仍能听到, 但非即时官方 — 请确认 frp 证书受信)"}`);
+  } catch (e) { /* noop */ }
+  // 🖼️ 立绘注入验证(问题项: 远程端立绘由相对路径404 → 绝对 Foundry 静态地址)
+  try {
+    const avEl = document.querySelector(".fvtt-tts-emotion-avatar");
+    const avSrc = avEl ? String(avEl.getAttribute("src") || "") : "";
+    out.portrait = { injectedOnPage: document.querySelectorAll(".fvtt-tts-emotion-avatar").length, urlMode: avSrc ? (/^https?:\/\//i.test(avSrc) ? "absolute" : "relative") : "no-avatar" };
+    out.conclusions.push(`立绘注入: 页面 ${out.portrait.injectedOnPage} 张, URL=${out.portrait.urlMode}${out.portrait.urlMode === "absolute" ? " (绝对地址, 远程端可显示)" : ""}`);
+  } catch (e) { /* noop */ }
+  // 🔊 播放实现探针(问题项: 实际走 FVTT 官方界面通道还是原生 Audio): GM 端计数 + pl 回执 impl 逐段标注
+  try {
+    const cnt = { official: 0, native: 0 };
+    try { const c0 = window.__fvttTTSCnt || {}; cnt.official = c0.official || 0; cnt.native = c0.native || 0; } catch (e) { /* noop */ }
+    const plImpl = {};
+    try { ((out.plAcks || [])).forEach(a => { const k = a.impl || "?"; plImpl[k] = (plImpl[k] || 0) + 1; }); } catch (e) { /* noop */ }
+    out.channelProbe = { gm: cnt, playerImpl: plImpl };
+    out.conclusions.push(`播放通道实测: GM 官方界面通道=${cnt.official} 次, 原生Audio=${cnt.native} 次; pl 回执 impl=${JSON.stringify(plImpl)}${(plImpl.official || 0) > (plImpl.native || 0) ? " (玩家端走官方界面通道)" : (plImpl.native || 0) > 0 ? " (玩家端部分走了原生Audio兜底)" : ""}`);
+  } catch (e) { /* noop */ }
+  // 提交报告(GM 汇总)
+  out.done = true;
+  try { const pr = await api("/speedtest/report", out); out.posted = pr; } catch (e) { out.postErr = String(e).slice(0, 80); }
+  try { console.log("[gpt-sovits-tts] 速度测试报告:", JSON.stringify(out, null, 2)); } catch (e) { /* noop */ }
+  if (ui && ui.notifications) {
+    try { ui.notifications.info("🚄 速度测试完成，报告已写入 server/speed_report.json" + (out.posted ? `（${out.posted.file}）` : "")); } catch (e) { /* noop */ }
+  }
   return out;
 }
 
@@ -2336,6 +3101,8 @@ function setupAPI() {
     runSelfTest: () => runSelfTest(),
     // 高压测试: 并发/长文本/连续合成/广播风暴/批量立绘 → 同样写入 selftest_report.json(stress 段)
     runStressTest: () => runStressTest(),
+    // 批量速度测试: 分批测合成/传输/加载速度 + 压满显卡(峰值性能) → speed_report.json
+    runSpeedTest: () => runSpeedTest(),
     // 语音运行者服务声明列表(供语音管理器 GM 分配面板使用)
     getRunners: () => {
       const out = [];
@@ -2356,6 +3123,32 @@ Hooks.once("init", async () => {
 
 Hooks.once("ready", () => {
   setupAPI();
+  // 🔊 Foundry playAudio 广播监听(记录已播 src): 与 audioData DB 兜底去重(双通道合一, 防重复播放);
+    // 官方内部通道(fileURL)+DB 内嵌(dataURI) src 不同, 额外登记"官方即时已播"文件 URL 集(10s)供 DB 兜底判定是否跳过
+    try {
+      const regPlaySrc = (s) => {
+        try {
+          if (s) {
+            window.__fvttTTSPlayedSrcs = window.__fvttTTSPlayedSrcs || new Set();
+            window.__fvttTTSPlayedSrcs.add(String(s));
+            setTimeout(() => { try { window.__fvttTTSPlayedSrcs.delete(String(s)); } catch (e) { /* noop */ } }, 30000);
+          }
+        } catch (e) { /* noop */ }
+      };
+      const regOfficial = (s) => {
+        try {
+          const c = _modulePath(s);   // canonical 相对路径(/modules/...), 与官方广播 src 一致
+          if (c) {
+            window.__fvttTTSOfficialSrcs = window.__fvttTTSOfficialSrcs || new Set();
+            window.__fvttTTSOfficialSrcs.add(c);
+            setTimeout(() => { try { window.__fvttTTSOfficialSrcs.delete(c); } catch (e) { /* noop */ } }, 10000);
+          }
+        } catch (e) { /* noop */ }
+      };
+      const _onPlay = (d) => { const s = (d && d.src) || (typeof d === "string" ? d : ""); try { regPlaySrc(s); regOfficial(s); } catch (e) { /* noop */ } };
+      Hooks.on("playAudio", _onPlay);
+      Hooks.on("playSound", _onPlay);
+    } catch (e) { /* noop */ }
   buildUI();
   attachTyping();
   checkStatus();
@@ -2380,10 +3173,34 @@ Hooks.once("ready", () => {
   updateCharIndicator();
   setInterval(() => { refreshQuickUI(); }, 30000);
   // socket: 接收发言者广播的 TTS 音频(全员同声)
-  if (game.socket && typeof game.socket.on === "function") game.socket.on(MODULE, handleSocketTts);
+  if (game.socket && typeof game.socket.on === "function") { (window.__fvttTTSHooks = window.__fvttTTSHooks || {}).socketOn = true; game.socket.on(MODULE, handleSocketTts); }
   // 语音运行者服务声明: 本机跑服务则定期广播(玩家中途加入也能看到)
   setTimeout(() => { announceTtsService(); }, 6000);
   setInterval(() => { announceTtsService(); }, 60000);
+  // 统一可达性探测(通用架构): serverUrl /status 3s 超时 → 决定"直连合成"还是"GM 代理合成" —
+  // 本机/局域网(pl 配置了地址) → 直连; HTTPS 穿透/跨网/9881 不可达/低配服务器 → 代理(全程走 FVTT 30000)
+  setTimeout(() => {
+    (async () => {
+      try {
+        const ac = new AbortController(); const _t = setTimeout(() => ac.abort(), 3000);
+        let direct = false;
+        try {
+          const r = await fetch(`${getCfg().serverUrl.replace(/\/+$/, "")}/status`, { signal: ac.signal });
+          direct = (r.ok === true);
+        } catch (e) { direct = false; }
+        clearTimeout(_t);
+        window.__fvttTTSCanDirect = direct;
+        try { console.debug("[gpt-sovits-tts] 可达性探测: " + (direct ? "直连合成" : "GM 代理合成(走 FVTT 30000)")); } catch (e) { /* noop */ }
+        try { checkStatus(true); } catch (e) { /* noop */ }   // 探测完成后刷新状态灯(代理模式立即转绿, 不再显示"未连接")
+        // 启动同步"同时运行上限"(GM 专属): Foundry 设置值 → 服务端模型池(裁剪/扩容)
+        try {
+          if (game.user && game.user.isGM && getCfg().maxConcurrentModels) {
+            fetch(`${getCfg().serverUrl.replace(/\/+$/, "")}/config`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ max_concurrent_models: Number(getCfg().maxConcurrentModels) || 10 }) }).catch(() => { /* noop */ });
+          }
+        } catch (e) { /* noop */ }
+      } catch (e) { window.__fvttTTSCanDirect = false; }
+    })();
+  }, 2000);
 });
 
 // HUD 主题设置保存后立即生效; 语音运行者选择 = 切换本机服务地址
@@ -2392,6 +3209,11 @@ Hooks.on("updateSetting", (setting, data) => {
     if (setting && setting.key) {
       if (setting.key === `${MODULE}.hudTheme`) applyHudTheme();
       if (setting.key === `${MODULE}.portraitSize`) applyPortraitSize();
+      if (setting.key === `${MODULE}.gmMute`) {
+        // GM 全局静音: 开启瞬间停掉所有正在播放/排队的语音(GM 与所有 pl 客户端同时响应)
+        try { if (setting.value) stopSpeaking(); } catch (e) { /* noop */ }
+        try { if (window.__fvttTTSMuteUpdater) window.__fvttTTSMuteUpdater(); } catch (e) { /* noop */ }
+      }
       if (setting.key === `${MODULE}.portraitMode`) { try { updateCharIndicator(); refreshAllPortraits(); } catch (e) { /* noop */ } }
       if (setting.key === `${MODULE}.voiceRunner`) {
         const v = setting.value || "gm";
@@ -2410,6 +3232,7 @@ Hooks.on("renderChatLog", (app, html, options) => _deferUI());        // v11/12 
 Hooks.on("renderSidebarTab", (app, html, options) => _deferUI());     // 聊天面板重渲染后重建
 
 Hooks.on("chatMessage", (chatLog, message, chatData) => {
+    (window.__fvttTTSHooks = window.__fvttTTSHooks || {}).chatMessage = true;
     handleCommand(chatLog, message, chatData);
     // 携带说话者当前音色上下文到消息 flags → 全员用同一 ref 合成, 听到同一个声音
     try {
@@ -2418,6 +3241,10 @@ Hooks.on("chatMessage", (chatLog, message, chatData) => {
       const fl = {
         role: prof0.current || "",
         emotion: (cur && cur.emotion) || "",
+        ttsProvider: String((cur && cur.ttsProvider) || ""),
+        // 立绘路径随消息同步(跨端一致, 不依赖各端本地角色缓存): 角色头像 + 当前语气槽立绘
+        avatar: (() => { try { const cD = (quickChars && quickChars.chars || []).find(x => x.name === (prof0.current || "")); return (cD && cD.avatar) || (cur && cur.avatar) || ""; } catch (e) { return ""; } })(),
+        slotAvatar: (() => { try { const sD = (cur && cur.emotion) ? findEmotionSlot(cur.emotion, prof0.current || "") : null; return (sD && sD.avatar) || ""; } catch (e) { return ""; } })(),
         ref: (cur && cur.ref) || "",
         auxRef: (cur && cur.auxRef) || "",
         promptText: (cur && cur.promptText) || "",
@@ -2432,10 +3259,230 @@ Hooks.on("chatMessage", (chatLog, message, chatData) => {
     } catch (e) { /* noop */ }
   });
 
-Hooks.on("createChatMessage", (message, options, userId) => { maybeSpeak(message); maybePickAvatarRole(message); });
+Hooks.on("createChatMessage", (message, options, userId) => { (window.__fvttTTSHooks = window.__fvttTTSHooks || {}).createChat = true;
+  // 🫀 心跳: pl 端响应(GM 确认通道活性); 任何人收到回执置 PingAck
+  try {
+    const flP = message && message.flags && message.flags[MODULE];
+    if (flP && flP.speedTestPing && message.author && !message.author.isSelf) {
+      try { ChatMessage.create({ content: "🫀", speaker: { alias: "心跳回执" }, flags: { [MODULE]: { speedTestPingAck: { from: game.user.name, ts: Date.now() } } } }); } catch (e) { /* noop */ }
+    }
+    if (flP && flP.speedTestPingAck) { try { window.__fvttTTSPingAck = true; } catch (e) { /* noop */ } }
+  } catch (e) { /* noop */ }
+  // 🚄 回执消息(GM/其他端): 聊天文档同步回执 → 收集进 GM 报告(可靠通道, frp HTTPS 下 socket/9881 均不可达)
+  try {
+    const flA = message && message.flags && message.flags[MODULE];
+    if (flA && flA.speedTestAck && message.author && !message.author.isSelf) {
+      try {
+        window.__fvttTTSAcks = window.__fvttTTSAcks || [];
+        window.__fvttTTSAcks.push({ batch: flA.speedTestAck.batch, seg: flA.speedTestAck.seg, from: flA.speedTestAck.from || message.author.name, arriveMs: flA.speedTestAck.arriveMs ?? -1, fetchMs: flA.speedTestAck.fetchMs ?? -1, played: flA.speedTestAck.played === true, bytes: flA.speedTestAck.bytes || 0, skewMs: flA.speedTestAck.skewMs ?? 0, via: flA.speedTestAck.via || "", impl: flA.speedTestAck.impl || "", err: flA.speedTestAck.err || "" });
+      } catch (e) { /* noop */ }
+    }
+  } catch (e) { /* noop */ }
+  // 🔊 普通消息音频内嵌已带(发送方本地合成/代理写回): 收到即播(Foundry 内部通道, push:false 防广播环;
+  // playAudio 广播(socket 即时)已播时由 audioPlay 的 playedSrcs 去重跳过 → 双通道合一)
+  try {
+    const flD = message && message.flags && message.flags[MODULE];
+    if (flD && flD.audioData && typeof flD.audioData === "string" && flD.audioData.length > 20 && message.author && !message.author.isSelf) {
+      // 测试=实际: 速度测试消息也走同一通用播放路径(不特殊跳过); 仅回执/心跳消息无音频不播
+      if (!(flD.speedTestAck || flD.speedTestPing || flD.speedTestPingAck)) {
+        if (message.id && !playedIds.has(message.id)) {
+          playedIds.add(message.id);
+          setTimeout(() => { try { playedIds.delete(message.id); } catch (e) { /* noop */ } }, 30000);
+          try { cacheAudio(message.id, flD.audioData, "audio/mpeg"); } catch (e) { /* noop */ }
+          queue.enqueue({ play: () => audioPlay(flD.audioData, { volume: getCfg().volume, push: false }) });
+        }
+      }
+    }
+  } catch (e) { /* noop */ }
+  // 🚄 传输测试(玩家侧): 收到测试消息立即拉取音频计时 → 回执(聊天消息可靠通道) + 直接写 pl 报告段(直连可达时)
+  try {
+    const flS = message && message.flags && message.flags[MODULE];
+    if (flS && flS.speedTest && message.author && !message.author.isSelf) {
+      const rel = flS.audioUrl || "";
+      const useData = (flS.audioData && typeof flS.audioData === "string") ? flS.audioData : "";
+      const msgTs = message.timestamp ? Date.parse(message.timestamp) : 0;   // Foundry 服务端时间戳(时钟一致)
+      const skewMs = msgTs ? msgTs - Date.now() : 0;   // pl 时钟相对服务端偏移(负=快)
+      const arriveMs = Math.max(0, Date.now() - (msgTs || flS.speedTest.ts || Date.now()));
+      // 回执 helper(聊天消息 DB 同步必达 GM + socket + 直连写 pl 报告)
+      const pushAck = async (fetchMs, played, bytes, err, via) => {
+        const viaS = via || "";
+        const implS = (() => { try { return window.__fvttTTSPlayImpl || ""; } catch (e) { return ""; } })();   // 本端实际播放实现: official=官方界面通道 / native=原生Audio
+        try { window.__fvttTTSAcks = window.__fvttTTSAcks || []; window.__fvttTTSAcks.push({ batch: flS.speedTest.batch, seg: flS.speedTest.seg, arriveMs, fetchMs, played, bytes, err: err || "", skewMs, via: viaS, impl: implS }); } catch (e) { /* noop */ }
+        try { if (ui && ui.notifications) ui.notifications.info(`🚄 已参与速度测试(批次${flS.speedTest.batch}段${flS.speedTest.seg}) 到达${arriveMs}ms ${fetchMs === -2 ? "内嵌即时" : "拉取" + fetchMs + "ms"} ${Math.round(bytes / 1024)}KB 播放${played ? "✓" : "跳过"}${viaS ? "·" + viaS : ""}${implS ? "·" + implS : ""}${err ? "·" + err : ""}`); } catch (e) { /* noop */ }
+        try { await ChatMessage.create({ content: "⏱", speaker: { alias: "速度测试回执" }, flags: { [MODULE]: { speedTestAck: { batch: flS.speedTest.batch, seg: flS.speedTest.seg, from: game.user.name, arriveMs, fetchMs, played, bytes, skewMs, via: viaS, impl: implS, err: String(err || "").slice(0, 60), ts: Date.now() } } } }); } catch (e) { /* noop */ }
+        try { game.socket.emit(MODULE, { type: "speedtest-ack", batch: flS.speedTest.batch, seg: flS.speedTest.seg, from: game.user.name, arriveMs, fetchMs, played, bytes, skewMs, via: viaS, impl: implS, err: String(err || "").slice(0, 60) }); } catch (e) { /* noop */ }
+        try { fetch(`${getCfg().serverUrl.replace(/\/+$/, "")}/speedtest/report`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ user: (game.user && game.user.name) || "pl", ts: Date.now(), role: "player", batch: flS.speedTest.batch, seg: flS.speedTest.seg, arriveMs, fetchMs, played, bytes, skewMs, via: viaS, impl: implS, err: String(err || "").slice(0, 60), canDirect: window.__fvttTTSCanDirect === true }), signal: AbortSignal.timeout(8000) }).catch(() => { /* 直连不可达(Mixed Content)已由聊天回执通道兜底 */ }); } catch (e) { /* noop */ }
+      };
+      // 写回前到达(speak/代理合成的 audioData 尚未同步到本端 — create 先于写回): 轮询等写回,
+      // 直到 audioData/audioUrl 真到(覆盖慢合成, 如 26s 长段)才回执真实播放结果; 45s 上限防卡死
+      if (!useData && !rel) {
+        (async () => {
+          let fetchMs2 = -2;
+          let bytes2 = 0;
+          let err2 = "";
+          const tStart = Date.now();
+          const tryRead = async () => {
+            const mm = game.messages.get(message.id);
+            const flNow = (mm && mm.flags && mm.flags[MODULE]) || {};
+            const d2 = (flNow.audioData && typeof flNow.audioData === "string") ? flNow.audioData : "";
+            const r2 = flNow.audioUrl || "";
+            if (!d2 && !r2) return null;
+            if (d2) {
+              bytes2 = Math.floor(((d2.length - (d2.indexOf(",") + 1)) * 3) / 4) || 0;
+              let played2 = playedIds.has(message.id);
+              try { if (window.__fvttTTSPlayedSrcs && window.__fvttTTSPlayedSrcs.has(d2)) played2 = true; } catch (e) { /* noop */ }
+              // 判定该段实际走了哪条通道: 官方内部通道(fileURL 已即时播) 还是 DB 内嵌兜底
+              let via2 = "db";
+              try {
+                const rel3 = flNow.audioUrl || "";
+                const c3 = rel3 ? _modulePath(rel3) : "";
+                if (c3 && window.__fvttTTSOfficialSrcs && window.__fvttTTSOfficialSrcs.has(c3)) via2 = "official";
+              } catch (e) { /* noop */ }
+              if (!played2 && window.__fvttTTSMutedFlag !== true && typeof audioPlay === "function") {
+                try { playedIds.add(message.id); setTimeout(() => { try { playedIds.delete(message.id); } catch (e) { /* noop */ } }, 30000); await audioPlay(d2, { volume: 0.5, push: false }); played2 = true; } catch (e) { err2 = "pl-play:" + String(e && e.message || e).slice(0, 40); }
+              } else played2 = true;   // updateChatMessage/广播已真实播放
+              await pushAck(fetchMs2, played2, bytes2, err2, via2);
+              return true;
+            }
+            // audioUrl 兜底拉取(fetch 转 data URI 播放; 远程证书问题如实回执)
+            const full2 = /^https?:\/\//i.test(r2) ? r2
+              : (r2.startsWith("/modules/") || r2.startsWith("/data/")) ? new URL(r2, window.location.origin).href
+              : `${getCfg().serverUrl.replace(/\/+$/, "")}${r2}`;
+            try {
+              const tF2 = Date.now();
+              const resp = await fetch(full2, { signal: AbortSignal.timeout(15000) });
+              const buf = await resp.arrayBuffer();
+              fetchMs2 = Date.now() - tF2; bytes2 = (buf && buf.byteLength) || 0;
+              let played2 = playedIds.has(message.id);
+              if (!played2 && window.__fvttTTSMutedFlag !== true && typeof audioPlay === "function") {
+                try { playedIds.add(message.id); setTimeout(() => { try { playedIds.delete(message.id); } catch (e) { /* noop */ } }, 30000); await audioPlay(full2, { volume: 0.5, push: false }); played2 = true; } catch (e) { err2 = "pl-play:" + String(e && e.message || e).slice(0, 40); }
+              } else played2 = true;
+              await pushAck(fetchMs2, played2, bytes2, err2, "url");
+              return true;
+            } catch (e) { await pushAck(fetchMs2, false, 0, "fetch:" + String(e && e.message || e).slice(0, 40), "url"); return true; }
+          };
+          let done = false;
+          while (!done && Date.now() - tStart < 45000) {
+            try { const r = await tryRead(); if (r) done = true; } catch (e) { /* noop */ }
+            if (!done) await new Promise(res => setTimeout(res, 500));
+          }
+          if (!done) await pushAck(fetchMs2, playedIds.has(message.id), 0, "timeout-45s");
+        })();
+        return;   // 写回前到达: 轮询等写回后回执(不再固定延时, 慢合成也能对齐)
+      }
+      // 🔊 播放与实际说话同一路径: 通用 audioData 播放(createChatMessage/updateChatMessage)或
+      // playAudio 广播(GM 端 push)已安排; 本分支仅: ① 检测通用路径是否已播(playedIds 登记)
+      // ② 未播时兜底补播(同一 audioPlay, push:false 防环) ③ 计时回执
+      (async () => {
+        let played = playedIds.has(message.id);   // 通用路径已登记 = 播放已安排(测试=实际)
+        let fetchMs = -2;   // 内嵌即时(默认; fetch 兜底时记录实际)
+        let bytes = 0;
+        if (useData) {
+          bytes = Math.floor(((useData.length - (useData.indexOf(",") + 1)) * 3) / 4) || 0;   // base64 估字节
+          if (!played && window.__fvttTTSMutedFlag !== true && typeof audioPlay === "function") {
+            try {
+              playedIds.add(message.id);
+              setTimeout(() => { try { playedIds.delete(message.id); } catch (e) { /* noop */ } }, 30000);
+              await audioPlay(useData, { volume: 0.5, push: false });
+              played = true;
+            } catch (e) { /* 播放失败不阻塞回执 */ }
+          }
+        } else if (rel) {
+          const full = /^https?:\/\//i.test(rel) ? rel
+            : (rel.startsWith("/modules/") || rel.startsWith("/data/")) ? new URL(rel, window.location.origin).href
+            : `${getCfg().serverUrl.replace(/\/+$/, "")}${rel}`;
+          const tF = Date.now();
+          try {
+            const resp = await fetch(full, { signal: AbortSignal.timeout(15000) });
+            const buf = await resp.arrayBuffer();
+            fetchMs = Date.now() - tF;
+            bytes = (buf && buf.byteLength) || 0;
+            if (!played && window.__fvttTTSMutedFlag !== true && typeof audioPlay === "function") {
+              try {
+                playedIds.add(message.id);
+                setTimeout(() => { try { playedIds.delete(message.id); } catch (e) { /* noop */ } }, 30000);
+                await audioPlay(full, { volume: 0.5, push: false });
+                played = true;
+              } catch (e) { /* 播放失败不阻塞回执 */ }
+            }
+          } catch (e) { try { if (ui && ui.notifications) ui.notifications.warn("🚄 速度测试拉取失败(批次" + flS.speedTest.batch + ")"); } catch (e2) { /* noop */ } }
+        }
+        await pushAck(fetchMs, played, bytes, "", useData ? "db" : "url");
+      })();
+    }
+  } catch (e) { /* noop */ }
+  maybeSpeak(message); maybePickAvatarRole(message); });
+
+// GM 代理合成(统一通道, 覆盖 HTTPS 穿透/跨网/9881 不可达/低配服务器): 核心逻辑提取为 _proxySynthFor —
+// createChatMessage hook 与自检(端到端实测)共用, 保证"代理能否合成+写回"可直接从自检报告确认
+async function _proxySynthFor(message) {
+  const fl2 = (message && message.flags && message.flags[MODULE]) || {};
+  const req = fl2.synthRequest || {};
+  if (!req.text) return { ok: false, err: "no-synth-request" };
+  try {
+    const cfg = getCfg();
+    const lang = String(req.lang || "zh") || "zh";
+    // 音色: 用消息 flags 携带的完整角色参数合成(参考音频/提示词/情绪占比) — 代理合成与原作者同音色, 全员听到同一个声音
+    const o = {};
+    if (fl2.ref) o.refAudioPath = fl2.ref;
+    if (fl2.promptText) o.promptText = fl2.promptText;
+    if (fl2.promptLang) o.promptLang = fl2.promptLang;
+    if (fl2.auxRef) o.auxRefAudioPaths = [fl2.auxRef];
+    if (typeof fl2.emotionMix === "number") o.emotionMix = fl2.emotionMix;
+    const t0 = Date.now();
+    const _pprov = String(fl2.ttsProvider || req.provider || "gpt-sovits");
+    let res;
+    if (_pprov === "edge" || _pprov === "web") {
+      // 多引擎: edge/web 角色 → 服务器转发微软在线合成(低负载); 不依赖本地 GPT-SoVITS 模型
+      res = await synthEdge(String(req.text), lang, { serverUrl: cfg.serverUrl, speedFactor: Number(req.speed) || 1.0, asBlob: true });
+    } else {
+      res = await gptSovitsSynth(String(req.text), lang, { serverUrl: cfg.serverUrl, speedFactor: Number(req.speed) || 1.0, overrides: o, mediaType: "mp3", asBlob: true, role: String(fl2.role || "") });
+    }
+    const audioUrl = res.audioUrl || "";
+    const out = { ok: !!audioUrl, ms: Date.now() - t0, audioUrl: audioUrl || "", text: String(req.text).slice(0, 40) };
+    if (audioUrl && message && message.id && typeof message.update === "function") {
+      const rel = audioUrl.startsWith("http") ? new URL(audioUrl).pathname : audioUrl;
+      const upd = { "flags.gpt-sovits-tts.audioUrl": rel, "flags.gpt-sovits-tts.synthResult": "ok" };
+      // 🔊 音频内嵌(Foundry 内部通道): 全员收到消息即播, 零二次拉取
+      try {
+        if (res.blob && res.blob.size > 0 && res.blob.size <= 120000) {
+          const _b64 = await blobToBase64(res.blob);
+          if (_b64 && _b64.length < 400000) upd["flags.gpt-sovits-tts.audioData"] = "data:audio/mpeg;base64," + _b64;
+        }
+      } catch (e) { /* noop */ }
+      try { await message.update(upd); out.flagsWritten = true; } catch (e) { out.flagsWritten = false; }
+    }
+    return out;
+  } catch (e) { return { ok: false, err: String(e).slice(0, 80), ms: 0 }; }
+}
+Hooks.on("createChatMessage", (message) => {
+  try {
+    if (!message || !message.flags) return;
+    const fl = message.flags[MODULE];
+    if (!fl || !fl.synthRequest) return;
+    if (!game.user || game.user.isGM !== true) return;            // 仅 GM 端执行代理
+    if (message.author && message.author.id === game.user.id) return;   // 自己的消息(GM 直连合成, 不走代理)
+    (window.__fvttTTSHooks = window.__fvttTTSHooks || {}).createChatProxy = true;
+    (async () => {
+      const res = await _proxySynthFor(message);
+      if (!res.ok && !res.flagsWritten && message.id && typeof message.update === "function") {
+        try { await message.update({ "flags.gpt-sovits-tts.synthResult": "fail:" + String(res.err || "proxy-fail").slice(0, 60) }); } catch (e2) { /* noop */ }
+      }
+    })();
+  } catch (e) { /* noop */ }
+});
 
 // 填完 LLM API 网址/密钥保存后, 自动拉取可用模型 → 设置页里模型下拉自动出现可选项
 Hooks.on("updateSetting", (key, value, options, userId) => {
+  (window.__fvttTTSHooks = window.__fvttTTSHooks || {}).updateSetting = true;
+  // GM 改"同时运行上限" → 立即同步服务端模型池(裁剪/扩容), 仅 GM 生效(pl 只读)
+  if (key === `${MODULE}.maxConcurrentModels`) {
+    try {
+      if (game.user && game.user.isGM) {
+        fetch(`${getCfg().serverUrl.replace(/\/+$/, "")}/config`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ max_concurrent_models: Number(value) || 10 }) }).catch(() => { /* noop */ });
+      }
+    } catch (e) { /* noop */ }
+  }
   if (key !== `${MODULE}.llmKey` && key !== `${MODULE}.llmBaseUrl`) return;
   setTimeout(() => { fetchAndRefreshModels(true).catch(() => {}); }, 300);
 });
@@ -2496,22 +3543,49 @@ function _applyAvatarWithRetry(message, html) {
   }, 250);
 }
 if (_fv >= 13) {
-  Hooks.on("renderChatMessageHTML", (message, html) => { _applyAvatarWithRetry(message, html); });
+  Hooks.on("renderChatMessageHTML", (message, html) => { (window.__fvttTTSHooks = window.__fvttTTSHooks || {}).renderChat = true; _applyAvatarWithRetry(message, html); });
 } else {
-  Hooks.on("renderChatMessage", (message, html) => { _applyAvatarWithRetry(message, html); });
+  Hooks.on("renderChatMessage", (message, html) => { (window.__fvttTTSHooks = window.__fvttTTSHooks || {}).renderChat = true; _applyAvatarWithRetry(message, html); });
 }
 // 聊天同步播放(主通道, 替代依赖 socket 广播): 发送方合成后把音频 Foundry 路径写回消息 flags,
 // 聊天文档同步是数据库级(可靠) → 其他客户端(pl)收到 update 立即播放 — socket 广播不通/延迟时不再等 15s 兜底
 Hooks.on("updateChatMessage", (message, changed) => {
   try {
+    (window.__fvttTTSHooks = window.__fvttTTSHooks || {}).updateChat = true;
     if (!message || !changed) return;
     const flags = (message.flags && message.flags[MODULE]) || {};
     const hasUrl = (changed["flags.gpt-sovits-tts.audioUrl"] != null)
-      || (changed.flags && changed.flags[MODULE] && changed.flags[MODULE].audioUrl != null)
-      || flags.audioUrl;
+      || (changed["flags.gpt-sovits-tts.audioData"] != null)
+      || (changed.flags && changed.flags[MODULE] && (changed.flags[MODULE].audioUrl != null || changed.flags[MODULE].audioData != null))
+      || flags.audioUrl
+      || flags.audioData;
     if (!hasUrl || !message.id) return;
-    if (message.author && message.author.isSelf) return;   // 作者本地已播
-    if (playedIds.has(message.id)) return;   // socket 广播已播过则不重复
+    if (flags.speedTestAck) return;   // 回执消息无音频; 速度测试消息不跳过(测试=实际, 走同一播放路径, create 时已登记 playedIds 防重复)
+    if (message.author && message.author.isGM && message.author.isSelf) return;   // 仅 GM 作者跳过(本地已直连合成播出); 代理模式下 pl 作者也靠 flags 播放
+    if (playedIds.has(message.id)) return;   // socket 广播/本地已播过则不重复
+    playedIds.add(message.id);   // 先登记(防 flags 再次 update 的 fetch 竞态重复); 拉取失败再放行重试
+    setTimeout(() => { try { playedIds.delete(message.id); } catch (e) { /* noop */ } }, 30000);
+    // 🔊 统一走 FVTT 内部(界面)语音通道: 消息带 Foundry 静态路径(audioUrl, 相对 /modules/...) → 官方 AudioHelper 播放
+    // (与 GM 官方广播同 src → audioPlay 同 src 自动去重, 不会重复; 本端官方界面通道、无 400ms 等待);
+    // 仅当无文件路径(纯 dataURI)时才原生 Audio 兜底。
+    if (flags.audioData || flags.audioUrl) {
+      try { if (pendingTts.has(message.id)) pendingTts.delete(message.id); } catch (e) { /* noop */ }
+      const reluc = (flags.audioUrl && typeof flags.audioUrl === "string") ? (() => {
+        // 官方 Sound 需要可加载 URL: 用本端自己的 origin 解析成绝对 URL(同源必达), 保证 Sound 真能加载播放
+        const _rp = _modulePath(flags.audioUrl);
+        if (!_rp) return "";
+        try { return new URL(_rp, window.location.origin).href; } catch (e) { return _rp; }
+      })() : "";
+      if (reluc) {
+        try { if (message.id) cacheAudio(message.id, reluc, "audio/mpeg"); } catch (e) { /* noop */ }
+        try { queue.enqueue({ play: () => audioPlay(reluc, { volume: getCfg().volume, push: false }) }); return; } catch (e) { /* noop */ }
+      }
+      if (flags.audioData && typeof flags.audioData === "string" && flags.audioData.length > 20) {
+        try { if (message.id) cacheAudio(message.id, flags.audioData, "audio/mpeg"); } catch (e) { /* noop */ }
+        try { queue.enqueue({ play: () => audioPlay(flags.audioData, { volume: getCfg().volume, push: false }) }); } catch (e) { /* noop */ }
+      }
+      return;
+    }
     const rel = flags.audioUrl || "";
     if (!rel) return;
     const full = /^https?:\/\//i.test(rel) ? rel
@@ -2520,13 +3594,20 @@ Hooks.on("updateChatMessage", (message, changed) => {
     fetch(full, { signal: AbortSignal.timeout(15000) })
       .then(r => { if (!r.ok) throw new Error("audio fetch " + r.status); return r.blob(); })
       .then(b => {
-        const u = URL.createObjectURL(new Blob([b], { type: "audio/mpeg" }));
-        if (message.id) cacheAudio(message.id, u, "audio/mpeg");
-        playedIds.add(message.id);
-        setTimeout(() => { try { playedIds.delete(message.id); } catch (e) { /* noop */ } }, 30000);
-        queue.enqueue({ play: () => audioPlay(u, { volume: getCfg().volume }) });
+        // 兜底拉取也转 data URI 再播(跨端有效, 与内嵌通道一致走 Foundry 界面音频系统)
+        b.arrayBuffer().then((ab) => {
+          const bytes = new Uint8Array(ab);
+          let bin = "";
+          for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+          const u = "data:audio/mpeg;base64," + btoa(bin);
+          if (message.id) cacheAudio(message.id, u, "audio/mpeg");
+          playedIds.add(message.id);
+          setTimeout(() => { try { playedIds.delete(message.id); } catch (e) { /* noop */ } }, 30000);
+          try { if (pendingTts.has(message.id)) pendingTts.delete(message.id); } catch (e) { /* noop */ }   // 清 pending(代理哨兵/15s 兜底): flags 已送达即播放, 不再重复
+          queue.enqueue({ play: () => audioPlay(u, { volume: getCfg().volume, push: false }) });
+        }).catch(() => { try { playedIds.delete(message.id); } catch (e) { /* noop */ } });
       })
-      .catch(() => { /* 拉取失败: 15s 兜底会接管 */ });
+      .catch(() => { try { playedIds.delete(message.id); } catch (e) { /* noop */ } /* 拉取失败: 放行(15s 兜底(直连模式)或等待 GM(代理模式)) */ });
   } catch (e) { /* noop */ }
 });
 // 页面就绪后: 给已加载的历史消息全量补插立绘(历史消息渲染时若立绘被冲掉/或渲染不触发 hook, 这里一次性补齐)
@@ -2615,6 +3696,38 @@ function refreshAllPortraits() {
   } catch (e) { /* noop */ }
 }
 
+// 立绘路径统一成绝对 URL(跨端生效): 服务端角色素材导出到模块静态目录 engine/audio_export/,
+// 相对路径(如 fvtt_chars/<角色>/xx.png)远程端按页面 origin 会 404 → 统一加 /modules/gpt-sovits-tts/engine/audio_export/ 前缀,
+// 经 Foundry 30000 同源(HTTPS frp)必达; http(s)/模块/data 路径原样。
+function toAvatarUrl(av) {
+  try {
+    if (!av) return "";
+    let s = String(av).trim();
+    if (/^https?:\/\//i.test(s)) return s;
+    if (s.startsWith("/")) return new URL(s, window.location.origin).href;
+    s = s.replace(/^[.\\/]+/, "");
+    // 已是模块相对路径(modules/、systems/、data/ 等 Foundry 公开目录, 可能无前导 "/") → 直接 / 拼 origin
+    if (/^(modules|systems|packs|data)\//i.test(s)) return new URL("/" + s, window.location.origin).href;
+    // 其余相对路径 → 模块角色素材导出目录(engine/audio_export/)
+    return new URL("/modules/gpt-sovits-tts/engine/audio_export/" + s, window.location.origin).href;
+  } catch (e) { return av; }
+}
+
+// 取 Foundry 模块静态相对路径(官方内部通道用): 输入可为绝对 http / 相对 /modules/ / 无斜杠 modules/,
+// 一律归一成相对路径 "/modules/gpt-sovits-tts/..." — 广播时各端按自己 origin 解析(避免 127.0.0.1 localhost 陷阱)
+function _modulePath(au) {
+  try {
+    const s = String(au || "").trim();
+    if (s.startsWith("/modules/")) return s;
+    if (s.startsWith("modules/")) return "/" + s;
+    if (/^https?:\/\//i.test(s)) {
+      const p = new URL(s).pathname;
+      return p.startsWith("/modules/") ? p : "";
+    }
+    return "";
+  } catch (e) { return ""; }
+}
+
 // 情绪→立绘 / 角色立绘: 消息带角色时, 在内容前显示该角色的立绘(语气槽立绘优先); 无角色不显示
 function applyEmotionAvatar(message, html) {
   try {
@@ -2642,7 +3755,7 @@ function applyEmotionAvatar(message, html) {
     }
     const c = (role && quickChars && quickChars.chars || []).find(x => x.name === role);
     const slot = (fl && fl.emotion) ? findEmotionSlot(fl.emotion, role) : null;   // key/label 均可匹配 → 立绘随语气
-    let av = (slot && slot.avatar) || (c && c.avatar) || "";
+    let av = (fl && (fl.slotAvatar || fl.avatar)) || (slot && slot.avatar) || (c && c.avatar) || "";   // 消息自带立绘(跨端一致) → 本地角色数据
     if (!av && c) {
       // 兜底: 取该角色第一张有图的语气槽立绘
       try {
@@ -2663,10 +3776,12 @@ function applyEmotionAvatar(message, html) {
     // 同一消息只插一次
     if (body.querySelector(".fvtt-tts-emotion-avatar")) return;
     const img = document.createElement("img");
-    img.src = av;
+    img.src = toAvatarUrl(av);
     img.className = "fvtt-tts-emotion-avatar";
     img.alt = role || "";
     img.title = role || "";
+    img.loading = "lazy";   // 长列表不阻塞渲染
+    img.decoding = "async";
     if (body.firstChild) body.insertBefore(img, body.firstChild);
     else body.appendChild(img);
     // 消息 header 的"玩家头像"也随语气换(发送消息时玩家形象随语气变化)— 没有语气槽时用角色立绘
@@ -2676,7 +3791,8 @@ function applyEmotionAvatar(message, html) {
       if (himg && av) {
         try {
           if (!himg.dataset.fvttOrigSrc) himg.dataset.fvttOrigSrc = himg.getAttribute("src") || "";   // 记住原始玩家头像(切"都不显示"时可恢复)
-          if (himg.getAttribute("src") !== av) himg.setAttribute("src", av);
+          const _avAbs = toAvatarUrl(av);
+          if (himg.getAttribute("src") !== _avAbs) himg.setAttribute("src", _avAbs);
         } catch (e) { /* noop */ }
       }
     } catch (e) { /* noop */ }
@@ -2702,7 +3818,7 @@ async function maybePickAvatarRole(message) {
     });
     const j = await r.json().catch(() => ({}));
     if (r.ok && j.ok && j.role && names.includes(j.role)) {
-      await message.update({ flags: { [MODULE]: { ...fl, role: j.role, aiPicked: true } } });
+      safeMsgWrite(message, { flags: { [MODULE]: { ...fl, role: j.role, aiPicked: true } } });
     }
   } catch (e) { /* noop */ }
 }

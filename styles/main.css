@@ -730,3 +730,5 @@ body.fvtt-tts-pink .fvtt-tts-sendpop-openvm {
   flex: 1;
   min-width: 0;
 }
+/* GM 全局静音按钮(开启态红色) */
+.fvtt-tts-floatbar .fvtt-tts-mute.fvtt-tts-mute-on { color: #ff6b6b; }

@@ -1,5 +1,9 @@
 {
   "settings": {
+    "maxConcurrentModels": { "name": "同时运行 AI 语音模型数", "hint": "多个角色模型同时常驻服务器(说话按角色即时路由, 不再都变成主持人音色)。每个模型约 2-4GB 显存，默认 10，上限 20；低配机器请调小(如 2)，改完立即生效。" },
+    "aiSharedBase": { "name": "AI 配置共享·API 地址(由 GM 分发)", "hint": "主持人一键分发给所有玩家后自动填充；玩家只读。" },
+    "aiSharedKey": { "name": "AI 配置共享·密钥(由 GM 分发)", "hint": "主持人分发后全员共享同一密钥，无需玩家各自填写。" },
+    "aiSharedModel": { "name": "AI 配置共享·模型(由 GM 分发)", "hint": "主持人分发后全员使用同一模型。" },
     "portraitSize": {
       "name": "立绘图片大小",
       "hint": "聊天消息中立绘的展示尺寸(最大可到默认的 3 倍)",
@@ -92,6 +96,7 @@
     "llmModels": { "name": "LLM 可用模型缓存 (Fetched LLM Models)", "hint": "自动缓存：语音设置面板「获取模型列表」拉取到的可用模型（本项自动维护，无需手动填写）。" }
   },
   "status": {
+    "proxy": "TTS · GM 代理合成(声音经主持人中转)",
     "ok": "TTS 服务在线",
     "fail": "TTS 服务离线",
     "failHint": "点击试听; 未启动请运行 server/start-tts-server.bat",
@@ -99,6 +104,9 @@
     "web": "引擎: 浏览器系统语音"
   },
   "ui": {
+    "gmMute": { "name": "GM 全局静音(仅 GM 可操作)", "hint": "开启后所有玩家语音静音(停播+禁播); GM 悬浮条喇叭按钮一键切换" },
+    "mute": "GM 全局静音(所有玩家语音静音)",
+    "unmute": "已全局静音 — 点击解除",
     "stylePrompt": "朗读风格",
     "stylePh": "如：更严肃认真，中间不要中断",
     "styleTip": "朗读风格提示词：如“更严肃认真、中间不要中断”。会翻译成语速/停顿等合成参数，角色独立记得。",
@@ -160,6 +168,26 @@
     "emotionNone": "默认"
   },
   "vm": {
+    "speedTest": "速度",
+    "speedTestTitle": "批量速度测试: 分批次测合成/传输/加载速度, 并压满显卡验证峰值性能",
+    "gmMuteTitle": "全局静音",
+    "gmMuteLabel": "全员静音（所有角色说话都不出声）",
+    "gmMuteHint": "打开后所有人立即听不到语音（聊天立绘不受影响），再点关闭恢复。",
+    "gmMuteNote": "全局静音由主持人控制",
+    "gmMuteOn": "已静音",
+    "gmMuteOff": "正常",
+    "provider": "语音引擎",
+    "providerGpt": "GPT-SoVITS（本机高音质）",
+    "providerEdge": "Edge-TTS（在线，低负载）",
+    "providerWeb": "Web（Edge 优先，浏览器兜底）",
+    "providerGmOnly": "由主持人修改",
+    "providerSaved": "语音引擎已保存，说话即生效",
+    "providerSaveFail": "保存引擎失败",
+    "aiShareAll": "一键分发给所有玩家",
+    "aiShareClear": "一键收回所有玩家配置",
+    "aiSharedNote": "AI 配置由主持人提供（只读，无需填写）",
+    "aiSharedOk": "已分发给所有玩家(世界共享，玩家只读)",
+    "aiSharedCleared": "已收回所有玩家的 AI 配置(玩家回退到各自本地设置)",
     "stressTest": "高压",
     "stressTestTitle": "高压测试: 并发/长文本/连续合成/广播风暴/批量立绘等压力场景",
     "selfTest": "自检",

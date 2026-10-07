@@ -119,6 +119,13 @@ RESP:
 
 import os
 import sys
+# 控制台/stdout 一律 UTF-8 容错(Windows 默认 GBK 会因 emoji 等非 BMP 字符崩溃: 'gbk' codec can't encode)
+try:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
 import shutil
 import re
 import time
@@ -148,6 +155,7 @@ from GPT_SoVITS.TTS_infer_pack.TTS import TTS, TTS_Config
 from GPT_SoVITS.TTS_infer_pack.text_segmentation_method import get_method_names as get_cut_method_names
 from pydantic import BaseModel
 import threading
+from collections import OrderedDict
 
 # print(sys.path)
 i18n = I18nAuto()
@@ -907,6 +915,14 @@ def base_model_pair():
             "gpt_path": gpt, "sovits_path": sovits, "available": bool(gpt and sovits)}
 
 
+def _pool_char_path(base_dir, p):
+    """角色包路径解析(模块级): 先角色目录, 再 cwd/全局(基础模型/跨角色引用)."""
+    r = _resolve_rel(base_dir, p)
+    if r:
+        return r
+    return _resolve_ref(p)
+
+
 def activate_character(name):
     """切换并热加载指定角色(权重+主参考+提示), 成功返回 None, 失败返回错误字符串.
     优先权重热换(Shinsekai 式, 秒级: 只换 GPT/SoVITS 权重+参考, 不重建推理管线);
@@ -923,10 +939,10 @@ def activate_character(name):
             with open(y, "r", encoding="utf-8") as _f:
                 cfg = _yaml.safe_load(_f) or {}
             base = os.path.dirname(os.path.abspath(y))
-            gpt = args.gpt or _char_path(cfg.get("gpt_model_path", ""))
-            sovits = args.sovits or _char_path(cfg.get("sovits_model_path", ""))
+            gpt = args.gpt or _pool_char_path(base, cfg.get("gpt_model_path", ""))
+            sovits = args.sovits or _pool_char_path(base, cfg.get("sovits_model_path", ""))
             ref_raw = cfg.get("refer_audio_path", "") or ""
-            ref_abs = _char_path(ref_raw) if ref_raw else ""
+            ref_abs = _pool_char_path(base, ref_raw) if ref_raw else ""
             if gpt and sovits and os.path.isfile(gpt) and os.path.isfile(sovits) and ref_abs and os.path.isfile(ref_abs):
                 tts_pipeline.init_t2s_weights(gpt)
                 tts_pipeline.init_vits_weights(sovits)
@@ -961,6 +977,121 @@ def activate_character(name):
     except Exception as e:
         print("切换角色失败 %s: %s" % (name, e))
         return "切换角色失败: %s" % e
+
+
+# ---------------- 多模型并行池: 多个角色模型同时常驻, 说话按角色路由(Shinsekai 式) ----------------
+# 上限默认 10(可 1~20, GM 在 Foundry 设置里改 → 同步 /config): 每个常驻角色一套独立 GPT/SoVITS 权重,
+# 首次说话加载(10~60s), 之后即用; 池满按 LRU 淘汰最久未用角色释放显存/内存
+MAX_MODEL_POOL = 10
+_POOL_LOCK = threading.Lock()
+TTS_POOL = OrderedDict()   # 角色名 -> {"tts": TTS 实例, "at": 最近使用时间戳}
+
+
+def _pool_config_path():
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "engine", "config.json")
+
+
+def load_pool_config():
+    global MAX_MODEL_POOL
+    try:
+        _p = _pool_config_path()
+        if os.path.isfile(_p):
+            with open(_p, "r", encoding="utf-8") as _f:
+                j = json.load(_f)
+            MAX_MODEL_POOL = max(1, min(20, int(j.get("max_concurrent_models", 10))))
+            print("[模型池] 同时运行上限(读配置): %d" % MAX_MODEL_POOL)
+    except Exception:
+        pass
+
+
+def save_pool_config(v):
+    try:
+        _p = _pool_config_path()
+        os.makedirs(os.path.dirname(_p), exist_ok=True)
+        with open(_p, "w", encoding="utf-8") as _f:
+            json.dump({"max_concurrent_models": int(v)}, _f, ensure_ascii=False)
+        return True
+    except Exception:
+        return False
+
+
+def _pool_evict_lru():
+    while len(TTS_POOL) > MAX_MODEL_POOL:
+        try:
+            _k, _v = TTS_POOL.popitem(last=False)
+            print("[模型池] 超出上限(%d), 淘汰最久未用: %s (常驻 %d)" % (MAX_MODEL_POOL, _k, len(TTS_POOL)))
+            del _v
+        except Exception:
+            break
+
+
+def _pool_dbg(msg):
+    """池调试直录(独立文件, 不受 tts-server.log 占用/编码影响)."""
+    try:
+        with open(os.path.join(os.path.dirname(__file__), "pool-debug.log"), "a", encoding="utf-8") as _df:
+            _df.write("%s %s\n" % (time.strftime("%H:%M:%S"), msg))
+    except Exception:
+        pass
+
+
+def _pool_get(name):
+    """按角色取常驻 TTS 实例(LRU): 命中即用; 未命中加载该角色权重(首次较慢, 之后常驻); 池满淘汰最久未用.
+    激活角色(GM 主角色)直接用热换的 tts_pipeline, 不重复占资源; 权重缺失回退激活角色."""
+    global tts_pipeline, MAX_MODEL_POOL
+    name = os.path.basename(str(name or ""))
+    if not name:
+        return tts_pipeline
+    try:
+        if CHAR_CONFIG and name == CHAR_CONFIG.get("name"):
+            return tts_pipeline
+    except Exception:
+        pass
+    with _POOL_LOCK:
+        hit = TTS_POOL.get(name)
+        if hit is not None:
+            TTS_POOL.move_to_end(name)
+            hit["at"] = time.time()
+            return hit["tts"]
+        if len(TTS_POOL) >= MAX_MODEL_POOL:
+            _pool_evict_lru()
+    try:
+        y = os.path.join(_CHARS_ROOT, name, "character.yaml")
+        if not os.path.isfile(y):
+            return tts_pipeline
+        import yaml as _yaml
+        with open(y, "r", encoding="utf-8") as _f:
+            cfg = _yaml.safe_load(_f) or {}
+        cfg = cfg[0] if isinstance(cfg, list) and cfg else cfg
+        if not isinstance(cfg, dict):
+            return tts_pipeline
+        gpt = _pool_char_path(os.path.dirname(os.path.abspath(y)), cfg.get("gpt_model_path", ""))
+        sovits = _pool_char_path(os.path.dirname(os.path.abspath(y)), cfg.get("sovits_model_path", ""))
+        ref_raw = str(cfg.get("refer_audio_path", "") or "")
+        ref_abs = _pool_char_path(os.path.dirname(os.path.abspath(y)), ref_raw) if ref_raw else ""
+        if not (gpt and sovits and os.path.isfile(gpt) and os.path.isfile(sovits) and ref_abs and os.path.isfile(ref_abs)):
+            print("[模型池] %s 权重不完整, 回退激活角色" % name)
+            return tts_pipeline
+        print("[模型池] 加载角色模型(首次较慢, 之后常驻即用): %s (常驻 %d→%d/%d)" % (name, len(TTS_POOL), len(TTS_POOL) + 1, MAX_MODEL_POOL))
+        _pool_dbg("LOAD %s yaml=%s gpt=%s sovits=%s ref=%s" % (name, y, gpt, sovits, ref_abs))
+        inst = TTS(tts_config)
+        _pool_dbg("TTS-INST %s OK" % name)
+        inst.init_t2s_weights(gpt)
+        _pool_dbg("GPT-W %s OK" % name)
+        inst.init_vits_weights(sovits)
+        _pool_dbg("SOVITS-W %s OK" % name)
+        inst.set_ref_audio(ref_abs)
+        _pool_dbg("REF %s OK" % name)
+        with _POOL_LOCK:
+            while len(TTS_POOL) >= MAX_MODEL_POOL:
+                _pool_evict_lru()
+            TTS_POOL[name] = {"tts": inst, "at": time.time()}
+        print("[模型池] 就绪: %s (常驻 %d/%d)" % (name, len(TTS_POOL), MAX_MODEL_POOL))
+        _pool_dbg("POOLED %s size=%d max=%d" % (name, len(TTS_POOL), MAX_MODEL_POOL))
+        return inst
+    except Exception as e:
+        print("[模型池] 加载 %s 失败: %s → 回退激活角色" % (name, e))
+        _pool_dbg("FAIL %s: %s" % (name, e))
+        return tts_pipeline
 
 
 def emotion_slot_state(cfg):
@@ -1010,6 +1141,8 @@ APP.add_middleware(
 class TTS_Request(BaseModel):
     text: str = None
     text_lang: str = None
+    role: str = None          # 多模型池: 指定角色名 → 服务端用该角色常驻模型合成(不再是激活角色音色)
+    character_name: str = None
     ref_audio_path: str = None
     aux_ref_audio_paths: list = None
     prompt_lang: str = None
@@ -1234,8 +1367,39 @@ async def tts_handle(req: dict):
         StreamingResponse: audio stream response.
     """
 
+    # 纯数字输入 → 逐位读(12345 → 一二三四五, 手机号/验证码/编号逐位更自然; 仅中文语境)
+    try:
+        _t0 = str(req.get("text") or "")
+        _l0 = str(req.get("text_lang") or "auto")
+        if (_l0.startswith("zh") or _l0 == "auto") and _t0.strip() and re.fullmatch(r"\d+", _t0.strip()):
+            _CN = "零一二三四五六七八九"
+            req["text"] = "".join(_CN[int(ch)] for ch in _t0.strip())
+    except Exception:
+        pass
+    # 多模型并行池: 请求带角色名 → 用该角色的常驻模型实例(权重已加载) + 该角色自己的默认参考/提示;
+    # 无角色/激活角色(GM 主角色) → 走热换的 tts_pipeline(CHAR_CONFIG 补齐)
+    _role = str(req.get("role") or req.get("character_name") or "").strip()
+    _pipe = None
+    if _role:
+        _pipe = _pool_get(_role)
+        if _pipe is not tts_pipeline:
+            try:
+                _yc = os.path.join(_CHARS_ROOT, _role, "character.yaml")
+                if os.path.isfile(_yc):
+                    import yaml as _y2
+                    with open(_yc, "r", encoding="utf-8") as _f2:
+                        _rcfg = _y2.safe_load(_f2) or {}
+                    _rcfg = _rcfg[0] if isinstance(_rcfg, list) and _rcfg else _rcfg
+                    if isinstance(_rcfg, dict):
+                        if not req.get("ref_audio_path"): req["ref_audio_path"] = _pool_char_path(os.path.dirname(_yc), str(_rcfg.get("refer_audio_path", "") or "")) or ""
+                        if not req.get("prompt_text"): req["prompt_text"] = str(_rcfg.get("prompt_text", "") or "")
+                        if not req.get("prompt_lang"): req["prompt_lang"] = str(_rcfg.get("prompt_lang", "") or "")
+            except Exception:
+                pass
+    else:
+        _pipe = tts_pipeline
     # FVTT 扩展: 角色包已加载时, 自动补齐 ref_audio_path / prompt_text / prompt_lang / text_lang
-    if CHAR_CONFIG:
+    if _pipe is tts_pipeline and CHAR_CONFIG:
         if not req.get("ref_audio_path"):
             req["ref_audio_path"] = CHAR_CONFIG["ref_audio_path"]
         if not req.get("prompt_text"):
@@ -1247,8 +1411,8 @@ async def tts_handle(req: dict):
     # 诊断: 合成请求落盘(每次 /tts 实际收到的文字/语言/辅助参考), 排查"不同输入合成同一段"
     try:
         with open(os.path.join(os.path.dirname(__file__), "tts-requests.log"), "a", encoding="utf-8") as _lf:
-            _lf.write("[%s] [tts] text=%r lang=%s aux=%s\n" % (
-                time.strftime("%H:%M:%S"), str(req.get("text") or "")[:60], req.get("text_lang"), str(req.get("aux_ref_audio_paths") or [])[:140]))
+            _lf.write("[%s] [tts] text=%r lang=%s role=%r aux=%s\n" % (
+                time.strftime("%H:%M:%S"), str(req.get("text") or "")[:60], req.get("text_lang"), req.get("role"), str(req.get("aux_ref_audio_paths") or [])[:140]))
     except Exception:
         pass
     # 客户端可传参考音频(如语气样本/导入片段), 解析为服务器真实路径; 短样本(<3s)静音补足
@@ -1337,7 +1501,7 @@ async def tts_handle(req: dict):
 
 
     try:
-        tts_generator = tts_pipeline.run(req)
+        tts_generator = _pipe.run(req)
 
         if streaming_mode:
 
@@ -1476,6 +1640,54 @@ async def _tts_guard(req):
         _TTS_BUSY -= 1
 
 
+# Edge-TTS 在线合成(多引擎并行): 低配服务器/免部署角色用 — 服务器通过 edge_tts 库转发微软在线音色,
+# 负载极低(只做转发), 音频同样导出 Foundry 静态路径(X-Fvtt-Audio-Url)供全员同源拉流; voice 可覆盖默认音色
+EDGE_VOICES = {
+    "auto": "zh-CN-XiaoxiaoNeural",
+    "zh": "zh-CN-XiaoxiaoNeural",
+    "zh-CN": "zh-CN-XiaoxiaoNeural",
+    "ja": "ja-JP-NanamiNeural",
+    "en": "en-US-AriaNeural",
+    "ko": "ko-KR-SunHiNeural",
+    "yue": "zh-HK-HiuMaanNeural",
+}
+
+
+@APP.post("/tts/edge")
+async def tts_edge_endpoint(request: Request):
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"ok": False, "message": "bad json"})
+    text = str(body.get("text") or "").strip()
+    if not text:
+        return JSONResponse(status_code=400, content={"ok": False, "message": "text required"})
+    lang = str(body.get("lang") or "zh")
+    voice = str(body.get("voice") or EDGE_VOICES.get(lang) or EDGE_VOICES["zh"])
+    try:
+        import edge_tts
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"ok": False, "message": "edge-tts 未安装: %s" % str(e)})
+    try:
+        rate = "+0%"
+        try:
+            spd = float(body.get("speed") or 0)
+            rate = "%+d%%" % max(-50, min(150, int(spd * 20)))
+        except Exception:
+            pass
+        com = edge_tts.Communicate(text=text, voice=voice, rate=rate)
+        chunks = []
+        async for c in com.stream():
+            if c.get("type") == "audio":
+                chunks.append(c["data"])
+        mp3 = b"".join(chunks)
+        if not mp3:
+            return JSONResponse(status_code=500, content={"ok": False, "message": "edge-tts 无音频返回(服务器无法访问微软服务?)"})
+        return _respond_with_file(mp3, "audio/mpeg", req=None)
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"ok": False, "message": "edge-tts 合成失败: %s" % str(e)})
+
+
 @APP.get("/set_refer_audio")
 async def set_refer_aduio(refer_audio_path: str = None):
     try:
@@ -1570,7 +1782,30 @@ async def status():
         "hw": dict(HW_INFO),
         "lan_ip": lan_ip,
         "character": char,
+        "pool": {"size": len(TTS_POOL), "max": MAX_MODEL_POOL, "active": list(TTS_POOL.keys())},
     }
+
+
+@APP.get("/config")
+async def config_get():
+    return {"ok": True, "max_concurrent_models": MAX_MODEL_POOL}
+
+
+@APP.post("/config")
+async def config_post(request: Request):
+    """GM 在 Foundry 设置里改"同时运行上限" → 客户端同步到这里(立即裁剪/扩容模型池)."""
+    global MAX_MODEL_POOL
+    try:
+        body = await request.json()
+        v = int(body.get("max_concurrent_models", MAX_MODEL_POOL))
+    except Exception:
+        return JSONResponse(status_code=400, content={"ok": False, "message": "bad json"})
+    MAX_MODEL_POOL = max(1, min(20, v))
+    if MAX_MODEL_POOL < len(TTS_POOL):
+        with _POOL_LOCK:
+            _pool_evict_lru()
+    save_pool_config(MAX_MODEL_POOL)
+    return {"ok": True, "max_concurrent_models": MAX_MODEL_POOL, "pool_size": len(TTS_POOL)}
 
 
 @APP.get("/characters")
@@ -1596,6 +1831,7 @@ async def characters():
             "prompt_lang": cfg.get("prompt_lang", ""),
             "setting": str(cfg.get("character_setting", "") or "")[:1500],
             "avatar": str(cfg.get("avatar", "") or ""),
+            "provider": str(cfg.get("tts_provider") or "gpt-sovits"),   # 多引擎并行: gpt-sovits / edge / web
             "emotions": emotion_slot_state(cfg),
         })
     # 激活角色附带细节(权重路径/模型清单等)
@@ -1619,7 +1855,41 @@ async def characters():
             if item["name"] == active:
                 item["models_list"] = detail.get("models_list", {"gpt": [], "sovits": []})
                 item["imports"] = detail.get("imports", [])
+    # 角色快照导出(通用架构): 每次角色清单读取时刷新 → 客户端优先从 FVTT 30000 静态拉取, 不依赖 9881 可达
+    try:
+        _write_chars_snapshot(chars)
+    except Exception:
+        pass
     return {"ok": True, "chars": chars, "active": active, "detail": detail}
+
+
+def _write_chars_snapshot(chars):
+    """角色清单快照(通用架构): 只留客户端 UI/立绘所需字段, 导出到模块目录 engine/audio_export/chars_meta.json,
+    经 Foundry 30000 静态路径(/modules/gpt-sovits-tts/engine/audio_export/chars_meta.json)分发给所有客户端 —
+    pl 在 HTTPS 穿透/跨网/9881 不可达/低配服务器环境下也能拿到角色与立绘路径(立绘保持相对路径, 客户端拼 location.origin)"""
+    try:
+        _xd = os.path.join(os.path.dirname(__file__), "..", "engine", "audio_export")
+        os.makedirs(_xd, exist_ok=True)
+        sparsed = []
+        for c in (chars or []):
+            emos = c.get("emotions") or []
+            sparsed.append({
+                "name": c.get("name", ""),
+                "avatar": c.get("avatar", ""),
+                "provider": c.get("provider", "gpt-sovits"),
+                "prompt_lang": c.get("prompt_lang", ""),
+                "setting": c.get("setting", ""),
+                "emotions": [{
+                    "key": e.get("key", ""), "label": e.get("label", ""),
+                    "avatar": e.get("avatar", ""), "ref": e.get("ref", ""),
+                } for e in emos] if isinstance(emos, list) else [],
+            })
+        body_txt = json.dumps(sparsed, ensure_ascii=False)
+        _tp = os.path.join(_xd, "chars_meta.json")
+        with open(_tp, "w", encoding="utf-8") as _f:
+            _f.write('{"ts": %d, "count": %d, "chars": %s}' % (int(time.time()), len(sparsed), body_txt))
+    except Exception:
+        pass
 
 
 @APP.get("/voices")
@@ -1678,6 +1948,11 @@ async def characters_update(request: Request):
         cfg["prompt_text"] = body["prompt_text"]
     if "prompt_lang" in body:
         cfg["prompt_lang"] = body["prompt_lang"]
+    # 多引擎并行: 角色引擎选择(gpt-sovits 本地高音质 / edge 服务器转发微软在线 / web edge优先)
+    if "tts_provider" in body:
+        _pv = str(body["tts_provider"] or "gpt-sovits").strip()
+        if _pv in ("gpt-sovits", "edge", "web"):
+            cfg["tts_provider"] = _pv
     # 语气槽更新: emotions: {key: {ref, prompt, lang}} (ref 为空字符串 = 清空绑定)
     slots_new = body.get("emotions")
     if isinstance(slots_new, dict):
@@ -2524,6 +2799,41 @@ async def selftest_transfer_result(request: Request):
     return JSONResponse(status_code=404, content={"ok": False, "message": "transfer id 不存在或已过期"})
 
 
+# ---------------- 批量速度测试报告(GM/pl 各自落盘, 分批合成/传输/加载/显卡满载数据) ----------------
+@APP.post("/speedtest/report")
+async def speedtest_report(request: Request):
+    """各方把测试结果分段写入 speed_report*.json(按 user 分文件, 作者读取汇总)."""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"ok": False, "message": "bad json"})
+    who = str(body.get("user") or "gm")[:24].replace("\\", "_").replace("/", "_")
+    _f = os.path.join(os.path.dirname(__file__), "speed_report.json" if who == "gm" else "speed_report_%s.json" % who)
+    try:
+        with open(_f, "w", encoding="utf-8") as f:
+            json.dump(body, f, ensure_ascii=False, indent=2)
+        return {"ok": True, "file": os.path.basename(_f), "bytes": os.path.getsize(_f)}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"ok": False, "message": str(e)})
+
+
+@APP.get("/speedtest/gpu")
+async def speedtest_gpu():
+    """nvidia-smi 实时 GPU 利用率/显存(测显卡满载用; 无 nvidia-smi 返回 util=None)."""
+    try:
+        _r = subprocess.run(
+            ["nvidia-smi", "--query-gpu=utilization.gpu,memory.used,memory.total", "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=8)
+        _line = (_r.stdout or "").strip().splitlines()
+        if _line:
+            _p = _line[0].split(",")
+            if len(_p) >= 3:
+                return {"ok": True, "util": float(_p[0].strip()), "mem_used_gb": float(_p[1].strip()) / 1024.0, "mem_total_gb": float(_p[2].strip()) / 1024.0}
+    except Exception:
+        pass
+    return {"ok": True, "util": None}
+
+
 @APP.post("/llm/pick-role")
 async def llm_pick_role_endpoint(request: Request):
     """{base?, key, model?, text, roles: [名字]} → {ok, role}
@@ -2780,6 +3090,11 @@ if __name__ == "__main__":
         print("  /status   状态查询")
         print("  /docs     API 文档")
         print("浏览器里 Foundry 模块请把 serverUrl 指向: http://<本机IP或127.0.0.1>:%s" % port)
+        # 多模型并行池: 启动读取"同时运行上限"(engine/config.json, 默认 10, 最大 20 — GM 可在 Foundry 设置改)
+        try:
+            load_pool_config()
+        except Exception:
+            pass
         print("=" * 60)
         # 音频缓存目录: 启动清空旧文件
         try:

@@ -68,8 +68,26 @@ export class PlaybackQueue {
 /* ---------- 普通音频播放(返回 Promise, 播完或失败即 resolve) ----------
  * 优先走 Foundry 音频通道(game.audio.play, 不绑 interface 通道 → 不受"界面音效"开关影响, 玩家一定听得到);
  * Foundry 播放失败(data URI 等)或环境缺失时退回原生 Audio。 */
-export function audioPlay(src, { volume = 1, onStart = null } = {}) {
+export function audioPlay(src, { volume = 1, onStart = null, push = true } = {}) {
+  // 去重: 本端已播过的 src(data URI) → 跳过(audioData 兜底不再重复播, 双通道合一)
+  try {
+    if (window.__fvttTTSPlayedSrcs && window.__fvttTTSPlayedSrcs.has(String(src || ""))) return Promise.resolve();
+  } catch (e) { /* noop */ }
+  // GM 全局静音: main.js 维护 window.__fvttTTSMutedFlag — 静音时所有播放路径(本地/广播/重听/预加载/flags)统一跳过(返回已解决 Promise)
+  try { if (window.__fvttTTSMutedFlag === true) return Promise.resolve(); } catch (e) { /* noop */ }
+  // 播放计数(速度测试/重复播放回归用): 每次真实播放 +1(静音时不计)
+  try { window.__fvttTTSPlayCount = (window.__fvttTTSPlayCount || 0) + 1; } catch (e) { /* noop */ }
+  // 记录本端已播 src(防 audioData 兜底重复; 30s 过期)
+  try { window.__fvttTTSPlayedSrcs = window.__fvttTTSPlayedSrcs || new Set(); window.__fvttTTSPlayedSrcs.add(String(src || "")); setTimeout(() => { try { window.__fvttTTSPlayedSrcs.delete(String(src || "")); } catch (e) { /* noop */ } }, 30000); } catch (e) { /* noop */ }
   const vol = Math.min(1, Math.max(0, Number(volume) || 0));
+  // 单通道原则: 播放统一走 Foundry 内置语音通道(AudioHelper) — 本地播放 + push(默认 true) 时
+  // Foundry 官方 socket 广播 playAudio → 所有客户端几乎同时经同一通道播放("主持人听到时玩家也能听到")。
+  // 仅当 src 超大(>~700KB data URI, 超 socket 1MB 包)或 HTTP URL(pl 端 frp 证书不可信)时强制不广播,
+  // pl 端仍经聊天 flags.audioData(Foundry 内置聊天数据通道)在收到消息后走同一 AudioHelper 播放。
+  try {
+    const _s = String(src || "");
+    if (push && ((_s.startsWith("data:") && _s.length > 700000) || /^https?:\/\//i.test(_s))) push = false;
+  } catch (e) { /* noop */ }
   return new Promise((resolve) => {
     let settled = false;
     let iv = null;
@@ -79,39 +97,46 @@ export function audioPlay(src, { volume = 1, onStart = null } = {}) {
       if (iv) { clearInterval(iv); iv = null; }
       resolve();
     };
-    const nativeFallback = () => {
-      // 兜底: 原生 Audio(支持 data: URI / blob URL, 一定可播)
-      const audio = new Audio(src);
-      audio.volume = vol;
-      let settledN = false;
-      let ivN = null;
-      const doneN = () => { if (settledN) return; settledN = true; if (ivN) { clearInterval(ivN); ivN = null; } resolve(); };
-      audio.addEventListener("ended", doneN);
-      audio.addEventListener("error", doneN);
-      try { audio.play().then(() => { try { if (onStart) onStart(); } catch (e) { /* noop */ } }).catch(doneN); } catch (e) { doneN(); }
-      ivN = setTimeout(doneN, 60000);
-    };
-    if (!/^(blob:|data:)/.test(String(src || "")) && game && game.audio && typeof game.audio.play === "function") {
-      // Foundry 音频通道: 不指定 channel, 走普通音频播放(跟随主音量), 不受"界面音效"开关限制
+    const srcs = String(src || "");
+    const volS = Math.max(0, Math.min(1, vol));
+    // 原生 Audio(Audio 元素, 无自动播放策略约束下可用) — data URI / blob URL 一定可播, 且无 Foundry Sound 加载失败/证书问题
+    const nativePlay = () => {
       try {
-        game.audio.play(src, { volume: vol, autoplay: true, loop: false })
-          .then((helper) => {
-            try { if (onStart) onStart(); } catch (e) { /* noop */ }
-            if (helper && typeof helper.isPlaying === "function") {
-              iv = setInterval(() => {
-                try { if (!helper.isPlaying) done(); } catch (e) { done(); }
-              }, 250);
-              setTimeout(done, 90000);   // 兜底: 90s 后放行队列
-            } else {
-              // 无 isPlaying 接口: 按常见语音长度放行(最长语音约 30s 足够)
-              setTimeout(done, 30000);
-            }
-          })
-          .catch(nativeFallback);   // Foundry 播放失败(data URI 等) → 原生兜底, 不静默
+        try { window.__fvttTTSPlayImpl = "native"; window.__fvttTTSCnt = window.__fvttTTSCnt || { official: 0, native: 0 }; window.__fvttTTSCnt.native++; } catch (e) { /* noop */ }
+        const audio = new Audio(srcs);
+        if (!audio) { done(); return; }
+        audio.volume = volS;
+        let settledN = false;
+        let ivN = null;
+        const doneN = () => { if (settledN) return; settledN = true; if (ivN) { clearInterval(ivN); ivN = null; } done(); };
+        audio.addEventListener("ended", doneN);
+        audio.addEventListener("error", doneN);
+        try { audio.play().then(() => { try { if (onStart) onStart(); } catch (e) { /* noop */ } }).catch(doneN); } catch (e) { doneN(); }
+        ivN = setTimeout(doneN, 60000);
+      } catch (e) { done(); }
+    };
+    if (srcs.startsWith("data:")) { nativePlay(); return; }   // 内嵌 data URI → 原生(必可播, 无 Sound/证书/加载噪音)
+    // 文件/网络 URL → Foundry 内置声音通道(官方 Soundboard 等 mod 同款): 本端播 + push 时推给全员同一官方通道(不含自己者)
+    try {
+      const AH = (typeof foundry !== "undefined" && foundry.audio && foundry.audio.AudioHelper)
+        || (typeof AudioHelper !== "undefined" ? AudioHelper : null);
+      if (AH && typeof AH.play === "function") {
+        try { window.__fvttTTSPlayImpl = "official"; window.__fvttTTSCnt = window.__fvttTTSCnt || { official: 0, native: 0 }; window.__fvttTTSCnt.official++; } catch (e) { /* noop */ }
+        const opts = { src: srcs, volume: volS, autoplay: true, loop: false, channel: "interface" };
+        const ret = AH.play(opts, !!push);
+        if (ret && typeof ret.then === "function") {
+          ret.then(
+            () => { try { window.__fvttTTSPlayImpl = "official"; } catch (e) { /* noop */ } try { if (onStart) onStart(); } catch (e) { /* noop */ } setTimeout(done, 1500); },
+            () => nativePlay()   // 官方通道加载失败(证书/文件缺失) → 原生兜底
+          );
+          return;
+        }
+        try { if (onStart) onStart(); } catch (e) { /* noop */ }
+        setTimeout(done, 1500);
         return;
-      } catch (e) { /* fallthrough */ }
-    }
-    nativeFallback();
+      }
+    } catch (e) { /* fallthrough */ }
+    nativePlay();
   });
 }
 
@@ -158,33 +183,80 @@ function pickVoice(lang) {
 
 /* ---------- GPT-SoVITS 服务端合成 ---------- */
 // 返回 { url(blob URL), audioUrl(服务端缓存文件相对路径, 空=无), blob(仅 asBlob=true 时) }
-export async function gptSovitsSynth(text, lang, { serverUrl, speedFactor = 1, overrides = null, mediaType = "wav", asBlob = false } = {}) {
+/* ---------- 服务端合成代理(多设备根治): 任意端经 Foundry socket → 服务器本机 9881 ---------- */
+export async function gptSovitsSocketProxy(payload, { engine = "gpt", timeoutMs = 150000 } = {}) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (v) => { if (settled) return; settled = true; clearTimeout(tm); resolve(v); };
+    let tm = null;
+    try {
+      if (typeof game === "undefined" || !game || !game.socket || typeof game.socket.emit !== "function") { finish(null); return; }
+      tm = setTimeout(() => finish(null), timeoutMs);
+      // 直接 emit: 若服务端已注册 "gpt-sovits-tts.tts-proxy"(v13 register API), emit 返回 Promise 携带服务端结果;
+      // 未注册(未重启/旧版)时 emit 返回 undefined → finish(null) → 调用方退回直连。**不要在客户端判 register 存在与否**
+      // —— 那是服务端 API, 客户端没有, 否则代理永远走不通(玩家端合成失败根因)。
+      const pr = game.socket.emit("gpt-sovits-tts.tts-proxy", Object.assign({}, payload, { engine }));
+      if (pr && typeof pr.then === "function") {
+        pr.then((r) => finish(r || null)).catch(() => finish(null));
+      } else finish(null);
+    } catch (e) { finish(null); }
+  });
+}
+
+export async function gptSovitsSynth(text, lang, { serverUrl, speedFactor = 1, overrides = null, mediaType = "wav", asBlob = false, role = "" } = {}) {
   const base = String(serverUrl || "http://127.0.0.1:9880").replace(/\/+$/, "");
   const payload = {
     text: String(text),
-    text_lang: lang,
-    speed_factor: speedFactor,
-    streaming_mode: false,
-    media_type: mediaType,
-    allow_short_ref: true   // 允许 <3s 参考音频(语气样本等), 服务端自动静音补足
+    lang: lang,
+    speedFactor,
+    mediaType,
+    role,
+    overrides: overrides || null
   };
-  if (overrides) {
-    if (overrides.refAudioPath) payload.ref_audio_path = overrides.refAudioPath;
-    if (overrides.promptText) payload.prompt_text = overrides.promptText;
-    if (overrides.promptLang) payload.prompt_lang = overrides.promptLang;
-    if (overrides.auxRefAudioPaths && overrides.auxRefAudioPaths.length) payload.aux_ref_audio_paths = overrides.auxRefAudioPaths; // 主参考基础上叠加情绪特征
-    if (typeof overrides.emotionMix === "number") payload.emotion_mix = overrides.emotionMix; // 情绪占比: 0纯默认 ~ 1全情绪
-    if (overrides.textSplitMethod) payload.text_split_method = overrides.textSplitMethod;   // 切分方式(风格提示词: 连贯不中断→no/少切分)
-    if (typeof overrides.fragmentInterval === "number") payload.fragment_interval = overrides.fragmentInterval; // 句间间隔(连贯→更小)
-  }
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 120000);
+  // 服务端合成代理优先(socket 回传 base64): 任意端(远程 GM/玩家)都走服务器本机 9881, 无 Mixed Content/证书/拓扑差异;
+  // 代理不可用(旧版 Foundry/服务未注册/超时)时退回直连(本地设备仍有声)
   try {
+    const pr = await gptSovitsSocketProxy(payload, { engine: "gpt", timeoutMs: 150000 });
+    if (pr && pr.ok && pr.b64) {
+      const mime = mediaType === "mp3" ? "audio/mpeg" : "audio/wav";
+      const dataUri = `data:${mime};base64,${pr.b64}`;
+      if (asBlob) {
+        try {
+          const r2 = await fetch(dataUri);   // data URI → Blob(浏览器本地, 无网络)
+          const blob = await r2.blob();
+          return { blob, audioUrl: pr.audioUrl || "" };
+        } catch (e) { /* fallthrough → 直接返回 data URI 形式的 URL */ }
+        return { blob: null, audioUrl: pr.audioUrl || "", dataUri };
+      }
+      return { url: pr.audioUrl && !overrides ? pr.audioUrl : dataUri, audioUrl: pr.audioUrl || "", dataUri };
+    }
+  } catch (e) { /* 代理失败 → 直连 */ }
+  const ctrl2 = new AbortController();
+  const timer2 = setTimeout(() => ctrl2.abort(), 120000);
+  try {
+    const serverPayload = {
+      text: String(text),
+      text_lang: lang,
+      speed_factor: speedFactor,
+      streaming_mode: false,
+      media_type: mediaType,
+      allow_short_ref: true
+    };
+    if (role) serverPayload.role = String(role);
+    if (overrides) {
+      if (overrides.refAudioPath) serverPayload.ref_audio_path = overrides.refAudioPath;
+      if (overrides.promptText) serverPayload.prompt_text = overrides.promptText;
+      if (overrides.promptLang) serverPayload.prompt_lang = overrides.promptLang;
+      if (overrides.auxRefAudioPaths && overrides.auxRefAudioPaths.length) serverPayload.aux_ref_audio_paths = overrides.auxRefAudioPaths;
+      if (typeof overrides.emotionMix === "number") serverPayload.emotion_mix = overrides.emotionMix;
+      if (overrides.textSplitMethod) serverPayload.text_split_method = overrides.textSplitMethod;
+      if (typeof overrides.fragmentInterval === "number") serverPayload.fragment_interval = overrides.fragmentInterval;
+    }
     const resp = await fetch(base + "/tts", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-      signal: ctrl.signal
+      body: JSON.stringify(serverPayload),
+      signal: ctrl2.signal
     });
     if (!resp.ok) {
       let detail = "";
@@ -195,6 +267,48 @@ export async function gptSovitsSynth(text, lang, { serverUrl, speedFactor = 1, o
     let audioUrl = "";
     try { audioUrl = resp.headers.get("X-Fvtt-Audio-Url") || resp.headers.get("X-Audio-Url") || ""; } catch (e) { /* noop */ }
     // 服务端返回相对路径 → 拼完整 URL: /modules/... = Foundry 静态(拼页面 origin, pl 端必达); /audio/... = TTS 服务(拼 serverUrl)
+    if (audioUrl && !/^https?:\/\//i.test(audioUrl)) {
+      try {
+        if (audioUrl.startsWith("/modules/") || audioUrl.startsWith("/data/")) audioUrl = new URL(audioUrl, window.location.origin).href;
+        else audioUrl = new URL(audioUrl, serverUrl).href;
+      } catch (e) { /* noop */ }
+    }
+    if (asBlob) return { blob, audioUrl };
+    return { url: URL.createObjectURL(blob), audioUrl };
+  } finally {
+    clearTimeout(timer2);
+  }
+}
+
+/** Edge-TTS 在线合成(多引擎并行): 服务器转发微软在线音色, 负载极低 — 返回结构与 gptSovitsSynth 一致(blob + X-Fvtt 音频路径) */
+export async function synthEdge(text, lang, { serverUrl, speedFactor = 1, voice = "", asBlob = false } = {}) {
+  const base = String(serverUrl || "http://127.0.0.1:9881").replace(/\/+$/, "");
+  // 服务端代理优先(Edge 也走服务器本机 9881, 远程端无 Mixed Content/证书问题)
+  try {
+    const pr = await gptSovitsSocketProxy({ text: String(text), lang, speedFactor, voice }, { engine: "edge", timeoutMs: 40000 });
+    if (pr && pr.ok && pr.b64) {
+      const dataUri = `data:audio/mpeg;base64,${pr.b64}`;
+      if (asBlob) { try { const r2 = await fetch(dataUri); return { blob: await r2.blob(), audioUrl: pr.audioUrl || "" }; } catch (e) { /* fallthrough */ } }
+      return { audioUrl: pr.audioUrl || "", url: dataUri, dataUri };
+    }
+  } catch (e) { /* 代理失败 → 直连 */ }
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 30000);
+  try {
+    const resp = await fetch(base + "/tts/edge", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: String(text), lang, speed: Number(speedFactor) || 0, voice: String(voice || "") }),
+      signal: ctrl.signal
+    });
+    if (!resp.ok) {
+      let detail = "";
+      try { detail = (await resp.text()).slice(0, 300); } catch (e) { /* noop */ }
+      throw new Error(`Edge-TTS 服务返回 ${resp.status}: ${detail}`);
+    }
+    const blob = await resp.blob();
+    let audioUrl = "";
+    try { audioUrl = resp.headers.get("X-Fvtt-Audio-Url") || resp.headers.get("X-Audio-Url") || ""; } catch (e) { /* noop */ }
     if (audioUrl && !/^https?:\/\//i.test(audioUrl)) {
       try {
         if (audioUrl.startsWith("/modules/") || audioUrl.startsWith("/data/")) audioUrl = new URL(audioUrl, window.location.origin).href;

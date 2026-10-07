@@ -39,8 +39,13 @@ export function saveVoiceProfile(prof) {
 export function currentVoice() {
   const prof = loadVoiceProfile();
   const name = prof.current || "";
-  return (prof.chars && prof.chars[name]) || null;
+  const v = (prof.chars && prof.chars[name]) || null;
+  // 多引擎并行: 角色 tts_provider(来自服务端角色数据/快照) — speak/代理合成按此路由引擎
+  if (v && typeof v.ttsProvider === "undefined") { try { v.ttsProvider = _providerByChar[name] || "gpt-sovits"; } catch (e) { v.ttsProvider = "gpt-sovits"; } }
+  return v;
 }
+
+let _providerByChar = {};   // 角色名 → 引擎(来自 /characters 或 30000 快照)
 
 export function defaultProfileFromChars(chars) {
   const prof = { current: "", chars: {} };
@@ -179,12 +184,14 @@ export class VoiceManager {
     try {
       const r = await fetch(`${this.base}/characters`, { signal: AbortSignal.timeout(15000) });
       this.charsData = r.ok ? await r.json() : { ok: false, chars: [], active: "" };
+      try { (this.charsData.chars || []).forEach(c => { if (c && c.name) _providerByChar[c.name] = String(c.provider || "gpt-sovits"); }); } catch (e) { /* noop */ }
     } catch (e) { this.charsData = { ok: false, chars: [], active: "" }; }
     // 服务暂不可用时的角色兜底缓存(避免"未加载角色"): 用上次成功结果
     if (!this.charsData || !Array.isArray(this.charsData.chars) || !this.charsData.chars.length) {
       try {
         const s = localStorage.getItem("fvtt-tts-quickchars-v1");
         if (s) { const j = JSON.parse(s); if (j && Array.isArray(j.chars) && j.chars.length) { this.charsData = j; this.charsData.fromCache = true; } }
+        try { (this.charsData.chars || []).forEach(c => { if (c && c.name) _providerByChar[c.name] = String(c.provider || "gpt-sovits"); }); } catch (e) { /* noop */ }
       } catch (e) { /* noop */ }
     }
     try {
@@ -227,6 +234,7 @@ export class VoiceManager {
         <button type="button" class="fvtt-tts-vm-back" style="display:none">${t("vm.back", "返回")}</button>
         <button type="button" class="fvtt-tts-vm-selftest" title="${t("vm.selfTestTitle", "一键跑全部测试并生成报告文件，供作者排查问题")}">🧪 ${t("vm.selfTest", "自检")}</button>
         <button type="button" class="fvtt-tts-vm-stress" title="${t("vm.stressTestTitle", "高压测试: 并发/长文本/广播风暴等压力场景")}">⚡ ${t("vm.stressTest", "高压")}</button>
+        <button type="button" class="fvtt-tts-vm-speed" title="${t("vm.speedTestTitle", "批量速度测试: 分批次测合成/传输/加载速度, 并压满显卡验证峰值性能")}">🚄 ${t("vm.speedTest", "速度")}</button>
         <span class="fvtt-tts-vm-spacer" style="flex:1"></span>
         <button type="button" class="fvtt-tts-vm-test">${t("vm.test", "试听")}</button>
         <button type="button" class="fvtt-tts-vm-save">${t("vm.save", "保存")}</button>
@@ -243,6 +251,13 @@ export class VoiceManager {
       try {
         const fn = game.gptSoVitsTTS && game.gptSoVitsTTS.runStressTest;
         if (fn) fn();
+        else if (ui && ui.notifications) ui.notifications.info("模块未就绪，稍后再试");
+      } catch (e) { /* noop */ }
+    });
+    this.el.querySelector(".fvtt-tts-vm-speed").addEventListener("click", () => {
+      try {
+        const fn = game.gptSoVitsTTS && game.gptSoVitsTTS.runSpeedTest;
+        if (fn) { ui.notifications.info("🚄 批量速度测试开始（含压满显卡/分批传输，约 1 分钟）"); fn(); }
         else if (ui && ui.notifications) ui.notifications.info("模块未就绪，稍后再试");
       } catch (e) { /* noop */ }
     });
@@ -269,17 +284,24 @@ export class VoiceManager {
     const curName = prof.current || (this.charsData && this.charsData.active) || (chars[0] && chars[0].name) || "";
     const p = (prof.chars && prof.chars[curName]) || null;
     const slots = active ? active.emotions : [];
+    const _curActiveChar = (chars || []).find(c => c.name === curName) || null;
+    const curProv = String((_curActiveChar && _curActiveChar.provider) || (p && p.ttsProvider) || "gpt-sovits");
 
     let html = "";
     // AI 接入 (LLM 语气判断, 可选): 直接在面板顶部填写网址+密钥, 输入完自动检测模型并填充下拉
-    let aiBase = "", aiKeySet = false, aiEnabled = false, aiModel = "", aiModels = [], _cfgTextLang = "";
+    let aiBase = "", aiKeySet = false, aiEnabled = false, aiModel = "", aiModels = [], _cfgTextLang = "", _gmMute = false;
     try {
-      aiBase = game.settings.get("gpt-sovits-tts", "llmBaseUrl") || "";
-      aiKeySet = !!(game.settings.get("gpt-sovits-tts", "llmKey"));
-      aiEnabled = !!game.settings.get("gpt-sovits-tts", "llmEnabled");
-      aiModel = game.settings.get("gpt-sovits-tts", "llmModel") || "";
+      // AI 接入区显示: GM 分发的世界共享配置优先(pl 只读, 面板如实反映共享生效状态)
+      const _shB = game.settings.get("gpt-sovits-tts", "aiSharedBase") || "";
+      const _shK = game.settings.get("gpt-sovits-tts", "aiSharedKey") || "";
+      const _shM = game.settings.get("gpt-sovits-tts", "aiSharedModel") || "";
+      aiBase = _shB || game.settings.get("gpt-sovits-tts", "llmBaseUrl") || "";
+      aiKeySet = !!(_shK || game.settings.get("gpt-sovits-tts", "llmKey"));
+      aiEnabled = !!(_shB || _shK || game.settings.get("gpt-sovits-tts", "llmEnabled"));
+      aiModel = _shM || game.settings.get("gpt-sovits-tts", "llmModel") || "";
       aiModels = this._aiModels || [];
       _cfgTextLang = game.settings.get("gpt-sovits-tts", "textLang") || "auto";
+      _gmMute = !!game.settings.get("gpt-sovits-tts", "gmMute");
     } catch (e) { /* noop */ }
     const aiOpts = (aiModels.length ? aiModels : VM_LLM_PRESET).map(m => `<option value="${esc(m)}" ${m === aiModel ? "selected" : ""}>${esc(m)}</option>`).join("");
     html += `<section class="fvtt-tts-vm-sec fvtt-tts-vm-sec-ai">
@@ -297,7 +319,23 @@ export class VoiceManager {
         <button type="button" class="fvtt-tts-vm-btn vm-ai-preload">🚀 ${t("vm.aiPreload", "预加载 AI")}</button>
         <button type="button" class="fvtt-tts-vm-btn vm-ai-save">💾 ${t("vm.aiSave", "保存 AI 配置")}</button>
       </div>
-      <div class="fvtt-tts-vm-ai-status">${aiEnabled ? "" : t("vm.aiSaveHint", "填好后点保存开启")}</div></section>
+      <div class="fvtt-tts-vm-ai-status">${aiEnabled ? "" : t("vm.aiSaveHint", "填好后点保存开启")}</div>
+      <div class="fvtt-tts-vm-row fvtt-tts-vm-ai-share">${
+        (game.user && game.user.isGM)
+          ? `<button type="button" class="fvtt-tts-vm-btn vm-ai-share-all">📤 ${t("vm.aiShareAll", "一键分发给所有玩家")}</button>
+             <button type="button" class="fvtt-tts-vm-btn vm-ai-share-clear">🗑 ${t("vm.aiShareClear", "一键收回所有玩家配置")}</button>`
+          : `<span class="fvtt-tts-vm-hint">${t("vm.aiSharedNote", "AI 配置由主持人提供（只读，无需填写）")}</span>`
+      }</div></section>
+    <section class="fvtt-tts-vm-sec">
+      <div class="fvtt-tts-vm-title2">🔇 ${t("vm.gmMuteTitle", "全局静音")}</div>
+      ${(() => { const _gmMuteState = _gmMute ? t("vm.gmMuteOn", "已静音") : t("vm.gmMuteOff", "正常");
+        return (game.user && game.user.isGM)
+        ? `<label class="fvtt-tts-vm-row"><span>${t("vm.gmMuteLabel", "全员静音（所有角色说话都不出声）")}</span>
+             <input type="checkbox" class="fvtt-tts-vm-gm-mute" ${_gmMute ? "checked" : ""}></label>
+           <div class="fvtt-tts-vm-hint">${t("vm.gmMuteHint", "打开后所有人立即听不到语音（聊天立绘不受影响），再点关闭恢复。")}</div>`
+        : `<div class="fvtt-tts-vm-hint">${t("vm.gmMuteNote", "全局静音由主持人控制")}（${_gmMuteState}）</div>`;
+      })()}
+    </section>
     <section class="fvtt-tts-vm-sec">
       <div class="fvtt-tts-vm-title2">${t("vm.langTitle", "朗读语言 (自动翻译目标)")}</div>
       <label class="fvtt-tts-vm-row"><span>${t("vm.lang", "语言")}</span>
@@ -321,6 +359,15 @@ export class VoiceManager {
         <select class="fvtt-tts-vm-char">${charOpts || `<option value="">${t("vm.noChar", "未加载角色")}</option>`}</select>
         ${isGM ? `<button type="button" class="fvtt-tts-vm-btn vm-switch">${t("vm.switchChar", "切换")}</button>` : ""}
       </div>
+      <label class="fvtt-tts-vm-row">
+        <span>${t("vm.provider", "语音引擎")}</span>
+        <select class="fvtt-tts-vm-provider" ${isGM ? "" : "disabled"}>
+          <option value="gpt-sovits" ${curProv === "gpt-sovits" ? "selected" : ""}>${t("vm.providerGpt", "GPT-SoVITS（本机高音质）")}</option>
+          <option value="edge" ${curProv === "edge" ? "selected" : ""}>${t("vm.providerEdge", "Edge-TTS（在线，低负载）")}</option>
+          <option value="web" ${curProv === "web" ? "selected" : ""}>${t("vm.providerWeb", "Web（Edge 优先，浏览器兜底）")}</option>
+        </select>
+        ${isGM ? "" : `<span class="fvtt-tts-vm-hint">（${t("vm.providerGmOnly", "由主持人修改")}）</span>`}
+      </label>
       ${isGM ? `<div class="fvtt-tts-vm-row">
         <span>${t("vm.charActions", "角色操作")}</span>
         <button type="button" class="fvtt-tts-vm-btn vm-new">${t("vm.newChar", "＋ 新建角色")}</button>
@@ -511,6 +558,33 @@ function safeAssignments() {
         }
       } catch (err) { if (aiStatus) aiStatus.textContent = t("vm.aiPreloadFail", "预加载失败") + ": " + ((err && err.message) || err); }
     });
+    // GM 全局静音(语音设置内开关): 写 world 设置 → updateSetting hook 广播给全员, 立即静音/恢复
+    const gmMuteChk = body.querySelector(".fvtt-tts-vm-gm-mute");
+    if (gmMuteChk) gmMuteChk.addEventListener("change", () => {
+      try {
+        game.settings.set("gpt-sovits-tts", "gmMute", !!gmMuteChk.checked);
+        ui.notifications.info(gmMuteChk.checked ? t("vm.gmMuteOn", "全局静音已开启") : t("vm.gmMuteOff", "全局静音已关闭"));
+      } catch (e) { /* noop */ }
+    });
+    // GM 一键分发/收回 AI 配置(世界共享): 分发 = 把 GM 本地的 base/key/model 写入 world 设置 → 全员(含 pl)读取时共享优先
+    const shareAll = body.querySelector(".vm-ai-share-all");
+    if (shareAll) shareAll.addEventListener("click", async () => {
+      try {
+        await game.settings.set("gpt-sovits-tts", "aiSharedBase", game.settings.get("gpt-sovits-tts", "llmBaseUrl") || "");
+        await game.settings.set("gpt-sovits-tts", "aiSharedKey", game.settings.get("gpt-sovits-tts", "llmKey") || "");
+        await game.settings.set("gpt-sovits-tts", "aiSharedModel", game.settings.get("gpt-sovits-tts", "llmModel") || "");
+        if (aiStatus) aiStatus.textContent = "✓ " + t("vm.aiSharedOk", "已分发给所有玩家(世界共享，玩家只读)");
+      } catch (e) { if (aiStatus) aiStatus.textContent = "✗ " + String(e).slice(0, 60); }
+    });
+    const shareClear = body.querySelector(".vm-ai-share-clear");
+    if (shareClear) shareClear.addEventListener("click", async () => {
+      try {
+        await game.settings.set("gpt-sovits-tts", "aiSharedBase", "");
+        await game.settings.set("gpt-sovits-tts", "aiSharedKey", "");
+        await game.settings.set("gpt-sovits-tts", "aiSharedModel", "");
+        if (aiStatus) aiStatus.textContent = t("vm.aiSharedCleared", "已收回所有玩家的 AI 配置(玩家回退到各自本地设置)");
+      } catch (e) { if (aiStatus) aiStatus.textContent = "✗ " + String(e).slice(0, 60); }
+    });
     // 输入即自动检测(700ms 去抖): 输入网址/密钥停一下, 模型下拉自动填充
     let _aiDebT = null;
     const aiAutoDetect = () => { if (_aiDebT) clearTimeout(_aiDebT); _aiDebT = setTimeout(aiDetect, 700); };
@@ -541,6 +615,26 @@ function safeAssignments() {
     });
     if (isGM) {
       const b = body.querySelector(".fvtt-tts-vm-char");
+      // 角色下拉(全员): 换角色立即更新本地语音档案(当前角色/参考音频/提示词/引擎) —
+      // pl 尤其关键: 发消息时 flags 携带完整音色参数 → GM 代理按所选角色合成(不再是 GM 默认声音), 立绘也随之正确
+      if (b) b.addEventListener("change", () => {
+        const nm = b.value;
+        if (!nm) return;
+        try {
+          const prof = loadVoiceProfile();
+          prof.current = nm;
+          if (!prof.chars) prof.chars = {};
+          if (!prof.chars[nm]) prof.chars[nm] = { name: nm, avatar: "", emotion: "", ref: "", auxRef: "", promptText: "", promptLang: "", speed: 0, volume: 0 };
+          const cC = ((this.charsData && this.charsData.chars) || []).find(x => x.name === nm);
+          prof.chars[nm].emotion = "";
+          prof.chars[nm].ref = (cC && cC.ref_audio_path) ? `fvtt_chars/${nm}/${cC.ref_audio_path}` : "";
+          prof.chars[nm].promptText = (cC && cC.prompt_text) || "";
+          prof.chars[nm].promptLang = (cC && cC.prompt_lang) || "ja";
+          prof.chars[nm].ttsProvider = (cC && cC.provider) || "gpt-sovits";
+          saveVoiceProfile(prof);
+          try { this.render(); } catch (e) { /* noop */ }
+        } catch (e) { /* noop */ }
+      });
       body.querySelector(".vm-switch").addEventListener("click", async () => {
         const name = b.value;
         if (!name) return;
@@ -563,6 +657,18 @@ function safeAssignments() {
           ui.notifications.info(t("vm.switchedChar", "已切换角色") + "：" + name);
         } catch (err) { ui.notifications.error(t("vm.switchCharFail", "切换角色失败") + ": " + (err.message || err)); }
         finally { this._setBusy(false); this.render(); }
+      });
+      // 多引擎并行: 角色引擎下拉 → 存服务端角色 yaml(全员同角色用同一引擎)
+      body.querySelector(".fvtt-tts-vm-provider").addEventListener("change", async () => {
+        const nm = body.querySelector(".fvtt-tts-vm-char").value;
+        const pv = body.querySelector(".fvtt-tts-vm-provider").value;
+        if (!nm) return;
+        try {
+          const r = await fetch(`${this.base}/characters/update`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: nm, tts_provider: pv }) });
+          const j = await r.json().catch(() => ({}));
+          if (!r.ok || !j.ok) throw new Error((j && j.message) || "save failed");
+          ui.notifications.info(t("vm.providerSaved", "语音引擎已保存，说话即生效"));
+        } catch (err) { ui.notifications.error(t("vm.providerSaveFail", "保存引擎失败") + ": " + (err.message || err)); }
       });
       body.querySelector(".vm-new").addEventListener("click", () => { this.view = "editor"; this.editMode = "new"; this.editName = ""; this._renderBody(); });
       body.querySelector(".vm-edit").addEventListener("click", () => {

@@ -1,5 +1,9 @@
 {
   "settings": {
+    "maxConcurrentModels": { "name": "Concurrent AI voice models", "hint": "How many character models stay loaded at once (speech routes to the selected character instantly). Each model uses ~2-4GB VRAM. Default 10, max 20; lower it on weak servers. Takes effect immediately." },
+    "aiSharedBase": { "name": "Shared AI base URL (GM distributed)", "hint": "Filled automatically after GM shares; read-only for players." },
+    "aiSharedKey": { "name": "Shared AI key (GM distributed)", "hint": "All players share the same key after GM distribution." },
+    "aiSharedModel": { "name": "Shared AI model (GM distributed)", "hint": "All players use the same model after GM distribution." },
     "portraitSize": {
       "name": "Portrait Size",
       "hint": "Display size of portrait images in chat messages (up to 3x default)",
@@ -92,6 +96,7 @@
     "llmModels": { "name": "Fetched LLM models cache", "hint": "Auto cache: models fetched by 'Fetch model list' in the voice settings panel (maintained automatically)." }
   },
   "status": {
+    "proxy": "TTS via GM proxy (audio relayed by GM)",
     "ok": "TTS server online",
     "fail": "TTS server offline",
     "failHint": "Click to test; if not started run server/start-tts-server.bat",
@@ -99,6 +104,9 @@
     "web": "Engine: browser system voice"
   },
   "ui": {
+    "gmMute": { "name": "GM 全局静音(仅 GM 可操作)", "hint": "开启后所有玩家语音静音(停播+禁播); GM 悬浮条喇叭按钮一键切换" },
+    "mute": "GM global mute (silence all players' voices)",
+    "unmute": "Global mute active - click to unmute",
     "stylePrompt": "Reading Style",
     "stylePh": "e.g. more serious, no pauses",
     "styleTip": "Reading style prompt: e.g. 'more serious, no pauses in the middle'. Mapped to speed/pause synthesis params, remembered per character.",
@@ -160,6 +168,26 @@
     "emotionNone": "Default"
   },
   "vm": {
+    "speedTest": "Speed",
+    "speedTestTitle": "Batch speed test: synthesis/transfer/loading in batches, saturates GPU to verify peak performance",
+    "gmMuteTitle": "Global mute",
+    "gmMuteLabel": "Mute everyone (no voice from any character)",
+    "gmMuteHint": "On: nobody hears speech instantly (chat portraits unaffected). Toggle off to restore.",
+    "gmMuteNote": "Global mute is controlled by the GM",
+    "gmMuteOn": "Muted",
+    "gmMuteOff": "Normal",
+    "provider": "Voice engine",
+    "providerGpt": "GPT-SoVITS (local, high quality)",
+    "providerEdge": "Edge-TTS (online, low load)",
+    "providerWeb": "Web (Edge first, browser fallback)",
+    "providerGmOnly": "set by GM",
+    "providerSaved": "Voice engine saved, effective on next speech",
+    "providerSaveFail": "Failed to save engine",
+    "aiShareAll": "Share AI config to all players",
+    "aiShareClear": "Revoke shared AI config",
+    "aiSharedNote": "AI config provided by GM (read-only, no need to fill)",
+    "aiSharedOk": "Shared to all players (world-scope, players read-only)",
+    "aiSharedCleared": "Revoked shared AI config (players fall back to local settings)",
     "stressTest": "Stress",
     "stressTestTitle": "Stress test: concurrency/long text/sequential synthesis/broadcast storm/bulk portraits",
     "selfTest": "Self-test",
