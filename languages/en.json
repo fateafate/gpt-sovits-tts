@@ -171,6 +171,8 @@
   "vm": {
     "speedTest": "Speed",
     "speedTestTitle": "Batch speed test: synthesis/transfer/loading in batches, saturates GPU to verify peak performance",
+    "selfTestP": "Player self-test",
+    "selfTestPTitle": "Player self-test: verify this device can receive & play GM voice",
     "gmMuteTitle": "Global mute",
     "gmMuteLabel": "Mute everyone (no voice from any character)",
     "gmMuteHint": "On: nobody hears speech instantly (chat portraits unaffected). Toggle off to restore.",

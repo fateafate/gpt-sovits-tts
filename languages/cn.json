@@ -171,6 +171,8 @@
   "vm": {
     "speedTest": "速度",
     "speedTestTitle": "批量速度测试: 分批次测合成/传输/加载速度, 并压满显卡验证峰值性能",
+    "selfTestP": "玩家自测",
+    "selfTestPTitle": "玩家自测: 验证本机能否收到并官方播放 GM 语音(玩家端优先)",
     "gmMuteTitle": "全局静音",
     "gmMuteLabel": "全员静音（所有角色说话都不出声）",
     "gmMuteHint": "打开后所有人立即听不到语音（聊天立绘不受影响），再点关闭恢复。",

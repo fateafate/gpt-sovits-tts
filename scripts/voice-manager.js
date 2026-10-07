@@ -235,6 +235,7 @@ export class VoiceManager {
         <button type="button" class="fvtt-tts-vm-selftest" title="${t("vm.selfTestTitle", "一键跑全部测试并生成报告文件，供作者排查问题")}">🧪 ${t("vm.selfTest", "自检")}</button>
         <button type="button" class="fvtt-tts-vm-stress" title="${t("vm.stressTestTitle", "高压测试: 并发/长文本/广播风暴等压力场景")}">⚡ ${t("vm.stressTest", "高压")}</button>
         <button type="button" class="fvtt-tts-vm-speed" title="${t("vm.speedTestTitle", "批量速度测试: 分批次测合成/传输/加载速度, 并压满显卡验证峰值性能")}">🚄 ${t("vm.speedTest", "速度")}</button>
+        <button type="button" class="fvtt-tts-vm-selftestP" title="${t("vm.selfTestPTitle", "玩家自测: 验证本机能否收到并官方播放 GM 语音(玩家端优先)")}">🔬 ${t("vm.selfTestP", "玩家自测")}</button>
         <span class="fvtt-tts-vm-spacer" style="flex:1"></span>
         <button type="button" class="fvtt-tts-vm-test">${t("vm.test", "试听")}</button>
         <button type="button" class="fvtt-tts-vm-save">${t("vm.save", "保存")}</button>
@@ -258,6 +259,13 @@ export class VoiceManager {
       try {
         const fn = game.gptSoVitsTTS && game.gptSoVitsTTS.runSpeedTest;
         if (fn) { ui.notifications.info("🚄 批量速度测试开始（含压满显卡/分批传输，约 1 分钟）"); fn(); }
+        else if (ui && ui.notifications) ui.notifications.info("模块未就绪，稍后再试");
+      } catch (e) { /* noop */ }
+    });
+    this.el.querySelector(".fvtt-tts-vm-selftestP").addEventListener("click", () => {
+      try {
+        const fn = game.gptSoVitsTTS && game.gptSoVitsTTS.runPlayerSelfTest;
+        if (fn) { ui.notifications.info("🔬 玩家自测开始（播放测试音验证，几秒后出结果）"); fn(); }
         else if (ui && ui.notifications) ui.notifications.info("模块未就绪，稍后再试");
       } catch (e) { /* noop */ }
     });
