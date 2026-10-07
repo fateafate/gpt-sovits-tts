@@ -3135,11 +3135,13 @@ async function runSpeedTest() {
   try {
     const cacheText = "语音合成缓存验证，同样的句子再合一次。" + (Date.now() % 90000 + 10000);
     const _car = { serverUrl: cfg.serverUrl, speedFactor: 1.0, mediaType: "mp3", asBlob: false, role: "" };
-    const r1 = await gptSovitsSynth(cacheText, "zh", _car);
-    const r2 = await gptSovitsSynth(cacheText, "zh", _car);
-    const hit = !!(r2.ms >= 0 && r1.ms > 0 && r2.ms < r1.ms * 0.3);
-    out.batches.s1 = { firstMs: r1.ms, secondMs: r2.ms, cacheHit: hit };
-    out.conclusions.push(`S1 合成缓存: 首次 ${r1.ms}ms → 二次 ${r2.ms}ms${hit ? " ✓命中(缓存生效, 重复台词秒回)" : " (未命中, 二次仍全量合成 — 连续两次同文本应走缓存)"}`);
+    const tA = Date.now(); const r1 = await gptSovitsSynth(cacheText, "zh", _car); const tB = Date.now(); const ms1 = tB - tA;
+    const tC = Date.now(); const r2 = await gptSovitsSynth(cacheText, "zh", _car); const tD = Date.now(); const ms2 = tD - tC;
+    const ok1 = !!(r1 && (r1.dataUri || r1.audioUrl || r1.url));
+    const ok2 = !!(r2 && (r2.dataUri || r2.audioUrl || r2.url));
+    const hit = !!(ok1 && ok2 && ms1 > 0 && ms2 < ms1 * 0.3);
+    out.batches.s1 = { firstMs: ms1, secondMs: ms2, ok1, ok2, cacheHit: hit };
+    out.conclusions.push(`S1 合成缓存: 首次 ${ms1}ms → 二次 ${ms2}ms${hit ? " ✓命中(缓存生效, 重复台词秒回)" : " (未命中 — 若是首次跑需先重启TTS服务让缓存代码加载, 并确认 /status 有 synth_cache)"}`);
   } catch (e) { out.batches.s1 = { err: String(e).slice(0, 80) }; }
   // pl 回执明细并入 GM 报告(pl 经 Foundry socket 回执, GM 提交时合并 → 一次读全)
   try { out.plAcks = window.__fvttTTSAcks || []; } catch (e) { out.plAcks = []; }
