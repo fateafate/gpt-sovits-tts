@@ -584,21 +584,31 @@ async function speak(text, { lang = null, sender = "", refAudioPath = null, prom
           // 文件头时 audioUrl 为空, 但 blob 一定在) — 只要有 blob 就内嵌, pl 端拿到即播, 根治"玩家听不到"。
           try {
             const _msg = (game.messages && game.messages.get(messageId)) || null;
-            if (_msg && _canWrite() && blob && blob.size > 0) {
-              const _upd = {};
-              if (blob.size <= 300000) {
-                const _b64 = await blobToBase64(blob);
-                if (_b64 && _b64.length < 400000) _upd["flags.gpt-sovits-tts.audioData"] = "data:audio/mpeg;base64," + _b64;
-              }
-              if (audioUrl) {
-                const _rel = audioUrl.startsWith("http") ? new URL(audioUrl).pathname : audioUrl;
-                _upd["flags.gpt-sovits-tts.audioUrl"] = _rel;
-              }
-              if (Object.keys(_upd).length) _msg.update(_upd).catch(() => { /* noop */ });
-            } else if (_msg && _canWrite() && audioUrl) {
-              // blob 不可用但服务端文件路径存在 → 仅写 audioUrl(接收端按来源拼 URL 拉取/兜底)
-              const _rel = audioUrl.startsWith("http") ? new URL(audioUrl).pathname : audioUrl;
-              _msg.update({ "flags.gpt-sovits-tts.audioUrl": _rel }).catch(() => { /* noop */ });
+            // 统一组装 flags(无论 GM/玩家): audioData(≤300KB 内嵌, 不依赖落盘) + audioUrl(相对路径, 各端从自身 origin 拉)
+            const _upd = {};
+            if (blob && blob.size > 0 && blob.size <= 300000) {
+              const _b64 = await blobToBase64(blob);
+              if (_b64 && _b64.length < 400000) _upd.audioData = "data:audio/mpeg;base64," + _b64;
+            }
+            if (audioUrl) _upd.audioUrl = audioUrl.startsWith("http") ? new URL(audioUrl).pathname : audioUrl;
+            if (!Object.keys(_upd).length) { /* 无可用数据 */ }
+            else if (_canWrite() && _msg) {
+              // GM: 本端直接写回(数据库同步广播全员)
+              const _fu = {};
+              if (_upd.audioData) _fu["flags.gpt-sovits-tts.audioData"] = _upd.audioData;
+              if (_upd.audioUrl) _fu["flags.gpt-sovits-tts.audioUrl"] = _upd.audioUrl;
+              _msg.update(_fu).catch(() => { /* noop */ });
+            } else {
+              // 玩家无写回权限 → Foundry 服务端代写(服务端恒有写入权, 文档更新广播全员 — 根治"只有发言人听到")
+              try {
+                if (game.socket && typeof game.socket.emit === "function") {
+                  const meta = Object.assign({ messageId, __proxyTs: Date.now(), __proxyType: "tts-metadata" }, _upd);
+                  const pr1 = game.socket.emit(MODULE + ".tts-metadata", meta);   // v13 register 通道
+                  if (pr1 && typeof pr1.catch === "function") pr1.catch(() => { /* noop */ });
+                  const pr2 = game.socket.emit(MODULE, meta);                     // v12 兼容通道
+                  if (pr2 && typeof pr2.catch === "function") pr2.catch(() => { /* noop */ });
+                }
+              } catch (e) { /* noop */ }
             }
           } catch (e) { /* noop */ }
         }
