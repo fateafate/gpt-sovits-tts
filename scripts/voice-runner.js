@@ -28,22 +28,32 @@ export async function loadRunnerMap() {
   try { return String(game.settings.get(MOD, "voiceRunnerMap") || ""); } catch (e) { return ""; }
 }
 
-/** 全量账号: FVTT 服务器返回(含未登录玩家); 回退=在线账号 */
+/** 全量账号: FVTT 服务器返回(含未登录玩家); 6s 超时后回退在线账号 — 绝不挂起不弹窗 */
 export async function fetchAllUsers() {
   try {
     if (typeof game !== "undefined" && game && game.socket && typeof game.socket.emit === "function") {
       const pr = game.socket.emit("gpt-sovits-tts.tts-users", { __proxyTs: Date.now(), __proxyType: "tts-users" });
       if (pr && typeof pr.then === "function") {
-        const r = await pr;
+        const r = await Promise.race([pr, new Promise((res) => setTimeout(() => res(null), 6000))]);
         if (r && r.ok && Array.isArray(r.users) && r.users.length) {
           return r.users.map(u => ({ name: String(u.name || ""), isGM: !!u.isGM, active: !!u.active }));
         }
       }
     }
-  } catch (e) { /* 回退 */ }
+  } catch (e) { if (typeof console !== "undefined" && console.warn) console.warn("[gpt-sovits-tts] fetchAllUsers socket 失败, 回退在线列表:", e); }
   try {
     return ((game && game.users && game.users.contents) || []).map(u => ({ name: String(u.name || ""), isGM: !!u.isGM, active: !!u.active }));
   } catch (e) { return []; }
+}
+
+export function openRunnerAssign() {
+  try {
+    return new VoiceRunnerAssignApp().render(true);
+  } catch (e) {
+    console.error("[gpt-sovits-tts] 打开分配器失败:", e);
+    if (typeof ui !== "undefined" && ui && ui.notifications) ui.notifications.error("[TTS] 分配器打开失败: " + String((e && e.message) || e));
+    return null;
+  }
 }
 
 export class VoiceRunnerAssignApp extends foundry.applications.api.ApplicationV2 {
@@ -56,6 +66,7 @@ export class VoiceRunnerAssignApp extends foundry.applications.api.ApplicationV2
   };
 
   async _prepareContext() {
+    try {
     // 权限: 仅 GM 可分配; 玩家看到只读提示
     const isGM = !!(game.user && game.user.isGM);
     const users = await fetchAllUsers();   // 全部账号(含未登录), 服务端返回
@@ -92,6 +103,14 @@ export class VoiceRunnerAssignApp extends foundry.applications.api.ApplicationV2
       allSelf: l("runAssign.allSelf", "全部由自己生成"),
       save: l("runAssign.save", "保存分配"),
     };
+    } catch (e) {
+      console.error("[gpt-sovits-tts] 分配器上下文失败:", e);
+      return {
+        hint: l("runAssign.initFail", "⚠ 分配器初始化失败：") + " " + esc(String((e && e.message) || e)),
+        rows: `<div class="rv-row"><span style="color:#c96">⚠ ${esc(String((e && e.message) || e))}</span></div>`,
+        allDefault: "", allSelf: "", save: ""
+      };
+    }
   }
 
   async _onRender(context, options) {
@@ -140,11 +159,11 @@ export function installRunnerAssignUI() {
         row.querySelector(".form-fields").innerHTML =
           `<button type="button" class="fvtt-tts-runner-open" style="flex:1">${esc(l("runAssign.open", "打开语音生成者分配（列出全部账号）…"))}</button>`;
         const btn = row.querySelector(".fvtt-tts-runner-open");
-        if (btn) btn.addEventListener("click", async () => {
+        if (btn) btn.addEventListener("click", () => {
           try {
             if (!(game.user && game.user.isGM)) { ui.notifications.error(l("runAssign.deny", "只有主持人可以分配")); return; }
-            await new VoiceRunnerAssignApp().render(true);
-          } catch (e) { console.error("[gpt-sovits-tts] 分配器打开失败", e); }
+            openRunnerAssign();
+          } catch (e) { console.error("[gpt-sovits-tts] 分配器入口异常:", e); }
         });
         if (hint && hintText) hint.innerHTML = hintText;
       } catch (e) { /* noop */ }

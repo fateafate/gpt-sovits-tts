@@ -5,7 +5,7 @@
  * 实现为自定义浮动面板(不依赖特定 Application 基类, 兼容 Foundry v11-13)。
  */
 import { gptSovitsStatus, svcRequest } from "./tts-engine.js";
-import { VoiceRunnerAssignApp } from "./voice-runner.js";
+import { openRunnerAssign } from "./voice-runner.js";
 
 const MODULE = "gpt-sovits-tts";
 
@@ -291,11 +291,11 @@ export class VoiceManager {
       } catch (e) { /* noop */ }
     });
     const runBtn = this.el.querySelector(".fvtt-tts-vm-runassign");
-    if (runBtn) runBtn.addEventListener("click", async () => {
+    if (runBtn) runBtn.addEventListener("click", () => {
       try {
         if (!(game.user && game.user.isGM)) return;
-        await new VoiceRunnerAssignApp().render(true);
-      } catch (e) { if (ui && ui.notifications) ui.notifications.error("分配器打开失败: " + String(e && e.message || e)); }
+        openRunnerAssign();
+      } catch (e) { console.error("[gpt-sovits-tts] 分配器入口异常:", e); }
     });
     this.el.querySelector(".fvtt-tts-vm-stress").addEventListener("click", () => {
       try {

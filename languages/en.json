@@ -351,6 +351,7 @@
   "runAssign": {
     "title": "Voice Generator Assignment (whose PC generates whose voice)",
     "open": "Open Voice Generator Assignment (list all accounts)…",
+    "initFail": "⚠ Assigner initialization failed: ",
     "empty": "⚠ Could not retrieve the account list. Please check: ① the FVTT server has been restarted (the server script added an account channel); ② hard-refresh the browser. If still empty, screenshot this and send to the author.",
     "emptyShort": "Account list empty (restart FVTT and refresh)",
     "hint2": "All accounts (including offline players) are listed — the GM picks whose PC generates each account's voice. Offline accounts can be assigned in advance (applies when they log in). The assigned account must run the TTS service and be reachable from the FVTT server (the server auto-reads that account's IP). Players cannot adjust this themselves.",
