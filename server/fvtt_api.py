@@ -1073,11 +1073,13 @@ def load_pool_config():
             with open(_p, "r", encoding="utf-8") as _f:
                 j = json.load(_f)
             v = int(j.get("max_concurrent_models", 0) or 0)
+            _est = _vram_based_pool_max()
             if v > 0:
-                MAX_MODEL_POOL = max(1, min(20, v))
-                print("[模型池] 同时运行上限(读配置): %d" % MAX_MODEL_POOL)
+                # 配置上限受显存承载约束(防 OOM): 取 min(配置, 显存估算)
+                MAX_MODEL_POOL = max(1, min(v, _est))
+                print("[模型池] 同时运行上限: %d (配置=%d, 显存承载=%d, 取较小防OOM)" % (MAX_MODEL_POOL, v, _est))
             else:
-                MAX_MODEL_POOL = _vram_based_pool_max()
+                MAX_MODEL_POOL = _est
                 print("[模型池] 同时运行上限(配置缺省→显存估算): %d" % MAX_MODEL_POOL)
         else:
             MAX_MODEL_POOL = _vram_based_pool_max()
@@ -2032,6 +2034,9 @@ async def characters_preload(request: Request):
 
     def _do(nm):
         try:
+            # 激活角色(GM 主角色)走热换 tts_pipeline, 本就立即可用, 不算失败
+            if CHAR_CONFIG and str(CHAR_CONFIG.get("name") or "") == nm:
+                return (nm, "active")
             p = _pool_get(nm)
             return (nm, "ok" if p is not tts_pipeline else "fallback")
         except Exception as e:
@@ -2040,7 +2045,7 @@ async def characters_preload(request: Request):
     loaded, failed = [], {}
     with ThreadPoolExecutor(max_workers=mw) as ex:
         for nm, st in ex.map(_do, names):
-            if st == "ok":
+            if st == "ok" or st == "active":
                 loaded.append(nm)
             elif st.startswith("err"):
                 failed[nm] = st[4:]
