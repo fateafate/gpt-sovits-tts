@@ -2645,9 +2645,13 @@ async function runPlayerSelfTest() {
     try { game.users.forEach(u => { if (u && u.isGM) { gmName = u.name || ""; if (!u.isObserver && u.active) gmOnline = true; } }); } catch (e) { /* noop */ }
     pass("GM 在线", gmName ? (gmOnline ? "在线(" + gmName + ")" : "GM存在但非活动") : "无GM在线", gmOnline);
     // ① 真实发声链路: 与"玩家真实说话"完全同路径 — Player2 端 gptSovitsSynth(直连/代理)合成 →
-    // 成功则本机 audioPlay(官方通道) 验证本机真能发声; 失败(422/被拒)自测即失败, 不再假阳性
+    // 成功则本机 audioPlay(官方通道) 验证本机真能发声; 失败(422/被拒)自测即失败, 不再假阳性。
+    // 代理模式(https 页面/跨网/无本地引擎, CanDirect=false): 玩家本就不合成(发声=GM 代合成→广播),
+    // 跳过本地合成, 由下方"请求已发送/音频写回/播放通道"验证真实收听链路(用户核心诉求)。
+    const _canD = window.__fvttTTSCanDirect === true;
     let localImpl = "", localErr = "", localBlob = null;
-    try {
+    if (_canD) {
+      try {
       const prof = loadVoiceProfile();
       const cur = currentVoice();
       const o = {};
@@ -2668,6 +2672,9 @@ async function runPlayerSelfTest() {
         pass("本地合成", "失败: " + _e, false);
       }
     } catch (e) { pass("本地合成", "失败: " + String((e && e.message) || e).slice(0, 60), false); }
+    } else {
+      pass("本地合成", "代理模式跳过(https/跨网/无本地引擎): 发声走 GM 代合成→广播, 下方验证收听链路", true);
+    }
     // ② 广播链路: 发真实合成请求消息 → GM 代理代合成并写回 flags → 验证"全员同声"通道
     let role = "";
     try { const p = loadVoiceProfile(); role = (p && p.current) || ""; } catch (e) { /* noop */ }

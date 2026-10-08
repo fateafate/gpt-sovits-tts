@@ -71,7 +71,7 @@ async function gmTtsProxy(d) {
       }
       const text = await resp.text();
       if (!resp.ok && resp.status >= 400) {
-        try { console.warn("[gm-proxy] " + path + " → " + resp.status + ": " + text.slice(0, 400)); } catch (e) { /* noop */ }
+        try { console.warn("[gm-proxy] " + path + " → " + resp.status + ": " + text.slice(0, 400) + " | reqBody=" + String(jbody || "").slice(0, 300)); } catch (e) { /* noop */ }
       }
       let json = null;
       try { json = JSON.parse(text); } catch (e) { /* noop */ }
