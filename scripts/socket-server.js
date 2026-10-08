@@ -264,15 +264,28 @@ function pullSelftestReport() {
 }
 
 // 运行时诊断 marker: 追加写 server/sock-debug.log(FVTT 主机), 作者读文件核实 register/通道是否真的工作
+// 路径优先用脚本自身目录(__dirname / import.meta.url), 不依赖 game.modules(init 早期可能不可用)
+function __sockDir() {
+  try {
+    if (typeof __dirname !== "undefined") return _pathM.join(__dirname, "..", "server");
+    if (typeof import.meta !== "undefined" && import.meta.url) {
+      const _u = new URL(import.meta.url);
+      return _pathM.join(_pathM.dirname(_u.pathname), "..", "server");
+    }
+  } catch (e) { /* noop */ }
+  try { const _p = (game.modules.get(MODULE_ID) && game.modules.get(MODULE_ID).path) || ""; if (_p) return _pathM.join(_p, "server"); } catch (e) { /* noop */ }
+  return "";
+}
 function __sockMark(msg) {
   try {
-    const _p = (game.modules.get(MODULE_ID) && game.modules.get(MODULE_ID).path) || "";
-    if (!_p) return;
-    const _dir = _pathM.join(_p, "server");
+    const _dir = __sockDir();
+    if (!_dir) return;
     try { _fs.mkdirSync(_dir, { recursive: true }); } catch (e) { /* noop */ }
     _fs.appendFileSync(_pathM.join(_dir, "sock-debug.log"), `${new Date().toISOString()} ${String(msg)}\n`, "utf8");
   } catch (e) { /* noop */ }
 }
+// 顶层加载标记: 文件被服务端加载即执行(与 init hook 时机无关) — 判断"是否加载"铁证
+try { __sockMark("LOADED socket-server.js"); } catch (e) { /* noop */ }
 // 包装: 记录每次 handler 调用(证明通道真的到达服务端)
 const __wrap = (name, fn) => (...args) => {
   try { __sockMark(`CALL ${name} args=${args && args.length}`); } catch (e) { /* noop */ }
