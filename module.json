@@ -16,9 +16,6 @@
   "esmodules": [
     "scripts/main.js"
   ],
-  "scripts": [
-    "scripts/socket-server.js"
-  ],
   "styles": [
     "styles/main.css"
   ],
