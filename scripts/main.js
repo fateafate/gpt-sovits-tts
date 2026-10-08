@@ -2644,6 +2644,31 @@ async function runPlayerSelfTest() {
     let gmOnline = false, gmName = "";
     try { game.users.forEach(u => { if (u && u.isGM) { gmName = u.name || ""; if (!u.isObserver && u.active) gmOnline = true; } }); } catch (e) { /* noop */ }
     pass("GM 在线", gmName ? (gmOnline ? "在线(" + gmName + ")" : "GM存在但非活动") : "无GM在线", gmOnline);
+    // ① 真实发声链路: 与"玩家真实说话"完全同路径 — Player2 端 gptSovitsSynth(直连/代理)合成 →
+    // 成功则本机 audioPlay(官方通道) 验证本机真能发声; 失败(422/被拒)自测即失败, 不再假阳性
+    let localImpl = "", localErr = "", localBlob = null;
+    try {
+      const prof = loadVoiceProfile();
+      const cur = currentVoice();
+      const o = {};
+      try {
+        if (cur && cur.ref) o.refAudioPath = cur.ref;
+        if (cur && cur.promptText) o.promptText = cur.promptText;
+        if (cur && cur.promptLang) o.promptLang = cur.promptLang;
+        if (cur && cur.auxRef) o.auxRefAudioPaths = [cur.auxRef];
+        if (cur && typeof cur.emotionMix === "number") o.emotionMix = cur.emotionMix;
+      } catch (e) { /* noop */ }
+      const lres = await gptSovitsSynth("玩家自测，语音合成与播放正常。", "zh", { serverUrl: getCfg().serverUrl, role: (prof && prof.current) || "", overrides: o, mediaType: "mp3", asBlob: true });
+      if (lres && lres.blob && lres.blob.size > 0) {
+        localBlob = lres.blob;
+        pass("本地合成", "成功 ✓ (" + Math.round((lres.blob.size || 0) / 1024) + "KB)", true);
+        try { await audioPlay(URL.createObjectURL(lres.blob), { volume: getCfg().volume, push: false }); } catch (e) { localErr = String((e && e.message) || e).slice(0, 60); }
+      } else {
+        const _e = String((lres && (lres.err || lres.error)) || "无音频(合成被拒?)").slice(0, 60);
+        pass("本地合成", "失败: " + _e, false);
+      }
+    } catch (e) { pass("本地合成", "失败: " + String((e && e.message) || e).slice(0, 60), false); }
+    // ② 广播链路: 发真实合成请求消息 → GM 代理代合成并写回 flags → 验证"全员同声"通道
     let role = "";
     try { const p = loadVoiceProfile(); role = (p && p.current) || ""; } catch (e) { /* noop */ }
     const sentAt = Date.now();
@@ -2669,9 +2694,9 @@ async function runPlayerSelfTest() {
       pass("音频写回", "超时未收到(代理不通/合成排队/无GM代理)", false);
     }
     await new Promise(r => setTimeout(r, 1500));
-    // 播放通道: 自测消息 author=自己, 被动播放路径(create/update hook) isSelf 跳过不会自动播 —
-    // 写回后**主动 audioPlay** 验证本机播放能力(同"别人发语音"的真实播放路径), 再轮询 impl/轨迹
-    let impl = "", playErr = "", playTrace = [];
+    // 播放通道: 本地合成播放(真实发声链路)已优先验证; 广播写回音频也试播(验证写回可用) —
+    // 自测消息 author=自己被动播放路径 isSelf 跳过, 故主动 audioPlay; impl 优先取本地链路值
+    let impl = localImpl || "", playErr = localErr || "", playTrace = [];
     const _tPlay0 = Date.now();
     if (audioData || audioUrl) {
       let playSrc = audioData || "";
