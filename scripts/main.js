@@ -562,21 +562,17 @@ async function speak(text, { lang = null, sender = "", refAudioPath = null, prom
             playSrc = "data:audio/mpeg;base64," + (await blobToBase64(blob));
           }
         } catch (e) { /* noop */ }
-        const modPath = _modulePath(audioUrl);   // 官方内部通道: 本端自己的 origin 绝对 URL 走官方 Sound(跨机广播 src 不通用, 已弃用 push)
+        const modPath = _modulePath(audioUrl);
         let cleanupObj = null;
-        // 播放源(本地): blob URL 优先(Sound 加载真实媒体源最稳, 必走官方界面通道, 音量跟随界面音量); URL 次之; data URI 兜底
-        let url4 = "";
-        if (blob && blob.size > 0) {
+        // 🔉 播放源 = Foundry 官方内部通道: 官方静态文件相对路径(/modules/...) + push:true →
+        // AudioHelper.play 本地经官方 Sound 播放 + Foundry socket 广播 playAudio(相对 src) →
+        // 其他客户端收到广播后各自解析自己的 origin(同一 FVTT 静态可加载)经官方通道播放 —
+        // 这就是"走 FVTT 内部语音"(官方 playAudio 广播), 不是模块外置播放; 不依赖 flags 写回/update hook。
+        let url4 = modPath || "";
+        if (!url4 && blob && blob.size > 0) {
           try { const o = URL.createObjectURL(blob); if (o) { url4 = o; cleanupObj = o; } } catch (e) { /* fallthrough */ }
         }
-        if (!url4 && modPath) {
-          try { url4 = new URL(modPath, window.location.origin).href; } catch (e) { url4 = modPath; }
-        }
         if (!url4 && playSrc) url4 = playSrc;
-        // push:false — 官方广播的 src 只能是单一绝对 URL(跨机 localhost/frp 不通用), 且 Sound 需本端可加载绝对地址;
-        // 全端同步改由 Foundry 聊天数据通道(flags.audioUrl + 各端官方本播)负责, arrive≈0, 不再等广播
-        // onStart 登记: 播放**真正开始**才登记 playedIds — 若 URL 播放失败(onStart 不触发)则不登记,
-        // 玩家端 updateChatMessage 兜底(audioData 内嵌, 必可播)照常播放 — 根治"玩家说话只有 GM 能听到"
         const _registerPlayed = () => {
           try {
             if (messageId) {
@@ -585,7 +581,8 @@ async function speak(text, { lang = null, sender = "", refAudioPath = null, prom
             }
           } catch (e) { /* noop */ }
         };
-        item = { play: () => audioPlay(url4, { volume: vol, push: false, onStart: _registerPlayed }), cleanup: () => { try { if (cleanupObj) URL.revokeObjectURL(cleanupObj); } catch (e) { /* noop */ } } };
+        // push 广播仅当 src 是官方文件路径(相对, 各端同 origin 可加载); data URI/blob 仅本端(flags 写回兜底他端)
+        item = { play: () => audioPlay(url4, { volume: vol, push: !!modPath, onStart: _registerPlayed }), cleanup: () => { try { if (cleanupObj) URL.revokeObjectURL(cleanupObj); } catch (e) { /* noop */ } } };
         if (messageId) {
           recentBroadcastIds.add(messageId);
           if (recentBroadcastIds.size > 12) {   // 只记最近 12 条, 防无限增长
@@ -629,8 +626,10 @@ async function speak(text, { lang = null, sender = "", refAudioPath = null, prom
         } catch (e) { /* 广播兜底: 仅本地播放 */ }
       } else {
         const res = await _synthIt(finalText, finalLang, { spdIn: spd, ov: overrides, blobOnly: false, role: prof0.current });
-        const url = res.dataUri || res.url;
-        item = { play: () => audioPlay(url, { volume: vol, push: true }), cleanup: () => { try { if (!res.dataUri && res.url) URL.revokeObjectURL(res.url); } catch (e) { /* noop */ } } };
+        // 官方文件路径优先(相对 /modules/... + push 广播全家官方通道); 无落盘才 blob/dataURI
+        const mpx = (() => { try { return _modulePath(res.audioUrl || ""); } catch (e) { return ""; } })();
+        const url = mpx || res.dataUri || res.url;
+        item = { play: () => audioPlay(url, { volume: vol, push: !!mpx }), cleanup: () => { try { if (!mpx && !res.dataUri && res.url) URL.revokeObjectURL(res.url); } catch (e) { /* noop */ } } };
       }
     } catch (err) {
       console.error("[gpt-sovits-tts] 合成失败:", err);
@@ -952,7 +951,9 @@ async function maybeSpeak(message) {
       } catch (e) { /* noop */ }
       if (window.__fvttTTSCanDirect === true) {
         if (message.id) { playedIds.add(message.id); setTimeout(() => { try { playedIds.delete(message.id); } catch (e) { /* noop */ } }, 30000); }   // 本地预载已播(防 flags 写回再播)
-        queue.enqueue({ play: () => audioPlay(preloadAudio.dataUrl || preloadAudio.url, { volume: getCfg().volume }) });
+        // 官方文件路径优先 + push 广播(全员官方通道); 无落盘才 dataUrl 本端播
+        const _mpu = (() => { try { return _modulePath(preloadAudio.audioUrl || ""); } catch (e) { return ""; } })();
+        queue.enqueue({ play: () => audioPlay(_mpu || preloadAudio.dataUrl || preloadAudio.url, { volume: getCfg().volume, push: !!_mpu }) });
       } else {
         // 代理模式: 本机没直连引擎, 预载音频已在 flags 写回(等 pl 端 hook 从 30000 拉), 不重复发声
         try { if (message.id) pendingTts.set(message.id, { text: speakText, ts: Date.now() }); } catch (e) { /* noop */ }
