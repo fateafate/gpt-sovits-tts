@@ -120,6 +120,8 @@ export function audioPlay(src, { volume = 1, onStart = null, push = true } = {})
   try {
     const _s = String(src || "");
     if (push && ((_s.startsWith("data:") && _s.length > 700000) || /^https?:\/\//i.test(_s))) push = false;
+    // 🔬 测试开关(1.5.0): 广播阻断模拟 — 强制不 push(验证 flags 写回兜底通道)
+    if (push && window.__fvttTTSBlockBroadcast === true) push = false;
   } catch (e) { /* noop */ }
   return new Promise((resolve) => {
     let settled = false;

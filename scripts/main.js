@@ -7,6 +7,7 @@
 import { PlaybackQueue, audioPlay, webSpeechSpeak, gptSovitsSynth, gptSovitsStatus, synthEdge, svcRequest, installModuleSocket, moduleEmit, normPlayKey, hasPlayedSrc, markPlayedSrc } from "./tts-engine.js";
 import { installRunnerAssignUI } from "./voice-runner.js";
 import { installGmProxy } from "./gm-proxy.js";
+import { installTTSTests } from "./tests.js";
 import { BrowserSTT, ServerSTT } from "./stt-engine.js";
 import { VoiceManager, loadVoiceProfile, saveVoiceProfile, currentVoice, makeDraggable, getStylePrompt, setStylePrompt } from "./voice-manager.js";
 import { prepareTextForLang, localizeNumbers } from "./text-lib.js";
@@ -1102,13 +1103,19 @@ function buildUI() {
       <select class="fvtt-tts-emotion"></select>
       <button type="button" class="fvtt-tts-voice" title="${_L("ui.voiceMgr", "语音设置（角色/语气/模型/语速）")}"><i class="fa-solid fa-sliders"></i></button>
       <button type="button" class="fvtt-tts-mic" title="${_L("ui.mic", "语音听写(点击开始/停止)")}"><i class="fa-solid fa-microphone"></i></button>
-      <button type="button" class="fvtt-tts-selftest" title="${_L("ui.selfTest", "玩家自测(验证本机能否正常收到并播放 GM 语音)")}"><i class="fa-solid fa-stethoscope"></i></button>
+      <button type="button" class="fvtt-tts-selftest" title="${_L("ui.selfTest", "全面测试(28场景: 合成/转发/播放/并发/压力; GM 跑综合套件, 玩家跑玩家套件)")}"><i class="fa-solid fa-stethoscope"></i></button>
+      <button type="button" class="fvtt-tts-gmtest" style="display:none" title="GM 综合测试(26+)场景: 引擎直测/多角色·多语气并发/压力连发/坏参/广播阻断/全员延迟)"><i class="fa-solid fa-flask"></i></button>
       <button type="button" class="fvtt-tts-send" title="${_L("ui.send", "发送到聊天框（选语气并自动朗读）")}"><i class="fa-solid fa-paper-plane"></i></button>`;
     document.body.appendChild(bar);
-    // 🔬 玩家自测按钮: 玩家自己发起"合成→代理写回→玩家官方通道播放"全链路自测, 诊断本机是否正常
+    // 🔬 测试按钮: 玩家/GM 各自套件(1.5.0); GM 另有专属综合测试按钮
     const stBtn = bar.querySelector(".fvtt-tts-selftest");
     if (stBtn) {
-      stBtn.addEventListener("click", (ev) => { ev.stopPropagation(); try { runPlayerSelfTest(); } catch (e) { console.error(e); } });
+      stBtn.addEventListener("click", (ev) => { ev.stopPropagation(); try { (window.__fvttTTSTests && window.__fvttTTSTests.runAuto())(); } catch (e) { console.error(e); } });
+    }
+    const gmBtn = bar.querySelector(".fvtt-tts-gmtest");
+    if (gmBtn) {
+      try { if (game.user && game.user.isGM) { gmBtn.style.display = ""; } } catch (e) { /* noop */ }
+      gmBtn.addEventListener("click", (ev) => { ev.stopPropagation(); try { (window.__fvttTTSTests && window.__fvttTTSTests.runGmSuite())(); } catch (e) { console.error(e); } });
     }
   }
   // 语种选择(朗读输出语言 = 自动翻译目标): 中/日/英/韩/粤 + 自动
@@ -1871,6 +1878,7 @@ async function loadQuickChars({ force = false } = {}) {
     quickChars = readQuickCharsCache();
     _scheduleQCRetry();
   }
+  try { window.__fvttTTSQuickChars = quickChars; } catch (e) { /* noop */ }   // 供测试套件(角色/情绪槽上下文)
   return quickChars;
 }
 
@@ -3316,13 +3324,12 @@ function setupAPI() {
     isDictating: () => !!(dictation && dictation.active),
     openVoiceManager: () => VoiceManager.open(),
     // 内置自检: 一键跑全部测试 → 报告写入服务端 selftest_report.json
-    runSelfTest: () => runSelfTest(),
-    // 高压测试: 并发/长文本/连续合成/广播风暴/批量立绘 → 同样写入 selftest_report.json(stress 段)
-    runStressTest: () => runStressTest(),
-    // 批量速度测试: 分批测合成/传输/加载速度 + 压满显卡(峰值性能) → speed_report.json
-    runSpeedTest: () => runSpeedTest(),
-    // 玩家自测: 玩家端一键验证"本机能否收到并官方通道播放 GM 语音"(GM 端为本地合成自测)
-    runPlayerSelfTest: () => runPlayerSelfTest(),
+    // 1.5.0 全面测试套件(28场景, 含并发/压力/异常/多角色多语气) — 取代旧测试
+    runSelfTest: () => { try { return (window.__fvttTTSTests && window.__fvttTTSTests.runAuto()) || Promise.resolve(); } catch (e) { return Promise.resolve(); } },
+    runStressTest: () => { try { return (window.__fvttTTSTests && window.__fvttTTSTests.runGmSuite()) || Promise.resolve(); } catch (e) { return Promise.resolve(); } },
+    runSpeedTest: () => { try { return (window.__fvttTTSTests && window.__fvttTTSTests.runGmSuite()) || Promise.resolve(); } catch (e) { return Promise.resolve(); } },
+    runPlayerSelfTest: () => { try { return (window.__fvttTTSTests && window.__fvttTTSTests.runPlayerSuite()) || Promise.resolve(); } catch (e) { return Promise.resolve(); } },
+    runTests: (which) => { try { const t = window.__fvttTTSTests; if (!t) return Promise.resolve(); return which === "gm" ? t.runGmSuite() : which === "player" ? t.runPlayerSuite() : t.runAuto(); } catch (e) { return Promise.resolve(); } },
     // 语音运行者服务声明列表(供语音管理器 GM 分配面板使用)
     getRunners: () => {
       const out = [];
@@ -3347,6 +3354,13 @@ Hooks.once("ready", () => {
   // Foundry v13 socket: 模块 socket 中继(module.<id>) — 各端匹配响应 + GM 端执行代理(合成/代写/报告落盘)
   try { installModuleSocket(); } catch (e) { /* noop */ }
   try { installGmProxy(); } catch (e) { /* noop */ }
+  // 🔬 1.5.0 场景化全面测试套件(取代旧测试按钮): 玩家套件(28场景玩家视角) + GM 综合套件(28场景全员视角)
+  try {
+    installTTSTests({
+      getCfg, speak, blobToBase64, stripStageDirections, findEmotionSlot,
+      loadVoiceProfile, currentVoice, cacheAudio, _modulePath, loadQuickChars,
+    });
+  } catch (e) { console.error("[gpt-sovits-tts] tests install failed:", e); }
   // 🔊 Foundry playAudio 广播监听(记录已播 src): 与 audioData DB 兜底去重(双通道合一, 防重复播放);
     // 官方内部通道(fileURL)+DB 内嵌(dataURI) src 不同, 额外登记"官方即时已播"文件 URL 集(10s)供 DB 兜底判定是否跳过
     try {
