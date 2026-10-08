@@ -348,31 +348,60 @@ export async function gptSovitsStatus(serverUrl) {
 /** 通用 TTS 服务请求(socket 代理优先 → 直连回退): https 页面(GM/玩家经 frp)Mixed Content 根治。
  *  base=serverUrl(可带协议), method=GET|POST, path="/characters" 等, bodyJSON 可选。
  *  返回 { ok, status, json, direct } — direct=false 表示走了 socket 代理, true 表示直连。 */
-export async function svcRequest(base, method, path, bodyJSON, { timeoutMs = 30000 } = {}) {
+export async function svcRequest(base, method, path, bodyJSON, { timeoutMs = 30000, binary = false, b64Body = "", contentType = "" } = {}) {
   const b = String(base || "http://127.0.0.1:9881").replace(/\/+$/, "");
-  // 1) socket 代理(服务端转发 127.0.0.1:9881, 浏览器无 Mixed Content 问题)
-  const pr = await gptSovitsSocketProxy({ method: String(method || "GET").toUpperCase(), path: String(path), json: (bodyJSON === undefined ? null : bodyJSON), timeoutMs }, { engine: "http", timeoutMs });
+  // 1) socket 代理(服务端转发, 浏览器无 Mixed Content 问题; 二进制经 base64 传输)
+  const pr = await gptSovitsSocketProxy({
+    method: String(method || "GET").toUpperCase(),
+    path: String(path),
+    json: (b64Body ? null : (bodyJSON === undefined ? null : bodyJSON)),
+    b64Body: b64Body || undefined,
+    contentType: contentType || undefined,
+    binary: binary ? true : undefined,
+    timeoutMs
+  }, { engine: "http", timeoutMs });
   if (pr && pr.ok && typeof pr.status === "number") {
-    return { ok: true, status: pr.status || 200, json: pr.json || null, direct: false };
+    if (binary && pr.b64) {
+      try {
+        const bin = atob(pr.b64);
+        const arr = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+        const blob = new Blob([arr], { type: pr.mime || "application/octet-stream" });
+        return { ok: true, status: pr.status || 200, _json: null, blob, audioUrl: pr.audioUrl || "", cache: "miss", direct: false, json: () => Promise.resolve(null), jsonSafe: () => null, text: () => Promise.resolve("") };
+      } catch (e) { return { ok: false, status: 0, error: e, direct: false, json: () => Promise.resolve(null), jsonSafe: () => null, text: () => Promise.resolve("") }; }
+    }
+    const _j0 = pr.json || null;
+    return { ok: true, status: pr.status || 200, _json: _j0, audioUrl: pr.audioUrl || "", cache: pr.cache || "miss", direct: false, json: () => Promise.resolve(_j0), jsonSafe: () => _j0, text: () => Promise.resolve(JSON.stringify(_j0 || {})) };
   }
   // 2) 直连回退(仅 http 页面/本机场景可用; https 页面直接抛错由调用方处理)
   if (typeof location !== "undefined" && location.protocol === "https:" && !/^https:\/\//i.test(b)) {
     const mcErr = new Error("Mixed-Content: https 页面不可直连 http TTS(" + path + ")");
     mcErr.mixedContent = true;
-    return { ok: false, status: 0, error: mcErr, direct: true };
+    return { ok: false, status: 0, error: mcErr, direct: true, json: () => Promise.resolve(null), jsonSafe: () => null, text: () => Promise.resolve("") };
   }
   try {
-    const r = await fetch(b + path, {
-      method: String(method || "GET").toUpperCase(),
-      headers: { "Content-Type": "application/json" },
-      body: (method !== "GET" && bodyJSON !== undefined) ? JSON.stringify(bodyJSON) : undefined,
-      signal: AbortSignal.timeout(timeoutMs)
-    });
+    const hdrs = { "Content-Type": contentType || "application/json" };
+    let reqBody = undefined;
+    if (b64Body) {
+      const bin = atob(b64Body);
+      const arr = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+      reqBody = arr;
+    } else if (method !== "GET" && bodyJSON !== undefined) {
+      reqBody = JSON.stringify(bodyJSON);
+    }
+    const r = await fetch(b + path, { method: String(method || "GET").toUpperCase(), headers: hdrs, body: reqBody, signal: AbortSignal.timeout(timeoutMs) });
+    if (binary) {
+      const blob = await r.blob();
+      return { ok: r.ok, status: r.status, _json: null, blob, audioUrl: String(r.headers.get("X-Fvtt-Audio-Url") || r.headers.get("X-Audio-Url") || "").trim(), cache: "miss", direct: true, json: () => Promise.resolve(null), jsonSafe: () => null, text: () => Promise.resolve("") };
+    }
     const txt = await r.text();
     let json = null;
     try { json = JSON.parse(txt); } catch (e) { /* noop */ }
-    return { ok: r.ok, status: r.status, json, direct: true };
+    const _audioUrl = String(r.headers.get("X-Fvtt-Audio-Url") || r.headers.get("X-Audio-Url") || "").trim();
+    const _cache = String(r.headers.get("X-Fvtt-Cache") || "miss").trim();
+    return { ok: r.ok, status: r.status, _json: json, audioUrl: _audioUrl, cache: _cache, direct: true, json: () => Promise.resolve(json), jsonSafe: () => json, text: () => Promise.resolve(txt) };
   } catch (e) {
-    return { ok: false, status: 0, error: e, direct: true };
+    return { ok: false, status: 0, error: e, direct: true, json: () => Promise.resolve(null), jsonSafe: () => null, text: () => Promise.resolve("") };
   }
 }

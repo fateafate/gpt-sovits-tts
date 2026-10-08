@@ -170,7 +170,7 @@ function makeWatchKey() {
 function diagPlay(src, messageId, text) {
   try {
     const cfg = getCfg();
-    fetch(`${cfg.serverUrl}/diag`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ src: String(src || "").slice(0, 20), messageId: String(messageId || "").slice(0, 16), text: String(text || "").slice(0, 60) }), signal: AbortSignal.timeout(4000) }).catch(() => { });
+    svcRequest(cfg.serverUrl, "POST", "/diag", { src: String(src || "").slice(0, 20), messageId: String(messageId || "").slice(0, 16), text: String(text || "").slice(0, 60) }, { timeoutMs: 4000 }).catch(() => { });
   } catch (e) { /* noop */ }
 }
 
@@ -190,7 +190,7 @@ function handleSocketTts(p) {
   if (p.type === "selftest-transfer") {
     // 传输测试: 收到广播 → 立即 HTTP 回写服务端(证明广播真实到达本页; 不依赖 pl→GM 的 socket 回程)
     try {
-      fetch(`${getCfg().serverUrl}/selftest/transfer-arrive`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: p.id, from: game.user.name }), signal: AbortSignal.timeout(8000) }).catch(() => { /* noop */ });
+      svcRequest(getCfg().serverUrl, "POST", "/selftest/transfer-arrive", { id: p.id, from: game.user.name }, { timeoutMs: 8000 }).catch(() => { /* noop */ });
     } catch (e) { /* noop */ }
     return;
   }
@@ -508,12 +508,7 @@ async function speak(text, { lang = null, sender = "", refAudioPath = null, prom
         if (!llmStyleHit) {
           try {
             const qcC = (quickChars && quickChars.chars || []).find(x => x.name === (prof0.current || ""));
-            const r = await fetch(`${cfg.serverUrl}/llm/style`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ base: cfg.llmBaseUrl || "https://api.openai.com/v1", key: cfg.llmKey, model: cfg.llmModel || "gpt-4o-mini", text: finalText, style: stylePrompt, role: prof0.current || "", setting: (qcC && qcC.setting) || "" }),
-              signal: AbortSignal.timeout(60000),
-            });
+            const r = await svcRequest(cfg.serverUrl, "POST", "/llm/style", { base: cfg.llmBaseUrl || "https://api.openai.com/v1", key: cfg.llmKey, model: cfg.llmModel || "gpt-4o-mini", text: finalText, style: stylePrompt, role: prof0.current || "", setting: (qcC && qcC.setting) || "" }, { timeoutMs: 60000 });
             const j = await r.json().catch(() => ({}));
             if (r.ok && j.ok) {
               llmStyleHit = { speed_factor: j.speed_factor, split: j.split };
@@ -1510,19 +1505,14 @@ async function judgeEmotionByLLM(text, charName, context) {
       } catch (e) { /* noop */ }
     }
     if (!slots.length) return { ok: false, emotion: "", reason: "no-slots" };
-    const r = await fetch(`${cfg.serverUrl}/llm`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
+    const r = await svcRequest(cfg.serverUrl, "POST", "/llm", {
         base: cfg.llmBaseUrl || "https://api.openai.com/v1",
         key: cfg.llmKey,
         model: cfg.llmModel || "gpt-4o-mini",
         text: String(text || ""),
         context: context || "",
         emotions: slots.map(s => ({ key: s.key, label: s.label })),
-      }),
-      signal: AbortSignal.timeout(70000),
-    });
+      }, { timeoutMs: 70000 });
     const j = await r.json().catch(() => ({}));
     if (!r.ok || !j.ok) return { ok: false, emotion: "", reason: (j && j.message) || ("http " + r.status) };
     return { ok: true, emotion: (j && j.emotion) || "" };
@@ -1573,12 +1563,7 @@ function refreshSettingsModelSelect() {
 /** 调服务端 /llm/models 拉取模型列表 */
 async function fetchModelsFromServer(base, key) {
   const cfg = getCfg();
-  const r = await fetch(`${cfg.serverUrl}/llm/models`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ base, key }),
-    signal: AbortSignal.timeout(40000),
-  });
+  const r = await svcRequest(cfg.serverUrl, "POST", "/llm/models", { base, key }, { timeoutMs: 40000 });
   const j = await r.json().catch(() => ({}));
   if (!r.ok || !j.ok) return { ok: false, message: (j && j.message) || ("http " + r.status) };
   return { ok: true, models: (j.models) || [] };
@@ -1590,18 +1575,13 @@ window.preloadAI = async function preloadAI() {
   if (!cfg.llmEnabled || !cfg.llmKey) return { ok: false, message: "未配置 AI（先填密钥并开启）" };
   try {
     const t0 = performance.now();
-    const r = await fetch(`${cfg.serverUrl}/llm`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
+    const r = await svcRequest(cfg.serverUrl, "POST", "/llm", {
         base: cfg.llmBaseUrl || "https://api.openai.com/v1",
         key: cfg.llmKey,
         model: cfg.llmModel || "gpt-4o-mini",
         text: "你好，很高兴见到你。",
         emotions: [{ key: "calm", label: "平静" }, { key: "happy", label: "开心" }],
-      }),
-      signal: AbortSignal.timeout(60000),
-    });
+      }, { timeoutMs: 60000 });
     const j = await r.json().catch(() => ({}));
     if (!r.ok || !j.ok) return { ok: false, message: (j && j.message) || ("http " + r.status) };
     window.__aiPreloaded = true;   // 共享预热状态(语音设置面板/发送面板都不再重复预热)
@@ -1616,10 +1596,7 @@ async function polishTextByLLM(text, emotion, emotionLabel, context) {
   const cfg = getCfg();
   if (!cfg.llmEnabled || !cfg.llmKey || !cfg.llmPolish) return { ok: false, text: "" };
   try {
-    const r = await fetch(`${cfg.serverUrl}/llm/polish`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
+    const r = await svcRequest(cfg.serverUrl, "POST", "/llm/polish", {
         base: cfg.llmBaseUrl || "https://api.openai.com/v1",
         key: cfg.llmKey,
         model: cfg.llmModel || "gpt-4o-mini",
@@ -1627,9 +1604,7 @@ async function polishTextByLLM(text, emotion, emotionLabel, context) {
         context: context || "",
         emotion: String(emotion || ""),
         emotion_label: String(emotionLabel || emotion || ""),
-      }),
-      signal: AbortSignal.timeout(70000),
-    });
+      }, { timeoutMs: 70000 });
     const j = await r.json().catch(() => ({}));
     if (!r.ok || !j.ok || !j.text) return { ok: false, text: "" };
     const out = String(j.text).trim();
@@ -1661,10 +1636,7 @@ async function judgeAndPolishByLLM(text, charName, wantPolish, context) {
     if (cfg.llmMergePolish) {
       // 合并: 一次调用同时给情绪 + 润色稿
       try {
-        const r = await fetch(`${cfg.serverUrl}/llm/assess`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
+        const r = await svcRequest(cfg.serverUrl, "POST", "/llm/assess", {
             base: cfg.llmBaseUrl || "https://api.openai.com/v1",
             key: cfg.llmKey,
             model: cfg.llmModel || "gpt-4o-mini",
@@ -1674,9 +1646,7 @@ async function judgeAndPolishByLLM(text, charName, wantPolish, context) {
             role: charName || "",
             setting: (c && c.setting) || "",
             polish: !!wantPolish,
-          }),
-          signal: AbortSignal.timeout(70000),
-        });
+          }, { timeoutMs: 70000 });
         const j = await r.json().catch(() => ({}));
         if (r.ok && j.ok && j.emotion) {
           return { ok: true, emotion: String(j.emotion), polish: String(j.polish || "").trim() };
@@ -1814,9 +1784,10 @@ async function loadQuickChars({ force = false } = {}) {
   const tryDirect = async () => {
     try {
       const r = await svcRequest(getCfg().serverUrl, "GET", "/characters");
-      if (r.ok && r.json && Array.isArray(r.json.chars) && r.json.chars.length) {
-        quickChars = r.json;
-        try { localStorage.setItem(QC_STORE_KEY, JSON.stringify(r.json)); } catch (e) { /* noop */ }
+      const rj = r.jsonSafe ? r.jsonSafe() : (r.json || {});
+      if (r.ok && Array.isArray(rj.chars) && rj.chars.length) {
+        quickChars = rj;
+        try { localStorage.setItem(QC_STORE_KEY, JSON.stringify(rj)); } catch (e) { /* noop */ }
         return true;
       }
     } catch (e) { /* noop */ }
@@ -2177,7 +2148,7 @@ async function runSelfTest() {
     };
     try {
       const resp = await svcRequest(getCfg().serverUrl, "GET", "/characters");
-      const jd = resp.json || {};
+      const jd = (resp.jsonSafe ? resp.jsonSafe() : (resp.json || {})) || {};
       const firstAv = (jd.chars || []).find(c => c.avatar);
       out.portrait.charactersEndpoint = { ok: resp.ok, total: (jd.chars || []).length };
       if (firstAv) {
@@ -2247,25 +2218,23 @@ async function runSelfTest() {
     out.net = {};
     try {
       const r = await svcRequest(getCfg().serverUrl, "GET", "/status");
-      const j = r.json || {};
+      const j = r.jsonSafe ? r.jsonSafe() : (r.json || {});
       out.net.status = { ok: r.ok, char: (j.character && j.character.name) || "", device: j.device || "" };
     } catch (e) { out.net.status = { err: String(e).slice(0, 60) }; }
     try {
       const t0 = Date.now();
-      const r = await fetch(`${getCfg().serverUrl}/tts`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: "测试", text_lang: "zh", media_type: "mp3", speed_factor: 1.0 }), signal: AbortSignal.timeout(60000) });
-      out.net.ttsMin = { ok: r.ok, size: r.headers.get("content-length") || "?", ms: Date.now() - t0 };
+      const r = await svcRequest(getCfg().serverUrl, "POST", "/tts", { text: "测试", text_lang: "zh", media_type: "mp3", speed_factor: 1.0 }, { binary: true, timeoutMs: 60000 });
+      out.net.ttsMin = { ok: r.ok, size: (r.blob && r.blob.size) || "?", ms: Date.now() - t0 };
     } catch (e) { out.net.ttsMin = { err: String(e).slice(0, 60) }; }
     // 生成/传输耗时分段: 阶段1=服务端合成+回传(genMs) → 阶段2=音频 URL 纯传输(xferMs)
     let _stAudioUrl = "";   // 供真实语音广播测试复用(不再重复合成)
     try {
       const t0 = Date.now();
-      const r1 = await fetch(`${getCfg().serverUrl}/tts`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: "传输测试", text_lang: "zh", media_type: "mp3", speed_factor: 1.0 }), signal: AbortSignal.timeout(60000) });
+      const r1 = await svcRequest(getCfg().serverUrl, "POST", "/tts", { text: "传输测试", text_lang: "zh", media_type: "mp3", speed_factor: 1.0 }, { binary: true, timeoutMs: 60000 });
       const t1 = Date.now();
-      let jd = {};
-      try { jd = await r1.json(); } catch (e) { /* noop */ }
-      const t2 = Date.now();
-      const url = r1.headers.get("X-Fvtt-Audio-Url") || r1.headers.get("X-Audio-Url") || jd.audioUrl || jd.url || "";   // 服务端音频 URL 在响应头, JSON 里没有(优先 Foundry 静态路径)
+      const url = r1.audioUrl || "";   // 服务端音频 URL(代理已回传, 优先 Foundry 静态路径)
       _stAudioUrl = url;
+      const t2 = t1;   // 代理模式音频随响应返回, 无独立 json 阶段
       let t3 = t2, t4 = t2, size = 0;
       if (url) {
         const t3a = Date.now();
@@ -2369,8 +2338,8 @@ async function runSelfTest() {
   } catch (e) { out.audio.err = String(e); }
   let resText = "no-response";
   try {
-    const r = await fetch(`${getCfg().serverUrl}/selftest`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(out), signal: AbortSignal.timeout(15000) });
-    const jd = await r.json().catch(() => ({}));
+    const r = await svcRequest(getCfg().serverUrl, "POST", "/selftest", out, { timeoutMs: 15000 });
+    const jd = (r.jsonSafe ? r.jsonSafe() : (r.json || {})) || {};
     resText = (jd && jd.file) || ("HTTP " + r.status);
   } catch (e) { resText = "err:" + String(e).slice(0, 50); }
   try { ui.notifications.info(`自检完成\n${resText}`); } catch (e) { /* noop */ }
@@ -2384,14 +2353,14 @@ async function runTransferTest() {
   const id = "tr-" + Date.now() + "-" + Math.floor(Math.random() * 999);
   const out = { id, sent: false, arrivalCount: 0, arrivals: [], err: "" };
   try {
-    const r0 = await fetch(`${url}/selftest/transfer-start`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }), signal: AbortSignal.timeout(8000) });
+    const r0 = await svcRequest(url, "POST", "/selftest/transfer-start", { id }, { timeoutMs: 8000 });
     if (!r0.ok) throw new Error("start " + r0.status);
   } catch (e) { out.err = "start:" + String(e).slice(0, 50); return out; }
   try { game.socket.emit(MODULE, { type: "selftest-transfer", id, ts: Date.now() }); out.sent = true; } catch (e) { out.err = "emit:" + String(e).slice(0, 50); }
   await new Promise(r => setTimeout(r, 3000));
   try {
-    const r1 = await fetch(`${url}/selftest/transfer-result?id=${encodeURIComponent(id)}`, { signal: AbortSignal.timeout(8000) });
-    const j = await r1.json().catch(() => ({}));
+    const r1 = await svcRequest(url, "GET", "/selftest/transfer-result?id=" + encodeURIComponent(id), undefined, { timeoutMs: 8000 });
+    const j = (r1.jsonSafe ? r1.jsonSafe() : (r1.json || {})) || {};
     out.arrivals = (j && j.arrivals) || [];
     out.arrivalCount = out.arrivals.length;
   } catch (e) { out.err = "result:" + String(e).slice(0, 50); }
@@ -2409,11 +2378,11 @@ async function runStressTest() {
   const synthOne = async (text, ms = 90000) => {
     try {
       const t0 = Date.now();
-      const r = await fetch(`${url}/tts`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, text_lang: "zh", media_type: "mp3", speed_factor: 1.0 }), signal: AbortSignal.timeout(ms) });
-      let audioUrl = "";
-      try { audioUrl = r.headers.get("X-Fvtt-Audio-Url") || r.headers.get("X-Audio-Url") || ""; if (audioUrl && !/^https?:\/\//i.test(audioUrl)) audioUrl = (audioUrl.startsWith("/modules/") || audioUrl.startsWith("/data/")) ? new URL(audioUrl, window.location.origin).href : new URL(audioUrl, url).href; } catch (e) { /* noop */ }
-      const buf = r.ok ? await r.arrayBuffer() : null;
-      return { ok: r.ok, status: r.status, ms: Date.now() - t0, size: buf ? buf.byteLength : 0, audioUrl };
+      const r = await svcRequest(url, "POST", "/tts", { text, text_lang: "zh", media_type: "mp3", speed_factor: 1.0 }, { binary: true, timeoutMs: ms });
+      let audioUrl = r.audioUrl || "";
+      try { if (audioUrl && !/^https?:\/\//i.test(audioUrl)) audioUrl = (audioUrl.startsWith("/modules/") || audioUrl.startsWith("/data/")) ? new URL(audioUrl, window.location.origin).href : new URL(audioUrl, url).href; } catch (e) { /* noop */ }
+      const buf = r.ok && r.blob ? r.blob : null;
+      return { ok: r.ok, status: r.status || 0, ms: Date.now() - t0, size: buf ? buf.size : 0, audioUrl };
     } catch (e) { return { ok: false, err: String(e).slice(0, 40) }; }
   };
   // ===== 客户端压力(全部压在浏览器): 只合成 1 段素材, 其余场景全在客户端执行 — 适配低配服务器(引擎不可压) =====
@@ -2560,8 +2529,8 @@ async function runStressTest() {
     const _base = (() => { try { return game.settings.get(MODULE, "llmBaseUrl") || ""; } catch (e) { return ""; } })();
     const _model = (() => { try { return game.settings.get(MODULE, "llmModel") || ""; } catch (e) { return ""; } })();
     const t0 = Date.now();
-    const r = await fetch(`${url}/llm/pick-role`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ base: _base, key: _key, model: _model, text: "这是一段测试台词", roles: ["七海千秋", "阿尔托莉雅·潘德拉贡"] }), signal: AbortSignal.timeout(20000) });
-    const j = await r.json().catch(() => ({}));
+    const r = await svcRequest(url, "POST", "/llm/pick-role", { base: _base, key: _key, model: _model, text: "这是一段测试台词", roles: ["七海千秋", "阿尔托莉雅·潘德拉贡"] }, { timeoutMs: 20000 });
+    const j = (r.jsonSafe ? r.jsonSafe() : (r.json || {})) || {};
     out.stress.llm = { ok: r.ok, status: r.status || 0, hasKey: !!_key, model: _model || "(空→默认gpt-4o-mini)", role: (j && j.role) || "", ms: Date.now() - t0, note: _model ? "" : "llmModel 设置为空 → 服务端用默认 gpt-4o-mini; 若该模型在服务商不可用会 502, 请在设置里填真实模型名" };
   } catch (e) { out.stress.llm = { err: String(e).slice(0, 60) }; }
   // 8) 系统层(不可手动确认的全进自检): hook 活性 / AI 共享生效 / 代理链路端到端实测 / 消息 flags 结构
@@ -2585,7 +2554,7 @@ async function runStressTest() {
     // 多模型池状态: 服务端同时常驻的角色模型数(默认10/上限20) — GM 在 模块设置 里改, 客户端自检确认同步
     const cfgX2 = getCfg();
     const pr = await svcRequest(cfgX2.serverUrl, "GET", "/config").catch(() => null);
-    const pj = (pr && pr.json) || {};
+    const pj = (pr && (pr.jsonSafe ? pr.jsonSafe() : (pr.json || {}))) || {};
     out.sys.pool = { ok: !!(pr && pr.ok), max: (pj && pj.max_concurrent_models) || -1, setting: Number(getCfg().maxConcurrentModels) || -1 };
   } catch (e) { out.sys.pool = { err: String(e).slice(0, 60) }; }
   try {
@@ -2610,8 +2579,8 @@ async function runStressTest() {
   } catch (e) { out.sys.lastMsgFlagsErr = String(e).slice(0, 60); }
   let resText = "no-response";
   try {
-    const r = await fetch(`${url}/selftest`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(out), signal: AbortSignal.timeout(15000) });
-    const jd = await r.json().catch(() => ({}));
+    const r = await svcRequest(url, "POST", "/selftest", out, { timeoutMs: 15000 });
+    const jd = (r.jsonSafe ? r.jsonSafe() : (r.json || {})) || {};
     resText = (jd && jd.file) || ("HTTP " + r.status);
   } catch (e) { resText = "err:" + String(e).slice(0, 50); }
   try { ui.notifications.info(`高压测试完成\n${resText}`); } catch (e) { /* noop */ }
@@ -2711,8 +2680,8 @@ async function runSpeedTest() {
   // 报告在线玩家(判断 pl 是否真的在场参与传输测试)
   try { out.onlinePlayers = (game.users || []).filter(u => u.active && !u.isSelf).map(u => u.name || "?"); } catch (e) { out.onlinePlayers = []; }
   const base = String(cfg.serverUrl || "http://127.0.0.1:9880").replace(/\/+$/, "");
-  const api = (path, body) => svcRequest(base, "POST", path, body || {}).then(r => r.json || {}).catch(() => ({}));
-  const getJ = (path) => svcRequest(base, "GET", path).then(r => r.json || {}).catch(() => ({}));
+  const api = (path, body) => svcRequest(base, "POST", path, body || {}).then(r => (r.jsonSafe ? r.jsonSafe() : (r.json || {}))).catch(() => ({}));
+  const getJ = (path) => svcRequest(base, "GET", path).then(r => (r.jsonSafe ? r.jsonSafe() : (r.json || {}))).catch(() => ({}));
   // I1a 心跳探测(确认 pl 端通道活性, 决定传输段预期; pl 无响应=未硬刷新/离线)
   try {
     window.__fvttTTSPingAck = false;
@@ -3139,16 +3108,15 @@ async function runSpeedTest() {
     out.batches.i3 = { rtts, avgMs: Math.round(rtts.filter(x => x >= 0).reduce((a, b) => a + b, 0) / Math.max(1, rtts.filter(x => x >= 0).length)) };
     out.conclusions.push(`I3 API 往返: /status RTT 均值 ${out.batches.i3.avgMs}ms(5 次)`);
   } catch (e) { out.batches.i3 = { err: String(e).slice(0, 80) }; }
-  // S1 合成缓存命中(问题项: 服务器合成长尾/重复合成): GM 端直连 9881, 同文本连发两次 /tts,
-  // 读 X-Fvtt-Cache 头判定二次是否命中; 不经 socket 代理(避免计时污染/误判)。
+  // S1 合成缓存命中(问题项: 服务器合成长尾/重复合成): 同文本连发两次 /tts,
+  // 读 X-Fvtt-Cache 头判定二次是否命中(走 socket 代理, https 页面也可测)。
   try {
-    const _b = getCfg().serverUrl.replace(/\/+$/, "") + "/tts";
     const cacheText = "语音合成缓存验证，同样的句子再合一次。" + (Date.now() % 90000 + 10000);
-    const mk = () => JSON.stringify({ text: cacheText, text_lang: "zh", speed_factor: 1.0, streaming_mode: false, media_type: "mp3", allow_short_ref: true });
+    const mk = () => ({ text: cacheText, text_lang: "zh", speed_factor: 1.0, streaming_mode: false, media_type: "mp3", allow_short_ref: true });
     const doT = async () => {
       const t0 = Date.now();
-      const r = await fetch(_b, { method: "POST", headers: { "Content-Type": "application/json" }, body: mk(), signal: AbortSignal.timeout(90000) });
-      return { ok: r.ok, ms: Date.now() - t0, cache: (r.headers.get("X-Fvtt-Cache") || "miss").trim(), url: r.headers.get("X-Fvtt-Audio-Url") || "" };
+      const r = await svcRequest(getCfg().serverUrl, "POST", "/tts", mk(), { timeoutMs: 90000 });
+      return { ok: r.ok, ms: Date.now() - t0, cache: r.cache || "miss", url: r.audioUrl || "" };
     };
     const r1 = await doT();
     const r2 = await doT();
@@ -3934,13 +3902,8 @@ async function maybePickAvatarRole(message) {
     const names = sendPopCurrentChars().map(x => x.name).filter(Boolean);
     if (!names.length) return;
     const text = String(message.content || (message.data && message.data.content) || "").slice(0, 500);
-    const r = await fetch(`${cfg.serverUrl}/llm/pick-role`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text, roles: names, base: cfg.llmBaseUrl || "https://api.openai.com/v1", key: cfg.llmKey, model: cfg.llmModel || "gpt-4o-mini" }),
-      signal: AbortSignal.timeout(60000),
-    });
-    const j = await r.json().catch(() => ({}));
+    const r = await svcRequest(cfg.serverUrl, "POST", "/llm/pick-role", { text, roles: names, base: cfg.llmBaseUrl || "https://api.openai.com/v1", key: cfg.llmKey, model: cfg.llmModel || "gpt-4o-mini" }, { timeoutMs: 60000 });
+    const j = (r.jsonSafe ? r.jsonSafe() : (r.json || {})) || {};
     if (r.ok && j.ok && j.role && names.includes(j.role)) {
       safeMsgWrite(message, { flags: { [MODULE]: { ...fl, role: j.role, aiPicked: true } } });
     }

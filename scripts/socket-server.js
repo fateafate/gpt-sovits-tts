@@ -67,16 +67,36 @@ async function ttsProxyHandler(data) {
     try {
       const method = String(d.method || "GET").toUpperCase();
       const path = String(d.path || "/status");
+      const hasB64Body = (typeof d.b64Body === "string" && d.b64Body);
       const resp = await fetch(ttsBase(d) + path, {
         method,
-        headers: { "Content-Type": "application/json" },
-        body: (method !== "GET" && d.json !== undefined) ? JSON.stringify(d.json) : undefined,
+        headers: hasB64Body ? { "Content-Type": String(d.contentType || "application/octet-stream") } : { "Content-Type": "application/json" },
+        body: hasB64Body
+          ? Buffer.from(d.b64Body, "base64")
+          : (method !== "GET" && d.json !== undefined) ? JSON.stringify(d.json) : undefined,
         signal: ctrl2.signal
       });
+      if (d.binary) {
+        const ab = await resp.arrayBuffer();
+        return {
+          ok: resp.ok,
+          status: resp.status,
+          b64: Buffer.from(ab).toString("base64"),
+          mime: String(resp.headers.get("content-type") || "application/octet-stream").split(";")[0].trim(),
+          audioUrl: String(resp.headers.get("X-Fvtt-Audio-Url") || resp.headers.get("X-Audio-Url") || "").trim()
+        };
+      }
       const text = await resp.text();
       let json = null;
       try { json = JSON.parse(text); } catch (e) { /* noop */ }
-      return { ok: resp.ok, status: resp.status, json, text: text.slice(0, 2000) };
+      return {
+        ok: resp.ok,
+        status: resp.status,
+        json,
+        text: text.slice(0, 2000),
+        audioUrl: String(resp.headers.get("X-Fvtt-Audio-Url") || resp.headers.get("X-Audio-Url") || "").trim(),
+        cache: String(resp.headers.get("X-Fvtt-Cache") || "miss").trim()
+      };
     } catch (e) {
       return { ok: false, status: 0, err: String((e && e.message) || e || "proxy error").slice(0, 200) };
     } finally {

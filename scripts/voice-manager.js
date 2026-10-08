@@ -181,16 +181,35 @@ export class VoiceManager {
   }
 
   // 服务端请求封装: socket 代理优先(https 页面/跨机场景 Mixed Content 根治) → 直连回退;
-  // 返回伪 Response({ ok, status, json(), text(), headers }) 兼容现有调用形态。
-  _svc(method, path, body) {
-    return svcRequest(this.base, method, path, body).then(r => ({
+  // 返回伪 Response({ ok, status, json(), text(), headers, blob? }) 兼容现有调用形态。
+  _svc(method, path, body, opts = {}) {
+    return svcRequest(this.base, method, path, body, opts).then(r => ({
       ok: r.ok,
       status: r.status || 0,
-      json: () => Promise.resolve(r.json || {}),
-      jsonSafe: () => r.json || {},
-      text: () => Promise.resolve(JSON.stringify(r.json || {})),
+      blob: r.blob || null,
+      json: () => Promise.resolve(r.jsonSafe ? r.jsonSafe() : (r.json || {})),
+      jsonSafe: () => r.jsonSafe ? r.jsonSafe() : (r.json || {}),
+      text: () => Promise.resolve(JSON.stringify((r.jsonSafe ? r.jsonSafe() : (r.json || {})) || {})),
       headers: { get: () => null }
     }));
+  }
+
+  // 二进制上传(音频/角色包): File → base64 → socket 代理(https 下也可用); 响应为 JSON。
+  async _svcFile(method, path, file, { timeoutMs = 300000 } = {}) {
+    if (file && typeof file.arrayBuffer === "function") {
+      try {
+        const ab = await file.arrayBuffer();
+        const bytes = new Uint8Array(ab);
+        let bin = ""; const CH = 0x8000;
+        for (let i = 0; i < bytes.length; i += CH) bin += String.fromCharCode.apply(null, bytes.subarray(i, Math.min(i + CH, bytes.length)));
+        const b64 = btoa(bin);
+        if (b64.length <= 8 * 1024 * 1024) {
+          const r = await svcRequest(this.base, method, path, null, { b64Body: b64, contentType: file.type || "application/octet-stream", timeoutMs });
+          return { ok: r.ok, status: r.status || 0, json: () => Promise.resolve(r.jsonSafe ? r.jsonSafe() : (r.json || {})), jsonSafe: () => r.jsonSafe ? r.jsonSafe() : (r.json || {}), text: () => Promise.resolve(JSON.stringify((r.jsonSafe ? r.jsonSafe() : (r.json || {})) || {})), headers: { get: () => null } };
+        }
+      } catch (e) { /* 回退直连 */ }
+    }
+    return this._svc(method, path, null);
   }
 
   async refresh() {
@@ -782,7 +801,7 @@ function safeAssignments() {
         const f0 = files[0];
         this._setBusy(true, t("vm.importing", "上传主参考音频…"));
         try {
-          const r = await fetch(`${this.base}/ref-import`, { method: "POST", headers: { "Content-Type": f0.type || "audio/wav" }, body: f0, signal: AbortSignal.timeout(120000) });
+          const r = await this._svcFile("POST", "/ref-import", f0);
           const j = await r.json();
           if (!r.ok || !j.ok) throw new Error(j.message || "upload failed");
           mainRefPath = j.ref_audio_path;
@@ -799,7 +818,7 @@ function safeAssignments() {
         if (!f) return;
         this._setBusy(true, t("vm.importingChar", "导入角色包…"));
         try {
-          const r = await fetch(`${this.base}/characters/import`, { method: "POST", headers: { "Content-Type": "application/zip" }, body: f, signal: AbortSignal.timeout(300000) });
+          const r = await this._svcFile("POST", "/characters/import", f);
           const j = await r.json();
           if (!r.ok || !j.ok) throw new Error(j.message || "import failed");
           const prof = loadVoiceProfile();
@@ -841,12 +860,12 @@ function safeAssignments() {
             for (let i = 0; i < extras.length && i < EXTRA_ORDER.length; i++) {
               const f = extras[i], key = EXTRA_ORDER[i];
               try {
-                const u = await fetch(`${this.base}/ref-import?role=${encodeURIComponent(j.name)}&slot=${key}`, { method: "POST", headers: { "Content-Type": f.type || "audio/wav" }, body: f, signal: AbortSignal.timeout(120000) });
+                const u = await this._svcFile("POST", "/ref-import?role=" + encodeURIComponent(j.name) + "&slot=" + encodeURIComponent(key), f);
                 const uj = await u.json();
                 if (!u.ok || !uj.ok) throw new Error(uj.message || "upload failed");
                 let prompt = "", lang = "";
                 try {
-                  const a = await fetch(`${this.base}/asr?lang=auto`, { method: "POST", headers: { "Content-Type": f.type || "audio/wav" }, body: f, signal: AbortSignal.timeout(180000) });
+                  const a = await this._svcFile("POST", "/asr?lang=auto", f);
                   if (a.ok) { const aj = await a.json(); if (aj.ok && aj.text) { prompt = aj.text; lang = aj.lang || ""; } }
                 } catch (e) { /* 转写失败可手填 */ }
                 await this._svc("POST", "/characters/update", { name: j.name, emotions: { [key]: { prompt, lang } } });
@@ -912,13 +931,13 @@ function safeAssignments() {
         if (!f) return;
         this._setBusy(true, t("vm.slotUploading", "上传语气音频…"));
         try {
-          const r = await fetch(`${this.base}/ref-import?role=${encodeURIComponent(name)}&slot=${key}`, { method: "POST", headers: { "Content-Type": f.type || "audio/wav" }, body: f, signal: AbortSignal.timeout(120000) });
+          const r = await this._svcFile("POST", "/ref-import?role=" + encodeURIComponent(name) + "&slot=" + encodeURIComponent(key), f);
           const j = await r.json();
           if (!r.ok || !j.ok) throw new Error(j.message || "upload failed");
           // 自动转写台词
           let prompt = "", lang = "";
           try {
-            const a = await fetch(`${this.base}/asr?lang=auto`, { method: "POST", headers: { "Content-Type": f.type || "audio/wav" }, body: f, signal: AbortSignal.timeout(180000) });
+            const a = await this._svcFile("POST", "/asr?lang=auto", f);
             if (a.ok) { const aj = await a.json(); if (aj.ok && aj.text) { prompt = aj.text; lang = aj.lang || ""; } }
           } catch (e) { /* 转写失败可手填 */ }
           const up = await this._svc("POST", "/characters/update", { name, emotions: { [key]: { prompt, lang } } });
@@ -1006,7 +1025,7 @@ function safeAssignments() {
     const box = body.querySelector("#fvtt-tts-vm-samples");
     if (!box) return;
     try {
-      const r = await fetch(`${this.base}/samples?role=${encodeURIComponent(name)}`, { signal: AbortSignal.timeout(10000) });
+      const r = await this._svc("GET", "/samples?role=" + encodeURIComponent(name));
       const j = await r.json();
       if (!r.ok || !j.ok) throw new Error(j.message || "load failed");
       const items = j.samples || [];
@@ -1025,9 +1044,9 @@ function safeAssignments() {
         const file = row.dataset.file;
         row.querySelector(".vm-smp-play").addEventListener("click", async () => {
           try {
-            const a = await fetch(`${this.base}/samples/audio?role=${encodeURIComponent(name)}&file=${encodeURIComponent(file)}`, { signal: AbortSignal.timeout(20000) });
-            if (!a.ok) { ui.notifications.warn(t("vm.samplesPlayFail", "试听失败")); return; }
-            const blob = await a.blob();
+            const a = await this._svc("GET", "/samples/audio?role=" + encodeURIComponent(name) + "&file=" + encodeURIComponent(file), { binary: true });
+            if (!a.ok || !a.blob) { ui.notifications.warn(t("vm.samplesPlayFail", "试听失败")); return; }
+            const blob = a.blob;
             const url = URL.createObjectURL(blob);
             const au = new Audio(url);
             au.onended = () => URL.revokeObjectURL(url);
@@ -1076,9 +1095,9 @@ function safeAssignments() {
     if (!name) return;
     this._setBusy(true, t("vm.exporting", "导出角色…"));
     try {
-      const r = await fetch(`${this.base}/characters/export?name=${encodeURIComponent(name)}`, { signal: AbortSignal.timeout(180000) });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const blob = await r.blob();
+      const r = await this._svc("GET", "/characters/export?name=" + encodeURIComponent(name), { binary: true });
+      if (!r.ok || !r.blob) throw new Error(`HTTP ${r.status}`);
+      const blob = r.blob;
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
       a.download = `${name}.char`;

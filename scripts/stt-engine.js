@@ -6,6 +6,8 @@
 
 const SR = () => window.SpeechRecognition || window.webkitSpeechRecognition;
 
+import { svcRequest } from "./tts-engine.js";
+
 export const BrowserSTT = {
   supported() {
     return !!SR();
@@ -78,18 +80,16 @@ export const ServerSTT = {
     const finalize = async (blob, mime) => {
       if (onState) onState(false);
       try {
-        const resp = await fetch(`${base}/asr?lang=${encodeURIComponent(lang)}`, {
-          method: "POST",
-          headers: { "Content-Type": mime || "audio/webm" },
-          body: blob,
-          signal: AbortSignal.timeout(60000)
-        });
-        if (!resp.ok) {
-          let d = "";
-          try { d = (await resp.text()).slice(0, 300); } catch (e) { /* noop */ }
-          throw new Error(`ASR 服务返回 ${resp.status}: ${d}`);
-        }
-        const data = await resp.json();
+        // 上传经 socket 代理(https 页面/跨机场景 Mixed Content 根治): Blob → base64 → 服务端转发
+        const ab = await blob.arrayBuffer();
+        const bytes = new Uint8Array(ab);
+        let bin = ""; const CH = 0x8000;
+        for (let i = 0; i < bytes.length; i += CH) bin += String.fromCharCode.apply(null, bytes.subarray(i, Math.min(i + CH, bytes.length)));
+        const b64 = btoa(bin);
+        if (b64.length > 8 * 1024 * 1024) throw new Error("音频过大(>8MB), 请缩短录音");
+        const r = await svcRequest(base, "POST", "/asr?lang=" + encodeURIComponent(lang), null, { b64Body: b64, contentType: mime || "audio/webm", timeoutMs: 60000 });
+        if (!r.ok) throw new Error(`ASR 服务返回 ${r.status || "?"}: ${(r.error && r.error.message) || r.text() || ""}`.slice(0, 300));
+        const data = (r.jsonSafe ? r.jsonSafe() : null) || {};
         if (data.ok && data.text) onResult && onResult(data.text);
         else onError && onError(data.message || "empty");
       } catch (e) {
