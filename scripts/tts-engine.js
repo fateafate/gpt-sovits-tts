@@ -4,6 +4,39 @@
  */
 
 /* ---------- 播放队列 ---------- */
+
+/** src 规范化键: 跨路径形态(相对/绝对/data URI)统一 → 用于跨通道去重(官方广播 + flags 写回双播根治) */
+export function normPlayKey(s) {
+  try {
+    const t = String(s || "").trim();
+    if (!t) return "";
+    if (/^data:/i.test(t)) { return "data:" + t.slice(0, 48); }        // data URI: 前 48 字符签名(同段音频同签名)
+    if (/^https?:\/\//i.test(t)) { try { return new URL(t).pathname; } catch (e) { return t; } }
+    if (t.startsWith("/")) return t;
+    return "/" + t;
+  } catch (e) { return ""; }
+}
+
+/** 登记"本端已播放" src(规范化键, 30s 过期), 供各播放路径去重 */
+export function markPlayedSrc(src) {
+  try {
+    const k = normPlayKey(src);
+    if (!k) return;
+    window.__fvttTTSPlayedSrcs = window.__fvttTTSPlayedSrcs || new Set();
+    window.__fvttTTSPlayedSrcs.add(k);
+    setTimeout(() => { try { window.__fvttTTSPlayedSrcs.delete(k); } catch (e) { /* noop */ } }, 30000);
+  } catch (e) { /* noop */ }
+}
+
+/** 本端是否已播过该 src(规范化键匹配) */
+export function hasPlayedSrc(src) {
+  try {
+    const k = normPlayKey(src);
+    if (!k) return false;
+    return !!(window.__fvttTTSPlayedSrcs && window.__fvttTTSPlayedSrcs.has(k));
+  } catch (e) { return false; }
+}
+
 export class PlaybackQueue {
   constructor({ onState = null } = {}) {
     this.items = [];
@@ -69,16 +102,16 @@ export class PlaybackQueue {
  * 优先走 Foundry 音频通道(game.audio.play, 不绑 interface 通道 → 不受"界面音效"开关影响, 玩家一定听得到);
  * Foundry 播放失败(data URI 等)或环境缺失时退回原生 Audio。 */
 export function audioPlay(src, { volume = 1, onStart = null, push = true } = {}) {
-  // 去重: 本端已播过的 src(data URI) → 跳过(audioData 兜底不再重复播, 双通道合一)
+  // 去重: 本端已播过的 src(规范化键, 覆盖官方广播/本地播放/flags 兜底各通道) → 跳过(根治双播)
   try {
-    if (window.__fvttTTSPlayedSrcs && window.__fvttTTSPlayedSrcs.has(String(src || ""))) return Promise.resolve();
+    if (hasPlayedSrc(src)) return Promise.resolve();
   } catch (e) { /* noop */ }
   // GM 全局静音: main.js 维护 window.__fvttTTSMutedFlag — 静音时所有播放路径(本地/广播/重听/预加载/flags)统一跳过(返回已解决 Promise)
   try { if (window.__fvttTTSMutedFlag === true) return Promise.resolve(); } catch (e) { /* noop */ }
   // 播放计数(速度测试/重复播放回归用): 每次真实播放 +1(静音时不计)
   try { window.__fvttTTSPlayCount = (window.__fvttTTSPlayCount || 0) + 1; } catch (e) { /* noop */ }
-  // 记录本端已播 src(防 audioData 兜底重复; 30s 过期)
-  try { window.__fvttTTSPlayedSrcs = window.__fvttTTSPlayedSrcs || new Set(); window.__fvttTTSPlayedSrcs.add(String(src || "")); setTimeout(() => { try { window.__fvttTTSPlayedSrcs.delete(String(src || "")); } catch (e) { /* noop */ } }, 30000); } catch (e) { /* noop */ }
+  // 记录本端已播 src(规范化键, 防 audioData 兜底/官方广播后 flags 写回重复; 30s 过期)
+  markPlayedSrc(src);
   const vol = Math.min(1, Math.max(0, Number(volume) || 0));
   // 单通道原则: 播放统一走 Foundry 内置语音通道(AudioHelper) — 本地播放 + push(默认 true) 时
   // Foundry 官方 socket 广播 playAudio → 所有客户端几乎同时经同一通道播放("主持人听到时玩家也能听到")。

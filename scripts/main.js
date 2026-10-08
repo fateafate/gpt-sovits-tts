@@ -4,7 +4,7 @@
  *       麦克风听写(浏览器 Web Speech / 服务端 /asr) 直接发送或插入输入框
  *       消息重听按钮、状态指示灯、/ttssay 等命令、game.gptSoVitsTTS 宏 API
  */
-import { PlaybackQueue, audioPlay, webSpeechSpeak, gptSovitsSynth, gptSovitsStatus, synthEdge, svcRequest, installModuleSocket, moduleEmit } from "./tts-engine.js";
+import { PlaybackQueue, audioPlay, webSpeechSpeak, gptSovitsSynth, gptSovitsStatus, synthEdge, svcRequest, installModuleSocket, moduleEmit, normPlayKey, hasPlayedSrc, markPlayedSrc } from "./tts-engine.js";
 import { installRunnerAssignUI } from "./voice-runner.js";
 import { installGmProxy } from "./gm-proxy.js";
 import { BrowserSTT, ServerSTT } from "./stt-engine.js";
@@ -3364,6 +3364,19 @@ Hooks.once("ready", () => {
   setInterval(() => { refreshQuickUI(); }, 30000);
   // socket: 接收发言者广播的 TTS 音频(全员同声)
   if (game.socket && typeof game.socket.on === "function") { (window.__fvttTTSHooks = window.__fvttTTSHooks || {}).socketOn = true; game.socket.on(MODULE, handleSocketTts); }
+  // 监听 Foundry 官方 playAudio 广播(任意端 AudioHelper.play push=true 触发): 记录 src →
+  // update/create hook 收到 flags 写回时跳过(根治"官方广播 + flags 写回"双播; 官方广播经内置监听播放, 本模块只记录去重不重复播)
+  if (game.socket && typeof game.socket.on === "function") {
+    game.socket.on("playAudio", (data) => {
+      try {
+        const k = normPlayKey((data && data.src) || "");
+        if (!k) return;
+        window.__fvttTTSPlayedSrcs = window.__fvttTTSPlayedSrcs || new Set();
+        window.__fvttTTSPlayedSrcs.add(k);
+        setTimeout(() => { try { window.__fvttTTSPlayedSrcs.delete(k); } catch (e) { /* noop */ } }, 30000);
+      } catch (e) { /* noop */ }
+    });
+  }
   // 语音运行者服务声明: 本机跑服务则定期广播(玩家中途加入也能看到)
   setTimeout(() => { announceTtsService(); }, 6000);
   setInterval(() => { announceTtsService(); }, 60000);
@@ -3764,6 +3777,21 @@ Hooks.on("updateChatMessage", (message, changed) => {
     // 去重改由 playedIds(本机已播登记) + audioPlay 同 src 去重(__fvttTTSPlayedSrcs) 双重保证: 本机不重复, 他端不漏播
     if (flags.speedTestAck) return;   // 回执消息无音频; 速度测试消息不跳过(测试=实际, 走同一播放路径, create 时已登记 playedIds 防重复)
     if (playedIds.has(message.id)) return;   // socket 广播/本地已播过则不重复
+    // 官方 playAudio 广播已播(src 规范化键命中) → 跳过 — 根治"官方广播(1.3.9 push) + flags 写回"双播:
+    // GM 说话 → 全员官方广播播一次 + flags 写回 → 本端 update hook 又来一次 → 此处拦截第二次
+    try {
+      const _plk = (() => {
+        try {
+          if (flags.audioUrl) return normPlayKey(flags.audioUrl);
+          if (flags.audioData && typeof flags.audioData === "string") return normPlayKey(flags.audioData);
+          return "";
+        } catch (e) { return ""; }
+      })();
+      if (_plk && hasPlayedSrc(_plk)) {
+        try { playedIds.add(message.id); setTimeout(() => { try { playedIds.delete(message.id); } catch (e) { /* noop */ } }, 30000); } catch (e) { /* noop */ }
+        return;
+      }
+    } catch (e) { /* noop */ }
     playedIds.add(message.id);   // 先登记(防 flags 再次 update 的 fetch 竞态重复); 拉取失败再放行重试
     setTimeout(() => { try { playedIds.delete(message.id); } catch (e) { /* noop */ } }, 30000);
     // 🔊 统一走 FVTT 内部(界面)语音通道: 消息带 Foundry 静态路径(audioUrl, 相对 /modules/...) → 官方 AudioHelper 播放
