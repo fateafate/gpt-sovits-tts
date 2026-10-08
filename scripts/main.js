@@ -820,7 +820,14 @@ function applyPortraitSize() {
 
 function stopSpeaking() { queue.stop(); }
 // GM 全局静音: world 设置(restricted, 仅 GM 可改) → 所有客户端 updateSetting 同步 → 静音时停播+禁播
-const isGmMuted = () => { try { return game.settings.get(MODULE, "gmMute") === true; } catch (e) { return false; } };
+const isGmMuted = () => {
+  try {
+    // "GM 全局静音" 仅作用于 GM 本机: 玩家端永不继承 GM 静音设置
+    // (否则 GM 开静音/自检临时静音残留 → 全员 audioPlay 跳过 → 玩家端永远"未检测到播放")
+    if (!game.user || !game.user.isGM) return false;
+    return game.settings.get(MODULE, "gmMute") === true;
+  } catch (e) { return false; }
+};
 const syncMuteFlag = () => { try { window.__fvttTTSMutedFlag = isGmMuted(); } catch (e) { /* noop */ } };
 
 function evaluateMessage(message) {
@@ -2679,6 +2686,7 @@ async function runPlayerSelfTest() {
       } catch (e) { /* noop */ }
       await new Promise(r => setTimeout(r, 400));
     }
+    pass("静音标志", (() => { try { return window.__fvttTTSMutedFlag === true ? "静音中(残留gmMute会致播放全跳过)" : "未静音"; } catch (e) { return "?"; } })(), true);
     pass("播放通道", impl === "official" ? "官方界面通道 ✓" : impl ? ("走" + impl + (playErr ? "·" + playErr : "")) : "未检测到播放" + (playErr ? "·" + playErr : ""), impl === "official");
     pass("总耗时", ((Date.now() - sentAt) / 1000).toFixed(1) + "s(发送→播放)", !!audioUrl || !!audioData);
     finishSelfTest(steps);
@@ -2924,18 +2932,21 @@ async function runSpeedTest() {
   } catch (e) { out.bugs.digit = { err: String(e).slice(0, 80) }; }
   // C2 多模型池状态
   try { const st2 = await getJ("/status"); out.bugs.pool = st2.pool; } catch (e) { out.bugs.pool = { err: String(e).slice(0, 80) }; }
-  // C3 全局静音抑制: 静音时播放应被 audioPlay 提前跳过(计数不增)
+  // C3 全局静音抑制: 静音时播放应被 audioPlay 提前跳过(计数不增); try/finally 保证恢复设置, 防残留全员静音
   try {
     const before = window.__fvttTTSPlayCount || 0;
     const wasMute = !!game.settings.get(MODULE, "gmMute");
-    if (game.user && game.user.isGM) { await game.settings.set(MODULE, "gmMute", true); await new Promise(r => setTimeout(r, 700)); }
-    const t0 = Date.now();
-    try { await audioPlay("data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0AAAAAKcGxheXRlcg==", { volume: 0 }); } catch (e) { /* noop */ }
-    await new Promise(r => setTimeout(r, 600));
-    const delta = (window.__fvttTTSPlayCount || 0) - before;
-    if (game.user && game.user.isGM) { await game.settings.set(MODULE, "gmMute", wasMute); await new Promise(r => setTimeout(r, 700)); }
-    out.bugs.mute = { ok: delta === 0, delta, note: "静音时 audioPlay 提前跳过(新增播放应 0)" };
-    out.conclusions.push(`C3 全局静音: ${delta === 0 ? "抑制生效" : "异常(新增播放 " + delta + ")"}`);
+    try {
+      if (game.user && game.user.isGM) { await game.settings.set(MODULE, "gmMute", true); await new Promise(r => setTimeout(r, 700)); }
+      const t0 = Date.now();
+      try { await audioPlay("data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0AAAAAKcGxheXRlcg==", { volume: 0 }); } catch (e) { /* noop */ }
+      await new Promise(r => setTimeout(r, 600));
+      const delta = (window.__fvttTTSPlayCount || 0) - before;
+      out.bugs.mute = { ok: delta === 0, delta, note: "静音时 audioPlay 提前跳过(新增播放应 0)" };
+      out.conclusions.push(`C3 全局静音: ${delta === 0 ? "抑制生效" : "异常(新增播放 " + delta + ")"}`);
+    } finally {
+      if (game.user && game.user.isGM) { await game.settings.set(MODULE, "gmMute", wasMute); await new Promise(r => setTimeout(r, 700)); }
+    }
   } catch (e) { out.bugs.mute = { err: String(e).slice(0, 80) }; }
   // C4 播放计数/去重回归: 记录本页累计播放计数(重复播放修复后每消息只播一次, 计数供对照)
   try { out.bugs.playCount = { total: window.__fvttTTSPlayCount || 0, note: "重复播放修复: speak/预载/flags/广播四条路径统一 playedIds 去重(每消息一次)" }; } catch (e) { out.bugs.playCount = { err: String(e).slice(0, 60) }; }
