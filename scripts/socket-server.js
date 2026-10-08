@@ -216,6 +216,8 @@ async function ttsProxyHandler(data) {
       const m = String(audioUrl || "").match(/([^/\\]+\.(?:mp3|wav))$/i);
       if (m) writeAudioExport(m[1], buf);
     } catch (e) { /* noop */ }
+    // 玩家自测报告兜底: 合成后延迟从聊天消息抓最新 playerSelfTestResult 落盘(不依赖客户端 emit, 旧版客户端也覆盖)
+    try { if (path === "/tts" || path === "/tts/edge") setTimeout(pullSelftestReport, 4000); } catch (e) { /* noop */ }
     return { ok: true, b64, audioUrl, ms: Date.now() - t0, status: 200 };
   } catch (e) {
     const em = String((e && e.message) || e || "proxy error");
@@ -224,6 +226,39 @@ async function ttsProxyHandler(data) {
   } finally {
     clearTimeout(timer);
   }
+}
+
+// 服务端主动抓取玩家自测报告: 扫最近聊天消息里的 playerSelfTestResult(客户端 ChatMessage.create 回执必达,
+// 不受客户端版本/emit 失败影响) → 写 FVTT 主机 server/player-selftest-<user>.json
+function pullSelftestReport() {
+  try {
+    const msgs = (game.messages && game.messages.contents) || [];
+    let best = null;
+    for (const m of msgs) {
+      const f = (m && m.flags && m.flags[MODULE_ID]) || {};
+      if (f.playerSelfTestResult && f.playerSelfTestResult.steps) {
+        const t = Number(f.playerSelfTestResult.ts) || 0;
+        if (!best || t > (best._t || 0)) {
+          best = Object.assign({}, f.playerSelfTestResult, {
+            _t: t,
+            from: String((m.author && m.author.name) || f.playerSelfTestResult.from || "player"),
+            msgTs: m.timestamp || null
+          });
+        }
+      }
+    }
+    if (best) {
+      const _p = (game.modules.get(MODULE_ID) && game.modules.get(MODULE_ID).path) || "";
+      if (_p) {
+        const dir = _pathM.join(_p, "server");
+        try { _fs.mkdirSync(dir, { recursive: true }); } catch (e) { /* noop */ }
+        const user = String(best.from || "player").replace(/[\\/:*?"<>|]/g, "_").slice(0, 40) || "player";
+        const fn = _pathM.join(dir, `player-selftest-${user}.json`);
+        const { _t, ...rest } = best;
+        _fs.writeFileSync(fn, JSON.stringify({ ts: Date.now(), server: "fvtt-pull", ...rest }, null, 1), "utf8");
+      }
+    }
+  } catch (e) { /* noop */ }
 }
 
 Hooks.once("init", () => {
