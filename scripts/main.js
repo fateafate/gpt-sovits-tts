@@ -2614,12 +2614,21 @@ async function runPlayerSelfTest() {
     if (game.user && game.user.isGM) {
       let ok2 = false;
       try { ok2 = await speak("语音合成与播放测试正常。", { lang: "zh", skipAiEmotion: true }); } catch (e) { /* noop */ console.error(e); }
-      await new Promise(r => setTimeout(r, 1000));
-      let impl = "";
-      try { impl = window.__fvttTTSPlayImpl || ""; } catch (e) { /* noop */ }
+      // 轮询等播放真正发生(合成+队列可能数秒, 固定 1s 常误判"未检测到"): 最长 20s
+      let impl = "", playErr = "";
+      const tEnd = Date.now() + 20000;
+      while (Date.now() < tEnd) {
+        try {
+          const c0 = window.__fvttTTSCnt || {};
+          impl = window.__fvttTTSPlayImpl || (c0.official > (c0.native || 0) ? "official" : (c0.native || 0) > 0 ? "native" : "");
+          playErr = window.__fvttTTSPlayErr || "";
+          if (impl) break;
+        } catch (e) { /* noop */ }
+        await new Promise(r => setTimeout(r, 400));
+      }
       pass("合成播出", ok2 ? "成功 ✓" : "失败", !!ok2);
-      pass("播放通道", impl === "official" ? "官方界面通道 ✓" : impl ? ("走" + impl) : "未检测到播放", impl === "official");
-      pass("说明", "GM 端本地直连自测", true);
+      pass("播放通道", impl === "official" ? "官方界面通道 ✓" : impl ? ("走" + impl + (playErr ? "·" + playErr : "")) : "未检测到播放" + (playErr ? "·" + playErr : ""), impl === "official");
+      pass("说明", "GM 端本地直连自测" + (playErr ? " · 官方失败原因: " + playErr : ""), true);
       finishSelfTest(steps); return;
     }
     let gmOnline = false, gmName = "";
@@ -2650,9 +2659,19 @@ async function runPlayerSelfTest() {
       pass("音频写回", "超时未收到(代理不通/合成排队/无GM代理)", false);
     }
     await new Promise(r => setTimeout(r, 1500));
-    let impl = "";
-    try { impl = window.__fvttTTSPlayImpl || ""; if (!impl) { const c0 = window.__fvttTTSCnt || {}; impl = (c0.official || 0) > (c0.native || 0) ? "official" : (c0.native || 0) > 0 ? "native" : ""; } } catch (e) { /* noop */ }
-    pass("播放通道", impl === "official" ? "官方界面通道 ✓" : impl ? ("走" + impl) : "未检测到播放", impl === "official");
+    // 播放通道: 轮询等待本端真实播放发生(updateChatMessage/兜底触发 audioPlay 后设置); 最长 15s
+    let impl = "", playErr = "";
+    const tEnd2 = Date.now() + 15000;
+    while (Date.now() < tEnd2) {
+      try {
+        const c0 = window.__fvttTTSCnt || {};
+        impl = window.__fvttTTSPlayImpl || (c0.official > (c0.native || 0) ? "official" : (c0.native || 0) > 0 ? "native" : "");
+        playErr = window.__fvttTTSPlayErr || "";
+        if (impl) break;
+      } catch (e) { /* noop */ }
+      await new Promise(r => setTimeout(r, 400));
+    }
+    pass("播放通道", impl === "official" ? "官方界面通道 ✓" : impl ? ("走" + impl + (playErr ? "·" + playErr : "")) : "未检测到播放" + (playErr ? "·" + playErr : ""), impl === "official");
     pass("总耗时", ((Date.now() - sentAt) / 1000).toFixed(1) + "s(发送→播放)", !!audioUrl || !!audioData);
     finishSelfTest(steps);
   } catch (e) {

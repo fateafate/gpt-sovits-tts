@@ -127,8 +127,8 @@ export function audioPlay(src, { volume = 1, onStart = null, push = true } = {})
         const ret = AH.play(opts, !!push);
         if (ret && typeof ret.then === "function") {
           ret.then(
-            () => { try { window.__fvttTTSPlayImpl = "official"; } catch (e) { /* noop */ } try { if (onStart) onStart(); } catch (e) { /* noop */ } setTimeout(done, 1500); },
-            () => { try { window.__fvttTTSCnt.native++; } catch (e) { /* noop */ } try { window.__fvttTTSPlayImpl = "native"; } catch (e) { /* noop */ } nativePlay(); }
+            () => { try { window.__fvttTTSPlayImpl = "official"; window.__fvttTTSPlayErr = ""; } catch (e) { /* noop */ } try { if (onStart) onStart(); } catch (e) { /* noop */ } setTimeout(done, 1500); },
+            (reason) => { try { window.__fvttTTSCnt.native++; window.__fvttTTSPlayImpl = "native"; window.__fvttTTSPlayErr = String((reason && reason.message) || reason || "official-fail").slice(0, 200); } catch (e) { /* noop */ } nativePlay(); }
           );
           return;
         }
