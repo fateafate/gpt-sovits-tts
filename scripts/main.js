@@ -2669,20 +2669,37 @@ async function runPlayerSelfTest() {
       pass("音频写回", "超时未收到(代理不通/合成排队/无GM代理)", false);
     }
     await new Promise(r => setTimeout(r, 1500));
-    // 播放通道: 轮询等待本端真实播放发生(updateChatMessage/兜底触发 audioPlay 后设置); 最长 15s
-    let impl = "", playErr = "";
+    // 播放通道: 自测消息 author=自己, 被动播放路径(create/update hook) isSelf 跳过不会自动播 —
+    // 写回后**主动 audioPlay** 验证本机播放能力(同"别人发语音"的真实播放路径), 再轮询 impl/轨迹
+    let impl = "", playErr = "", playTrace = [];
+    const _tPlay0 = Date.now();
+    if (audioData || audioUrl) {
+      let playSrc = audioData || "";
+      if (!playSrc && audioUrl) {
+        try {
+          playSrc = /^https?:\/\//i.test(audioUrl) ? audioUrl
+            : (audioUrl.startsWith("/modules/") || audioUrl.startsWith("/data/")) ? new URL(audioUrl, window.location.origin).href
+            : getCfg().serverUrl.replace(/\/+$/, "") + audioUrl;
+        } catch (e) { playSrc = audioUrl; }
+      }
+      try { await audioPlay(playSrc, { volume: getCfg().volume, push: false }); } catch (e) { playErr = String((e && e.message) || e).slice(0, 80); }
+    } else {
+      playErr = "无音频可播(写回失败)";
+    }
     const tEnd2 = Date.now() + 15000;
     while (Date.now() < tEnd2) {
       try {
         const c0 = window.__fvttTTSCnt || {};
         impl = window.__fvttTTSPlayImpl || (c0.official > (c0.native || 0) ? "official" : (c0.native || 0) > 0 ? "native" : "");
-        playErr = window.__fvttTTSPlayErr || "";
+        playErr = window.__fvttTTSPlayErr || playErr;
+        playTrace.push({ t: Date.now() - _tPlay0, impl, o: c0.official || 0, n: c0.native || 0, err: (playErr || "").slice(0, 80) });
         if (impl) break;
       } catch (e) { /* noop */ }
       await new Promise(r => setTimeout(r, 400));
     }
     pass("静音标志", (() => { try { return window.__fvttTTSMutedFlag === true ? "静音中(残留gmMute会致播放全跳过)" : "未静音"; } catch (e) { return "?"; } })(), true);
     pass("播放通道", impl === "official" ? "官方界面通道 ✓" : impl ? ("走" + impl + (playErr ? "·" + playErr : "")) : "未检测到播放" + (playErr ? "·" + playErr : ""), impl === "official");
+    pass("播放轨迹", (playErr ? "err:" + playErr + " " : "") + "检测" + playTrace.length + "次 " + JSON.stringify(playTrace.slice(0, 10)), true);
     pass("总耗时", ((Date.now() - sentAt) / 1000).toFixed(1) + "s(发送→播放)", !!audioUrl || !!audioData);
     finishSelfTest(steps);
   } catch (e) {
