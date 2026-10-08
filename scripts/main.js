@@ -29,6 +29,7 @@ const SETTINGS = [
   ["engine",        { type: String,  scope: "client", default: "gptsovits",      choices: { gptsovits: "GPT-SoVITS", webspeech: "Web Speech" }, name: "settings.engine.name", hint: "settings.engine.hint" }],
   ["serverUrl",     { type: String,  scope: "client", default: autoServerUrl(), name: "settings.serverUrl.name", hint: "settings.serverUrl.hint" }],
   ["voiceServerUrl",{ type: String,  scope: "world",  default: "",                name: "settings.voiceServerUrl.name", hint: "settings.voiceServerUrl.hint" }],
+  ["voiceRunnerMap",{ type: String,  scope: "world",  default: "",  restricted: true, name: "settings.voiceRunnerMap.name", hint: "settings.voiceRunnerMap.hint" }],
   ["triggerMode",   { type: String,  scope: "client", default: "both",           choices: { send: "settings.triggerMode.send", typing: "settings.triggerMode.typing", both: "settings.triggerMode.both", manual: "settings.triggerMode.manual" }, name: "settings.triggerMode.name", hint: "settings.triggerMode.hint" }],
   ["speakSelf",     { type: Boolean, scope: "client", default: true,            name: "settings.speakSelf.name",      hint: "settings.speakSelf.hint" }],
   ["speakOthers",   { type: Boolean, scope: "client", default: true,            name: "settings.speakOthers.name",    hint: "settings.speakOthers.hint" }],

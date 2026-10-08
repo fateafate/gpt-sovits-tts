@@ -45,14 +45,39 @@ async function ttsMetaHandler(data) {
   }
 }
 
-// 代理转发目标(语音运行者 = 引擎机器, 与 Foundry 所在机器解耦 — 市场级: 多人用别的电脑跑 FVTT, 引擎只装一台机器):
-//  ① 世界设置 voiceServerUrl(引擎机器可达地址: frp https / 局域网 IP / 同一主机 127.0.0.1:9881) — GM 在配置里改=把跑语音指向那台机器
-//  ② 默认 Foundry 主机本机 9881(引擎与 Foundry 同机的开箱场景)
+// 代理转发目标(语音运行者 = 谁生成语音, 与 Foundry 所在机器解耦 — 市场级: 多人用别的电脑跑 FVTT, 引擎只装一台机器):
+//  ① 世界设置 voiceRunnerMap(GM 指定"谁的语音由哪个玩家(pl)的电脑生成", 服务端自动取该玩家在线 IP:9881) — 压力分摊到各 pl 电脑
+//  ② 世界设置 voiceServerUrl(引擎机器可达地址) — 未分配用户的默认引擎机
+//  ③ 默认 Foundry 主机本机 9881(引擎与 Foundry 同机的开箱场景)
 // 仅接受 http/https(防 SSRF); 浏览器永不直连引擎 — 全部经这里服务端转发(无 Mixed Content/证书/跨机差异)。
+// "由谁生成"= 指定某位玩家 → 服务端查该玩家当前连接 IP(Foundry users.connections) → http://<ip>:9881
+function voiceRunnerFor(d) {
+  const uname = String((d && d.user) || "").trim();
+  if (!uname) return "";
+  let map = "";
+  try { map = String(game.settings.get(MODULE_ID, "voiceRunnerMap") || ""); } catch (e) { return ""; }
+  for (const ln of String(map).split(/\r?\n/)) {
+    const eq = ln.indexOf("=");
+    if (eq < 0) continue;
+    if (String(ln.slice(0, eq)).trim() === uname) {
+      const who = String(ln.slice(eq + 1)).trim();
+      if (!who) return "";
+      try {
+        const u = (game.users && (game.users.find(x => x.name === who) || game.users.get(who))) || null;
+        const conn = (u && Array.isArray(u.connections) && u.connections[0]) || null;
+        const ip = String((conn && conn.address) || "").trim();
+        if (/^[\d.:]+$/.test(ip) && ip.includes(".")) return `http://${ip}:9881`;
+      } catch (e) { /* noop */ }
+      return "";
+    }
+  }
+  return "";
+}
 function ttsBase(d) {
+  const byUser = voiceRunnerFor(d);
   let fromSetting = "";
   try { fromSetting = String(game.settings.get(MODULE_ID, "voiceServerUrl") || "").trim(); } catch (e) { /* 设置未注册/读不到 */ }
-  const raw = fromSetting || SERVER_TTS;
+  const raw = byUser || fromSetting || SERVER_TTS;
   if (/^https?:\/\/[^/\s]+/i.test(raw)) return raw.replace(/\/+$/, "");
   return SERVER_TTS;
 }

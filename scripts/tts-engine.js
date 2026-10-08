@@ -195,7 +195,7 @@ export async function gptSovitsSocketProxy(payload, { engine = "gpt", timeoutMs 
       // 直接 emit: 若服务端已注册 "gpt-sovits-tts.tts-proxy"(v13 register API), emit 返回 Promise 携带服务端结果;
       // 未注册(未重启/旧版)时 emit 返回 undefined → finish(null) → 调用方退回直连。**不要在客户端判 register 存在与否**
       // —— 那是服务端 API, 客户端没有, 否则代理永远走不通(玩家端合成失败根因)。
-      const pr = game.socket.emit("gpt-sovits-tts.tts-proxy", Object.assign({}, payload, { engine }));
+      const pr = game.socket.emit("gpt-sovits-tts.tts-proxy", Object.assign({}, payload, { engine, user: (() => { try { return (game.user && game.user.name) || ""; } catch (e) { return ""; } })() }));
       if (pr && typeof pr.then === "function") {
         pr.then((r) => finish(r || null)).catch(() => finish(null));
       } else finish(null);
