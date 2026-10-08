@@ -563,10 +563,15 @@ async function speak(text, { lang = null, sender = "", refAudioPath = null, prom
         } catch (e) { /* noop */ }
         const modPath = _modulePath(audioUrl);   // 官方内部通道: 本端自己的 origin 绝对 URL 走官方 Sound(跨机广播 src 不通用, 已弃用 push)
         let cleanupObj = null;
-        // 播放源: data URI 优先(必可播, 且与 update 兜底同 src → audioPlay 内 __fvttTTSPlayedSrcs 去重防重复);
-        // URL 次之(本端同源拉取); 都没有 → blob URL
-        let url4 = playSrc || (modPath ? (() => { try { return new URL(modPath, window.location.origin).href; } catch (e) { return modPath; } })() : "") || "";
-        if (!url4) { const o = URL.createObjectURL(blob); url4 = o; cleanupObj = o; }
+        // 播放源(本地): blob URL 优先(Sound 加载真实媒体源最稳, 必走官方界面通道, 音量跟随界面音量); URL 次之; data URI 兜底
+        let url4 = "";
+        if (blob && blob.size > 0) {
+          try { const o = URL.createObjectURL(blob); if (o) { url4 = o; cleanupObj = o; } } catch (e) { /* fallthrough */ }
+        }
+        if (!url4 && modPath) {
+          try { url4 = new URL(modPath, window.location.origin).href; } catch (e) { url4 = modPath; }
+        }
+        if (!url4 && playSrc) url4 = playSrc;
         // push:false — 官方广播的 src 只能是单一绝对 URL(跨机 localhost/frp 不通用), 且 Sound 需本端可加载绝对地址;
         // 全端同步改由 Foundry 聊天数据通道(flags.audioUrl + 各端官方本播)负责, arrive≈0, 不再等广播
         // onStart 登记: 播放**真正开始**才登记 playedIds — 若 URL 播放失败(onStart 不触发)则不登记,
@@ -2682,7 +2687,8 @@ async function runPlayerSelfTest() {
 function finishSelfTest(steps) {
   try {
     const okN = steps.filter(s => s.ok).length, tot = steps.length;
-    const fails = steps.filter(s => !s.ok).map(s => s.k);
+    // 失败步骤带细节值(如"播放通道=走native·<err>"), 通知/聊天里直接可见, 不用翻 console
+    const fails = steps.filter(s => !s.ok).map(s => s.k + (s.v ? "=" + String(s.v).slice(0, 80) : ""));
     const head = (okN === tot) ? "玩家自测通过 ✅" : ("自测 " + okN + "/" + tot + (fails.length ? "（失败: " + fails.join("、") + "）" : ""));
     try { ui.notifications.info("🔬 " + head); } catch (e) { /* noop */ }
     try { window.__gptSovits = window.__gptSovits || {}; window.__gptSovits.playerSelfTestResult = { ts: Date.now(), steps, ok: okN === tot }; console.log("[gpt-sovits-tts][自测]", head, steps); } catch (e) { /* noop */ }
