@@ -264,7 +264,7 @@ export async function gptSovitsSocketProxy(payload, { engine = "gpt", timeoutMs 
   return null;
 }
 
-export async function gptSovitsSynth(text, lang, { serverUrl, speedFactor = 1, overrides = null, mediaType = "wav", asBlob = false, role = "" } = {}) {
+export async function gptSovitsSynth(text, lang, { serverUrl, speedFactor = 1, overrides = null, mediaType = "wav", asBlob = false, role = "", skipDirect = false } = {}) {
   const base = String(serverUrl || "http://127.0.0.1:9880").replace(/\/+$/, "");
   // socket 代理 payload: 直接用引擎 TTS_Request 字段名(text_lang/speed_factor/media_type), 避免未知字段被忽略→缺参
   const payload = {
@@ -301,6 +301,12 @@ export async function gptSovitsSynth(text, lang, { serverUrl, speedFactor = 1, o
       return { url: pr.audioUrl && !overrides ? pr.audioUrl : dataUri, audioUrl: pr.audioUrl || "", dataUri };
     }
   } catch (e) { /* 代理失败 → 直连 */ }
+  // 代理模式玩家(skipDirect=true): 代理失败直接报清晰错误, 不直连 — 直连必失败(https Mixed-Content / 本机无引擎 fetch status 0 → "http0")
+  if (skipDirect) {
+    const pErr = new Error("代理合成不可用(主机 TTS 代理未响应), 请确认主机在线后重试");
+    pErr.proxyUnavailable = true;
+    throw pErr;
+  }
   // https 页面(远程 GM/frp)直连 http://9881 必被 Mixed Content 阻止: 直接短路, 交给上层转交/报错, 不再发注定失败的请求
   if (typeof location !== "undefined" && location.protocol === "https:" && !/^https:\/\//i.test(base)) {
     const mcErr = new Error("Mixed-Content: https 页面不可直连 http TTS 服务, 请确保 socket 代理(tts-proxy)可用");

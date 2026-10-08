@@ -1384,10 +1384,10 @@ function buildSendPop() {
       if (!alreadyWarm) {
         const r = (typeof window.preloadAI === "function") ? await window.preloadAI() : null;
         if (!r || !r.ok) {
-          btnP2.textContent = oldP2;
-          btnP2.classList.remove("loading");
-          ui.notifications.warn(_L("ui.preloadFail", "预加载失败") + ": " + ((r && r.message) || "unknown"));
-          return;
+          // LLM 预热失败(API 未配/不通/502) → 不阻塞预合成: LLM 只是语气判断辅助,
+          // 降级按默认/手动语气预合成(合成走 GM 代理→引擎, 与 LLM 无关; 根治"非本地玩家预加载失败 http0")
+          try { console.warn("[gpt-sovits-tts] AI 预热失败(降级, 按当前语气预合成): " + ((r && r.message) || "unknown")); } catch (e) { /* noop */ }
+          window.__aiPreloaded = false;
         }
       }
       // 按当前角色/语气/情绪占比预合成这段输入文本(与发送时的声音完全一致)
@@ -1422,7 +1422,7 @@ function buildSendPop() {
       const curP = (profP.chars && profP.chars[roleP]) || {};
       if (typeof curP.emotionMix === "number") overridesP.emotionMix = curP.emotionMix;
       else if (aiEmoP) overridesP.emotionMix = 0.75;   // AI 判断语气 → 与发送时情绪占比一致
-      const { blob, audioUrl } = await gptSovitsSynth(stripP, cfgP2.textLang || "auto", { serverUrl: cfgP2.serverUrl, speedFactor: cfgP2.speedFactor || 1, overrides: Object.keys(overridesP).length ? overridesP : null, mediaType: "mp3", asBlob: true });
+      const { blob, audioUrl } = await gptSovitsSynth(stripP, cfgP2.textLang || "auto", { serverUrl: cfgP2.serverUrl, speedFactor: cfgP2.speedFactor || 1, overrides: Object.keys(overridesP).length ? overridesP : null, mediaType: "mp3", asBlob: true, skipDirect: window.__fvttTTSCanDirect !== true });
       const objUrl = URL.createObjectURL(blob);
       const b64 = await blobToBase64(blob);
       if (preloadAudio && preloadAudio.url) { try { URL.revokeObjectURL(preloadAudio.url); } catch (e) { /* noop */ } }
