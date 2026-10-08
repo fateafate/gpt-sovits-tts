@@ -220,9 +220,12 @@ export function installModuleSocket() {
 /* ---------- 服务端合成代理(多设备根治): 任意端经 module 事件 → GM 端 → 引擎 ---------- */
 export async function gptSovitsSocketProxy(payload, { engine = "gpt", timeoutMs = 150000 } = {}) {
   // module 事件请求 GM 端执行(玩家端; GM 端自己发起 → 广播不含自己收不到 → 短超时退直连, 本机引擎直接可达)
+  // payload 两种形态统一: svcRequest 传 {method,path,json,...} 包装; gptSovitsSynth 传裸合成参数 → 包装成 POST /tts
   try {
+    const hasWrap = !!(payload && payload.path);
+    const req = hasWrap ? payload : Object.assign({}, { method: "POST", path: "/tts", json: payload });
     const gmSelf = !!(game && game.user && game.user.isGM);
-    const r = await moduleEmit("tts-proxy", Object.assign({}, payload, { engine, user: (() => { try { return (game.user && game.user.name) || ""; } catch (e) { return ""; } })() }), { timeoutMs: gmSelf ? 3000 : timeoutMs });
+    const r = await moduleEmit("tts-proxy", Object.assign({}, req, { engine, user: (() => { try { return (game.user && game.user.name) || ""; } catch (e) { return ""; } })() }), { timeoutMs: gmSelf ? 3000 : timeoutMs });
     if (r && typeof r === "object") return r;
   } catch (e) { /* fallthrough → 直连 */ }
   return null;
