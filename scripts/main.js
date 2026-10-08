@@ -615,10 +615,10 @@ async function speak(text, { lang = null, sender = "", refAudioPath = null, prom
               try {
                 if (game.socket && typeof game.socket.emit === "function") {
                   const meta = Object.assign({ messageId, __proxyTs: Date.now(), __proxyType: "tts-metadata" }, _upd);
-                  const pr1 = game.socket.emit(MODULE + ".tts-metadata", meta);   // v13 register 通道
-                  if (pr1 && typeof pr1.catch === "function") pr1.catch(() => { /* noop */ });
-                  const pr2 = game.socket.emit(MODULE, meta);                     // v12 兼容通道
-                  if (pr2 && typeof pr2.catch === "function") pr2.catch(() => { /* noop */ });
+                  // v13 register 通道: 回调式(v13 emit 不返回 Promise; 响应仅用于诊断, 忽略)
+                  game.socket.emit(MODULE + ".tts-metadata", meta, () => { /* noop */ });
+                  // v12 兼容通道
+                  game.socket.emit(MODULE, meta, () => { /* noop */ });
                 }
               } catch (e) { /* noop */ }
             }
@@ -2713,10 +2713,9 @@ function finishSelfTest(steps) {
     try {
       if (game && game.socket && typeof game.socket.emit === "function") {
         const rep = Object.assign({ user: uName, kind: "playerSelfTest" }, payload, { __proxyTs: Date.now(), __proxyType: "tts-report" });
-        const rr = game.socket.emit(MODULE + ".tts-report", rep);
-        if (rr && typeof rr.catch === "function") rr.catch(() => { /* noop */ });
-        const rv = game.socket.emit(MODULE, rep);
-        if (rv && typeof rv.catch === "function") rv.catch(() => { /* noop */ });
+        // v13 register 通道回调式 + v12 兼容通道, 响应忽略(诊断用)
+        game.socket.emit(MODULE + ".tts-report", rep, () => { /* noop */ });
+        game.socket.emit(MODULE, rep, () => { /* noop */ });
       }
     } catch (e) { /* noop */ }
     try {

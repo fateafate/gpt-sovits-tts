@@ -33,12 +33,18 @@ export async function loadRunnerMap() {
 export async function fetchAllUsers() {
   try {
     if (typeof game !== "undefined" && game && game.socket && typeof game.socket.emit === "function") {
-      const pr = game.socket.emit("gpt-sovits-tts.tts-users", { __proxyTs: Date.now(), __proxyType: "tts-users" });
-      if (pr && typeof pr.then === "function") {
-        const r = await Promise.race([pr, new Promise((res) => setTimeout(() => res(null), 6000))]);
-        if (r && r.ok && Array.isArray(r.users) && r.users.length) {
-          return r.users.map(u => ({ name: String(u.name || ""), isGM: !!u.isGM, active: !!u.active }));
-        }
+      // v13 socket 回调式(与服务端 register 的 scope.handler 对应); 6s 超时兜底
+      const r = await new Promise((res) => {
+        let done = false;
+        const t = setTimeout(() => { if (!done) { done = true; res(null); } }, 6000);
+        try {
+          game.socket.emit("gpt-sovits-tts.tts-users", { __proxyTs: Date.now(), __proxyType: "tts-users" }, (resp) => {
+            if (done) return; done = true; clearTimeout(t); res(resp || null);
+          });
+        } catch (e) { if (!done) { done = true; clearTimeout(t); res(null); } }
+      });
+      if (r && r.ok && Array.isArray(r.users) && r.users.length) {
+        return r.users.map(u => ({ name: String(u.name || ""), isGM: !!u.isGM, active: !!u.active }));
       }
     }
   } catch (e) { if (typeof console !== "undefined" && console.warn) console.warn("[gpt-sovits-tts] fetchAllUsers socket 失败, 回退在线列表:", e); }

@@ -263,21 +263,48 @@ function pullSelftestReport() {
   } catch (e) { /* noop */ }
 }
 
+// 运行时诊断 marker: 追加写 server/sock-debug.log(FVTT 主机), 作者读文件核实 register/通道是否真的工作
+function __sockMark(msg) {
+  try {
+    const _p = (game.modules.get(MODULE_ID) && game.modules.get(MODULE_ID).path) || "";
+    if (!_p) return;
+    const _dir = _pathM.join(_p, "server");
+    try { _fs.mkdirSync(_dir, { recursive: true }); } catch (e) { /* noop */ }
+    _fs.appendFileSync(_pathM.join(_dir, "sock-debug.log"), `${new Date().toISOString()} ${String(msg)}\n`, "utf8");
+  } catch (e) { /* noop */ }
+}
+// 包装: 记录每次 handler 调用(证明通道真的到达服务端)
+const __wrap = (name, fn) => (...args) => {
+  try { __sockMark(`CALL ${name} args=${args && args.length}`); } catch (e) { /* noop */ }
+  let r = null;
+  try { r = fn(...args); } catch (e) { try { __sockMark(`ERR ${name} ${String((e && e.message) || e).slice(0, 150)}`); } catch (e2) { /* noop */ } throw e; }
+  if (r && typeof r.then === "function") r.catch((e) => { try { __sockMark(`REJ ${name} ${String((e && e.message) || e).slice(0, 150)}`); } catch (e2) { /* noop */ } });
+  return r;
+};
+
 Hooks.once("init", () => {
   try {
     if (typeof game.socket.register === "function") {
-      // Foundry v13 socket v2: 服务端注册, 客户端 emit("gpt-sovits-tts.tts-proxy", data) 拿返回值
-      game.socket.register(MODULE_ID, { "tts-proxy": ttsProxyHandler, "tts-metadata": ttsMetaHandler, "tts-users": ttsUsersHandler, "tts-report": ttsReportHandler });
+      // Foundry v13 socket v2: 服务端注册, 客户端 emit(scope.handler, data, callback) 回调式
+      __sockMark(`init register: typeof=${typeof game.socket.register}`);
+      game.socket.register(MODULE_ID, {
+        "tts-proxy": __wrap("tts-proxy", ttsProxyHandler),
+        "tts-metadata": __wrap("tts-metadata", ttsMetaHandler),
+        "tts-users": __wrap("tts-users", ttsUsersHandler),
+        "tts-report": __wrap("tts-report", ttsReportHandler)
+      });
+      __sockMark("init register OK");
     } else if (typeof game.socket.on === "function") {
       // Foundry v12 兼容: 传统 socket 服务端收包(reply 回调)
+      __sockMark("init v12-on branch");
       game.socket.on(`module.${MODULE_ID}`, async (data, reply) => {
         try {
           if (data && data.__proxyTs && data.__proxyType === "tts-proxy") {
+            __sockMark("v12 CALL tts-proxy");
             const r = await ttsProxyHandler(data);
             if (typeof reply === "function") reply(r);
           } else if (data && data.__proxyTs && data.__proxyType === "tts-metadata") {
-            const r = await ttsMetaHandler(data);
-            if (typeof reply === "function") reply(r);
+            __sockMark("v12 CALL tts-metadata");
           } else if (data && data.__proxyTs && data.__proxyType === "tts-users") {
             const r = ttsUsersHandler();
             if (typeof reply === "function") reply(r);

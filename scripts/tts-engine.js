@@ -192,14 +192,13 @@ export async function gptSovitsSocketProxy(payload, { engine = "gpt", timeoutMs 
     let tm = null;
     try {
       if (typeof game === "undefined" || !game || !game.socket || typeof game.socket.emit !== "function") { finish(null); return; }
+      // Foundry v13 socket: 回调式(socket.io ack; 官方 SocketInterface.dispatch 同款; emit 不返回 Promise)。
+      // 服务端 register 已注册该 scope.handler 时回调收到服务端返回值; 未注册/不响应 → 超时兜底 finish(null) → 调用方退回直连。
+      const req = Object.assign({}, payload, { engine, user: (() => { try { return (game.user && game.user.name) || ""; } catch (e) { return ""; } })() });
       tm = setTimeout(() => finish(null), timeoutMs);
-      // 直接 emit: 若服务端已注册 "gpt-sovits-tts.tts-proxy"(v13 register API), emit 返回 Promise 携带服务端结果;
-      // 未注册(未重启/旧版)时 emit 返回 undefined → finish(null) → 调用方退回直连。**不要在客户端判 register 存在与否**
-      // —— 那是服务端 API, 客户端没有, 否则代理永远走不通(玩家端合成失败根因)。
-      const pr = game.socket.emit("gpt-sovits-tts.tts-proxy", Object.assign({}, payload, { engine, user: (() => { try { return (game.user && game.user.name) || ""; } catch (e) { return ""; } })() }));
-      if (pr && typeof pr.then === "function") {
-        pr.then((r) => finish(r || null)).catch(() => finish(null));
-      } else finish(null);
+      try {
+        game.socket.emit("gpt-sovits-tts.tts-proxy", req, (response) => finish(response || null));
+      } catch (e) { /* finish(null) via timer */ }
     } catch (e) { finish(null); }
   });
 }
