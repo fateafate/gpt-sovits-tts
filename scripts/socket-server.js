@@ -7,9 +7,44 @@
 const MODULE_ID = "gpt-sovits-tts";
 const SERVER_TTS = "http://127.0.0.1:9881";
 
+// 代理转发目标(语音运行者 = 引擎机器, 与 Foundry 所在机器解耦 — 市场级: 多人用别的电脑跑 FVTT, 引擎只装一台机器):
+//  ① 世界设置 voiceServerUrl(引擎机器可达地址: frp https / 局域网 IP / 同一主机 127.0.0.1:9881) — GM 在配置里改=把跑语音指向那台机器
+//  ② 默认 Foundry 主机本机 9881(引擎与 Foundry 同机的开箱场景)
+// 仅接受 http/https(防 SSRF); 浏览器永不直连引擎 — 全部经这里服务端转发(无 Mixed Content/证书/跨机差异)。
+function ttsBase(d) {
+  let fromSetting = "";
+  try { fromSetting = String(game.settings.get(MODULE_ID, "voiceServerUrl") || "").trim(); } catch (e) { /* 设置未注册/读不到 */ }
+  const raw = fromSetting || SERVER_TTS;
+  if (/^https?:\/\/[^/\s]+/i.test(raw)) return raw.replace(/\/+$/, "");
+  return SERVER_TTS;
+}
+
 async function ttsProxyHandler(data) {
   const d = data || {};
-  const engine = String(d.engine || "gpt");   // "gpt" | "edge"
+  const engine = String(d.engine || "gpt");   // "gpt" | "edge" | "http"
+  // ---- 通用 HTTP 转发(https 页面 Mixed Content 根治): /status /config /characters /voices 及操作全走这里 ----
+  if (engine === "http") {
+    const ctrl2 = new AbortController();
+    const timer2 = setTimeout(() => ctrl2.abort(), Math.min(Number(d.timeoutMs) || 30000, 120000));
+    try {
+      const method = String(d.method || "GET").toUpperCase();
+      const path = String(d.path || "/status");
+      const resp = await fetch(ttsBase(d) + path, {
+        method,
+        headers: { "Content-Type": "application/json" },
+        body: (method !== "GET" && d.json !== undefined) ? JSON.stringify(d.json) : undefined,
+        signal: ctrl2.signal
+      });
+      const text = await resp.text();
+      let json = null;
+      try { json = JSON.parse(text); } catch (e) { /* noop */ }
+      return { ok: resp.ok, status: resp.status, json, text: text.slice(0, 2000) };
+    } catch (e) {
+      return { ok: false, status: 0, err: String((e && e.message) || e || "proxy error").slice(0, 200) };
+    } finally {
+      clearTimeout(timer2);
+    }
+  }
   const payload = {};
   let path = "/tts";
   if (engine === "edge") {
@@ -41,7 +76,7 @@ async function ttsProxyHandler(data) {
   const timer = setTimeout(() => ctrl.abort(), 300000);
   try {
     const t0 = Date.now();
-    const resp = await fetch(SERVER_TTS + path, {
+    const resp = await fetch(ttsBase(d) + path, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),

@@ -4,7 +4,7 @@
  *       麦克风听写(浏览器 Web Speech / 服务端 /asr) 直接发送或插入输入框
  *       消息重听按钮、状态指示灯、/ttssay 等命令、game.gptSoVitsTTS 宏 API
  */
-import { PlaybackQueue, audioPlay, webSpeechSpeak, gptSovitsSynth, gptSovitsStatus, synthEdge } from "./tts-engine.js";
+import { PlaybackQueue, audioPlay, webSpeechSpeak, gptSovitsSynth, gptSovitsStatus, synthEdge, svcRequest } from "./tts-engine.js";
 import { BrowserSTT, ServerSTT } from "./stt-engine.js";
 import { VoiceManager, loadVoiceProfile, saveVoiceProfile, currentVoice, makeDraggable, getStylePrompt, setStylePrompt } from "./voice-manager.js";
 import { prepareTextForLang, localizeNumbers } from "./text-lib.js";
@@ -28,6 +28,7 @@ const SETTINGS = [
   ["enabled",       { type: Boolean, scope: "client", default: true,            name: "settings.enabled.name",       hint: "settings.enabled.hint" }],
   ["engine",        { type: String,  scope: "client", default: "gptsovits",      choices: { gptsovits: "GPT-SoVITS", webspeech: "Web Speech" }, name: "settings.engine.name", hint: "settings.engine.hint" }],
   ["serverUrl",     { type: String,  scope: "client", default: autoServerUrl(), name: "settings.serverUrl.name", hint: "settings.serverUrl.hint" }],
+  ["voiceServerUrl",{ type: String,  scope: "world",  default: "",                name: "settings.voiceServerUrl.name", hint: "settings.voiceServerUrl.hint" }],
   ["triggerMode",   { type: String,  scope: "client", default: "both",           choices: { send: "settings.triggerMode.send", typing: "settings.triggerMode.typing", both: "settings.triggerMode.both", manual: "settings.triggerMode.manual" }, name: "settings.triggerMode.name", hint: "settings.triggerMode.hint" }],
   ["speakSelf",     { type: Boolean, scope: "client", default: true,            name: "settings.speakSelf.name",      hint: "settings.speakSelf.hint" }],
   ["speakOthers",   { type: Boolean, scope: "client", default: true,            name: "settings.speakOthers.name",    hint: "settings.speakOthers.hint" }],
@@ -207,7 +208,7 @@ function handleSocketTts(p) {
           } catch (e) { /* noop */ }
           try {
             const u = getCfg().serverUrl.replace(/\/+$/, "");
-            fetch(`${u}/speedtest/report`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ user: (game.user && game.user.name) || "pl", ts: Date.now(), role: "player", batch: p.batch, seg: p.seg, arriveMs: tArr, fetchMs, canDirect: window.__fvttTTSCanDirect === true }), signal: AbortSignal.timeout(8000) }).catch(() => { /* noop */ });
+            svcRequest(u, "POST", "/speedtest/report", { user: (game.user && game.user.name) || "pl", ts: Date.now(), role: "player", batch: p.batch, seg: p.seg, arriveMs: tArr, fetchMs, canDirect: window.__fvttTTSCanDirect === true }).catch(() => { /* noop */ });
           } catch (e) { /* noop */ }
           try { game.socket.emit(MODULE, { type: "speedtest-ack", batch: p.batch, seg: p.seg, from: game.user.name, fetchMs }); } catch (e) { /* noop */ }
         }).catch(() => { /* 拉取失败不回执 */ });
@@ -750,7 +751,8 @@ async function announceTtsService() {
     const cfg = getCfg();
     let url = (cfg.serverUrl && cfg.serverUrl !== "auto") ? cfg.serverUrl : null;
     if (!url) {
-      // auto: 本机可能跑着 9881 服务(默认主持人场景) → 探测本机
+      // auto: 本机可能跑着 9881 服务(默认主持人场景) → 探测本机; https 页面直连 http 必被拦, 直接跳过声明
+      if (typeof location !== "undefined" && location.protocol === "https:") return;
       url = "http://127.0.0.1:9881";
       const probe = await fetch(`${url}/status`, { signal: AbortSignal.timeout(3000) }).catch(() => null);
       if (!probe || !probe.ok) return;
@@ -1097,8 +1099,8 @@ function buildUI() {
     const cfgV = getCfg();
     if (!cfgV.voiceRunner || cfgV.voiceRunner === "self") {
       try {
-        const r = await fetch(`${cfgV.serverUrl}/characters/switch`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) });
-        await r.json();
+        const r = await svcRequest(cfgV.serverUrl, "POST", "/characters/switch", { name });
+        await r.json;
       } catch (e) { /* 服务不可达时仅本地生效 */ }
     }
     renderQuickUI();
@@ -1801,14 +1803,11 @@ async function loadQuickChars({ force = false } = {}) {
   tryDirect: try { } catch (e) { }   // (占位避免误解析; 下面两个函数定义)
   const tryDirect = async () => {
     try {
-      const r = await fetch(`${getCfg().serverUrl}/characters`, { signal: AbortSignal.timeout(15000) });
-      if (r.ok) {
-        const j = await r.json();
-        if (j && Array.isArray(j.chars) && j.chars.length) {
-          quickChars = j;
-          try { localStorage.setItem(QC_STORE_KEY, JSON.stringify(j)); } catch (e) { /* noop */ }
-          return true;
-        }
+      const r = await svcRequest(getCfg().serverUrl, "GET", "/characters");
+      if (r.ok && r.json && Array.isArray(r.json.chars) && r.json.chars.length) {
+        quickChars = r.json;
+        try { localStorage.setItem(QC_STORE_KEY, JSON.stringify(r.json)); } catch (e) { /* noop */ }
+        return true;
       }
     } catch (e) { /* noop */ }
     return false;
@@ -2167,8 +2166,8 @@ async function runSelfTest() {
       sampleMessageClass: (() => { const m = document.querySelector(".message"); return m ? String(m.className).slice(0, 80) : "none"; })(),
     };
     try {
-      const resp = await fetch(`${getCfg().serverUrl}/characters`, { signal: AbortSignal.timeout(10000) });
-      const jd = await resp.json();
+      const resp = await svcRequest(getCfg().serverUrl, "GET", "/characters");
+      const jd = resp.json || {};
       const firstAv = (jd.chars || []).find(c => c.avatar);
       out.portrait.charactersEndpoint = { ok: resp.ok, total: (jd.chars || []).length };
       if (firstAv) {
@@ -2237,8 +2236,8 @@ async function runSelfTest() {
   try {
     out.net = {};
     try {
-      const r = await fetch(`${getCfg().serverUrl}/status`, { signal: AbortSignal.timeout(8000) });
-      const j = await r.json();
+      const r = await svcRequest(getCfg().serverUrl, "GET", "/status");
+      const j = r.json || {};
       out.net.status = { ok: r.ok, char: (j.character && j.character.name) || "", device: j.device || "" };
     } catch (e) { out.net.status = { err: String(e).slice(0, 60) }; }
     try {
@@ -2575,8 +2574,8 @@ async function runStressTest() {
   try {
     // 多模型池状态: 服务端同时常驻的角色模型数(默认10/上限20) — GM 在 模块设置 里改, 客户端自检确认同步
     const cfgX2 = getCfg();
-    const pr = await fetch(`${cfgX2.serverUrl.replace(/\/+$/, "")}/config`, { signal: AbortSignal.timeout(6000) }).catch(() => null);
-    const pj = pr && pr.ok ? await pr.json().catch(() => ({})) : {};
+    const pr = await svcRequest(cfgX2.serverUrl, "GET", "/config").catch(() => null);
+    const pj = (pr && pr.json) || {};
     out.sys.pool = { ok: !!(pr && pr.ok), max: (pj && pj.max_concurrent_models) || -1, setting: Number(getCfg().maxConcurrentModels) || -1 };
   } catch (e) { out.sys.pool = { err: String(e).slice(0, 60) }; }
   try {
@@ -2681,7 +2680,7 @@ function finishSelfTest(steps) {
     const uName = (() => { try { return (game.user && game.user.name) || "player"; } catch (e) { return "player"; } })();
     const payload = { ts: Date.now(), user: uName, role: "player", kind: "playerSelfTest", ok: okN === tot, pass: okN, total: tot, fail: fails, steps };
     try {
-      fetch(`${getCfg().serverUrl.replace(/\/+$/, "")}/speedtest/report`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload), signal: AbortSignal.timeout(8000) }).catch(() => { /* 直连不可达(Mixed Content) → 走聊天回执 */ });
+      svcRequest(getCfg().serverUrl, "POST", "/speedtest/report", payload).catch(() => { /* 代理不可达 → 走聊天回执 */ });
     } catch (e) { /* noop */ }
     try {
       const mark = okN === tot ? "✅" : "⚠️";
@@ -2702,8 +2701,8 @@ async function runSpeedTest() {
   // 报告在线玩家(判断 pl 是否真的在场参与传输测试)
   try { out.onlinePlayers = (game.users || []).filter(u => u.active && !u.isSelf).map(u => u.name || "?"); } catch (e) { out.onlinePlayers = []; }
   const base = String(cfg.serverUrl || "http://127.0.0.1:9880").replace(/\/+$/, "");
-  const api = (path, body) => fetch(base + path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}), signal: AbortSignal.timeout(30000) }).then(r => r.json().catch(() => ({})));
-  const getJ = (path) => fetch(base + path, { signal: AbortSignal.timeout(10000) }).then(r => r.json().catch(() => ({})));
+  const api = (path, body) => svcRequest(base, "POST", path, body || {}).then(r => r.json || {}).catch(() => ({}));
+  const getJ = (path) => svcRequest(base, "GET", path).then(r => r.json || {}).catch(() => ({}));
   // I1a 心跳探测(确认 pl 端通道活性, 决定传输段预期; pl 无响应=未硬刷新/离线)
   try {
     window.__fvttTTSPingAck = false;
@@ -3293,10 +3292,16 @@ Hooks.once("ready", () => {
       try {
         const ac = new AbortController(); const _t = setTimeout(() => ac.abort(), 3000);
         let direct = false;
-        try {
-          const r = await fetch(`${getCfg().serverUrl.replace(/\/+$/, "")}/status`, { signal: ac.signal });
-          direct = (r.ok === true);
-        } catch (e) { direct = false; }
+        // https 页面(远程 GM/玩家)直连 http 引擎必被 Mixed Content 阻止 → 直接判定代理模式, 不发起注定失败的请求(免刷屏)
+        const _su = String(getCfg().serverUrl || "").trim();
+        if (typeof location !== "undefined" && location.protocol === "https:" && !/^https:\/\//i.test(_su)) {
+          direct = false;
+        } else {
+          try {
+            const r = await fetch(`${getCfg().serverUrl.replace(/\/+$/, "")}/status`, { signal: ac.signal });
+            direct = (r.ok === true);
+          } catch (e) { direct = false; }
+        }
         clearTimeout(_t);
         window.__fvttTTSCanDirect = direct;
         try { console.debug("[gpt-sovits-tts] 可达性探测: " + (direct ? "直连合成" : "GM 代理合成(走 FVTT 30000)")); } catch (e) { /* noop */ }
@@ -3304,7 +3309,7 @@ Hooks.once("ready", () => {
         // 启动同步"同时运行上限"(GM 专属): Foundry 设置值 → 服务端模型池(裁剪/扩容)
         try {
           if (game.user && game.user.isGM && getCfg().maxConcurrentModels) {
-            fetch(`${getCfg().serverUrl.replace(/\/+$/, "")}/config`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ max_concurrent_models: Number(getCfg().maxConcurrentModels) || 10 }) }).catch(() => { /* noop */ });
+            svcRequest(getCfg().serverUrl, "POST", "/config", { max_concurrent_models: Number(getCfg().maxConcurrentModels) || 10 }).catch(() => { /* noop */ });
           }
         } catch (e) { /* noop */ }
       } catch (e) { window.__fvttTTSCanDirect = false; }
@@ -3420,7 +3425,7 @@ Hooks.on("createChatMessage", (message, options, userId) => { (window.__fvttTTSH
         try { if (ui && ui.notifications) ui.notifications.info(`🚄 已参与速度测试(批次${flS.speedTest.batch}段${flS.speedTest.seg}) 到达${arriveMs}ms ${fetchMs === -2 ? "内嵌即时" : "拉取" + fetchMs + "ms"} ${Math.round(bytes / 1024)}KB 播放${played ? "✓" : "跳过"}${viaS ? "·" + viaS : ""}${implS ? "·" + implS : ""}${err ? "·" + err : ""}`); } catch (e) { /* noop */ }
         try { await ChatMessage.create({ content: "⏱", speaker: { alias: "速度测试回执" }, flags: { [MODULE]: { speedTestAck: { batch: flS.speedTest.batch, seg: flS.speedTest.seg, from: game.user.name, arriveMs, fetchMs, played, bytes, skewMs, via: viaS, impl: implS, err: String(err || "").slice(0, 60), ts: Date.now() } } } }); } catch (e) { /* noop */ }
         try { game.socket.emit(MODULE, { type: "speedtest-ack", batch: flS.speedTest.batch, seg: flS.speedTest.seg, from: game.user.name, arriveMs, fetchMs, played, bytes, skewMs, via: viaS, impl: implS, err: String(err || "").slice(0, 60) }); } catch (e) { /* noop */ }
-        try { fetch(`${getCfg().serverUrl.replace(/\/+$/, "")}/speedtest/report`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ user: (game.user && game.user.name) || "pl", ts: Date.now(), role: "player", batch: flS.speedTest.batch, seg: flS.speedTest.seg, arriveMs, fetchMs, played, bytes, skewMs, via: viaS, impl: implS, err: String(err || "").slice(0, 60), canDirect: window.__fvttTTSCanDirect === true }), signal: AbortSignal.timeout(8000) }).catch(() => { /* 直连不可达(Mixed Content)已由聊天回执通道兜底 */ }); } catch (e) { /* noop */ }
+        try { svcRequest(getCfg().serverUrl, "POST", "/speedtest/report", { user: (game.user && game.user.name) || "pl", ts: Date.now(), role: "player", batch: flS.speedTest.batch, seg: flS.speedTest.seg, arriveMs, fetchMs, played, bytes, skewMs, via: viaS, impl: implS, err: String(err || "").slice(0, 60), canDirect: window.__fvttTTSCanDirect === true }).catch(() => { /* 代理不可达已由聊天回执通道兜底 */ }); } catch (e) { /* noop */ }
       };
       // 写回前到达(speak/代理合成的 audioData 尚未同步到本端 — create 先于写回): 轮询等写回,
       // 直到 audioData/audioUrl 真到(覆盖慢合成, 如 26s 长段)才回执真实播放结果; 45s 上限防卡死
@@ -3588,7 +3593,7 @@ Hooks.on("updateSetting", (key, value, options, userId) => {
   if (key === `${MODULE}.maxConcurrentModels`) {
     try {
       if (game.user && game.user.isGM) {
-        fetch(`${getCfg().serverUrl.replace(/\/+$/, "")}/config`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ max_concurrent_models: Number(value) || 10 }) }).catch(() => { /* noop */ });
+        svcRequest(getCfg().serverUrl, "POST", "/config", { max_concurrent_models: Number(value) || 10 }).catch(() => { /* noop */ });
       }
     } catch (e) { /* noop */ }
   }

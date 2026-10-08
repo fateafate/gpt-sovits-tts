@@ -26,6 +26,7 @@
     "enabled": { "name": "启用模块", "hint": "总开关。关闭后不再朗读、不显示状态灯。" },
     "engine": { "name": "朗读引擎 (TTS Engine)", "hint": "GPT-SoVITS: 本地服务合成(音色佳, 需先启动 server/start-tts-server.bat)；Web Speech: 浏览器系统语音(零配置, 音色机械, 用于测试/兜底)。" },
     "serverUrl": { "name": "TTS 服务地址 (TTS Server URL)", "hint": "默认 auto=自动使用本机 http://127.0.0.1:9881。局域网多人时：其他玩家的浏览器要访问运行 TTS 服务那台电脑(GM)的地址，如 http://192.168.1.5:9881，并让 GM 用 0.0.0.0 启动服务，全员才能听到同一音色。" },
+    "voiceServerUrl": { "name": "语音运行者（引擎机器）地址 (Voice Runner URL)", "hint": "⚠ 世界级设置，GM 可改。跑 TTS 引擎的那台机器地址（默认留空=Foundry 主机本机 127.0.0.1:9881）。如果你用别的电脑开 FVTT、引擎在另一台机器，请填引擎机器的可达地址，如 http://192.168.1.5:9881 或 frp 公网 http://frp-act.com:9881。所有端（GM/玩家）的合成都经 Foundry 服务器转发到这台机器，改这里=把跑语音的权限转给那台机器。" },
     "triggerMode": {
       "name": "触发方式",
       "hint": "send=发送即读；typing=打字停顿即读(不发也能听)；both=两者都要(发送后若已读过则不重复)；manual=仅手动(命令/宏/重听按钮)。",
@@ -205,7 +206,7 @@
     "test": "试听",
     "save": "保存",
     "back": "返回",
-    "errServer": "无法连接 TTS 服务，请先启动 server/start-tts-server.bat",
+    "errServer": "无法连接 TTS 服务：请确认「语音运行者（引擎机器）地址」设置正确，且那台机器已启动 server/start-tts-server.bat",
     "character": "当前角色",
     "noChar": "未加载角色",
     "switchChar": "切换角色",

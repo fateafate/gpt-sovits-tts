@@ -1,0 +1,602 @@
+{
+  "ts": 1791401155176,
+  "user": "Gamemaster",
+  "canDirect": true,
+  "patch": "official-v2",
+  "fullMode": false,
+  "batches": {
+    "i1": {
+      "plPing": true,
+      "plOnline": [
+        "Player2"
+      ]
+    },
+    "a1": {
+      "err": "TimeoutError: signal timed out"
+    },
+    "a2": {
+      "segs": [
+        {
+          "ms": 3076,
+          "bytes": 25101
+        },
+        {
+          "ms": 1340,
+          "bytes": 19629
+        },
+        {
+          "ms": 1053,
+          "bytes": 13005
+        },
+        {
+          "ms": 1391,
+          "bytes": 20781
+        },
+        {
+          "ms": 943,
+          "bytes": 11853
+        },
+        {
+          "ms": 783,
+          "bytes": 9837
+        },
+        {
+          "ms": 838,
+          "bytes": 11853
+        },
+        {
+          "ms": 931,
+          "bytes": 12429
+        }
+      ],
+      "longSegs": [
+        {
+          "ms": 5829,
+          "bytes": 274797
+        },
+        {
+          "ms": 3872,
+          "bytes": 191853
+        }
+      ],
+      "avgMs": 1294,
+      "minMs": 783,
+      "maxMs": 3076,
+      "longAvgMs": 4851,
+      "longMaxMs": 5829,
+      "gpuUtilDuring": 22
+    },
+    "b1s0": {
+      "realPath": "speak",
+      "emotionMix": null,
+      "synthMs": 7773,
+      "ok": true,
+      "gmPlayed": true,
+      "createdMs": 7778
+    },
+    "b1s1": {
+      "realPath": "speak",
+      "emotionMix": 0.5,
+      "synthMs": 8537,
+      "ok": true,
+      "gmPlayed": true,
+      "createdMs": 16327
+    },
+    "b2s0": {
+      "realPath": "speak",
+      "emotionMix": null,
+      "synthMs": 16288,
+      "ok": true,
+      "gmPlayed": true,
+      "createdMs": 16293
+    },
+    "b2s1": {
+      "realPath": "speak",
+      "emotionMix": 0.5,
+      "synthMs": 8475,
+      "ok": true,
+      "gmPlayed": true,
+      "createdMs": 24774
+    },
+    "b3s0": {
+      "realPath": "speak",
+      "emotionMix": null,
+      "synthMs": 17428,
+      "ok": true,
+      "gmPlayed": true,
+      "createdMs": 17432
+    },
+    "b3s1": {
+      "realPath": "speak",
+      "emotionMix": 0.5,
+      "synthMs": 15786,
+      "ok": true,
+      "gmPlayed": true,
+      "createdMs": 33237
+    },
+    "b4s0": {
+      "realPath": "speak",
+      "emotionMix": null,
+      "synthMs": 15936,
+      "ok": true,
+      "gmPlayed": true,
+      "createdMs": 15941
+    },
+    "b4s1": {
+      "realPath": "speak",
+      "emotionMix": 0.5,
+      "synthMs": 14,
+      "ok": true,
+      "gmPlayed": true,
+      "createdMs": 16020
+    },
+    "b5s0": {
+      "realPath": "speak",
+      "emotionMix": null,
+      "synthMs": 15,
+      "ok": true,
+      "gmPlayed": true,
+      "createdMs": 20
+    },
+    "b5s1": {
+      "realPath": "speak",
+      "emotionMix": 0.5,
+      "synthMs": 15,
+      "ok": true,
+      "gmPlayed": true,
+      "createdMs": 117
+    },
+    "b": [
+      {
+        "batch": 1,
+        "totalMs": 22328,
+        "ackCount": 2,
+        "ackFetchMs": [
+          -2,
+          -2
+        ]
+      },
+      {
+        "batch": 2,
+        "totalMs": 30775,
+        "ackCount": 2,
+        "ackFetchMs": [
+          -2,
+          -2
+        ]
+      },
+      {
+        "batch": 3,
+        "totalMs": 39238,
+        "ackCount": 2,
+        "ackFetchMs": [
+          -2,
+          -2
+        ]
+      },
+      {
+        "batch": 4,
+        "totalMs": 24020,
+        "ackCount": 2,
+        "ackFetchMs": [
+          -2,
+          -2
+        ]
+      },
+      {
+        "batch": 5,
+        "totalMs": 8117,
+        "ackCount": 2,
+        "ackFetchMs": [
+          -2,
+          -2
+        ]
+      }
+    ],
+    "d6": {
+      "err": "TimeoutError: signal timed out"
+    },
+    "d5": {
+      "concurrent": 3,
+      "allMs": 24488,
+      "oneSeqMs": 1294,
+      "queueOverheadMs": 23194,
+      "allOk": true
+    },
+    "d1": {
+      "loads": [
+        {
+          "role": "五条悟",
+          "ms": 993,
+          "ok": true
+        },
+        {
+          "role": "阿尔托莉雅·潘德拉贡",
+          "ms": 5453,
+          "ok": true
+        }
+      ],
+      "poolAfter": {
+        "size": 2,
+        "max": 10,
+        "active": [
+          "五条悟",
+          "阿尔托莉雅·潘德拉贡"
+        ]
+      },
+      "gpuFreeGb": 14.7
+    },
+    "e1": [
+      {
+        "lang": "zh",
+        "ok": true,
+        "ms": 1283,
+        "bytes": 19917
+      },
+      {
+        "lang": "ja",
+        "ok": true,
+        "ms": 1528,
+        "bytes": 27693
+      },
+      {
+        "lang": "en",
+        "ok": true,
+        "ms": 3037,
+        "bytes": 24525
+      }
+    ],
+    "e2": {
+      "ok": true,
+      "ms": 1341,
+      "bytes": 51021
+    },
+    "e3": [
+      {
+        "lang": "zh",
+        "ok": true,
+        "ms": 1211,
+        "note": "服务端转一二三四五"
+      },
+      {
+        "lang": "en",
+        "ok": true,
+        "ms": 1695,
+        "note": "保持数值读法"
+      },
+      {
+        "lang": "ja",
+        "ok": true,
+        "ms": 1547,
+        "note": "保持数值读法"
+      }
+    ],
+    "e4": [
+      {
+        "lang": "ja",
+        "ok": true,
+        "ms": 3197,
+        "bytes": 175437
+      },
+      {
+        "lang": "en",
+        "ok": true,
+        "ms": 2725,
+        "bytes": 149517
+      }
+    ],
+    "f1": [
+      {
+        "emo": "中性",
+        "mix": null,
+        "ok": true,
+        "ms": 1103,
+        "bytes": 17325
+      },
+      {
+        "emo": "开心",
+        "mix": 0.3,
+        "ok": true,
+        "ms": 1132,
+        "bytes": 16749
+      },
+      {
+        "emo": "悲伤",
+        "mix": 0.6,
+        "ok": true,
+        "ms": 1547,
+        "bytes": 23085
+      },
+      {
+        "emo": "生气",
+        "mix": 0.9,
+        "ok": true,
+        "ms": 1051,
+        "bytes": 17037
+      }
+    ],
+    "f2": {
+      "ok": true,
+      "ms": 1930,
+      "bytes": 58221
+    },
+    "g1": {
+      "roles": [
+        {
+          "role": "七海千秋",
+          "ok": true,
+          "ms": 1198
+        },
+        {
+          "role": "五条悟",
+          "ok": true,
+          "ms": 976
+        },
+        {
+          "role": "阿尔托莉雅·潘德拉贡",
+          "ok": true,
+          "ms": 976
+        }
+      ],
+      "poolAfter": {
+        "size": 2,
+        "max": 10,
+        "active": [
+          "五条悟",
+          "阿尔托莉雅·潘德拉贡"
+        ]
+      },
+      "gpuFreeGb": 14.7
+    },
+    "g2": [
+      {
+        "role": "七海千秋",
+        "ms": 1049,
+        "ok": true
+      },
+      {
+        "role": "五条悟",
+        "ms": 989,
+        "ok": true
+      },
+      {
+        "role": "七海千秋",
+        "ms": 1041,
+        "ok": true
+      }
+    ],
+    "s1": {
+      "firstMs": 1434,
+      "secondMs": 1560,
+      "c1": "miss",
+      "c2": "hit",
+      "sameUrl": true,
+      "cacheHit": true
+    }
+  },
+  "bugs": {
+    "digit": {
+      "ok": true,
+      "ms": 997,
+      "note": "服务端已转为一二三四五(tts-requests.log text 字段可核)"
+    },
+    "pool": {
+      "size": 2,
+      "max": 10,
+      "active": [
+        "五条悟",
+        "阿尔托莉雅·潘德拉贡"
+      ]
+    },
+    "mute": {
+      "ok": false,
+      "delta": 1,
+      "note": "静音时 audioPlay 提前跳过(新增播放应 0)"
+    },
+    "playCount": {
+      "total": 8,
+      "note": "重复播放修复: speak/预载/flags/广播四条路径统一 playedIds 去重(每消息一次)"
+    }
+  },
+  "conclusions": [
+    "I1 pl 活性: 心跳 ✓ pl 通道通, 在线: Player2",
+    "A2 批量合成: 短文 8 段平均 1294ms/段(峰值 3076ms); 长文 2 段平均 4851ms/段(峰值 5829ms); 期间 GPU 利用率 22%",
+    "B 端到端(真实 speak 路径): 5 批 10 段(短文×6+长文×4), pl 回执 10/10; 与实际说话同一代码(合成/内嵌/广播/播放)",
+    "P 代理端到端(玩家说话路径): 代理合成+写回 19618ms ✓ (flags 写回 ✓)",
+    "D5 并发排队: 3 并发总 24488ms(单段约 1294ms, 排队开销 23194ms) 全部成功",
+    "D1 多角色加载: [五条悟:993ms, 阿尔托莉雅·潘德拉贡:5453ms], 池 2/10, 显存空闲 14.7GB",
+    "C3 全局静音: 异常(新增播放 1)",
+    "E1 语种矩阵: zh=1283ms/19KB ja=1528ms/27KB en=3037ms/24KB",
+    "E2 混合语种(auto): 1341ms/50KB",
+    "E3 数字跨语种: zh=1211ms en=1695ms ja=1547ms",
+    "E4 长文×语种: ja=3197ms/171KB en=2725ms/146KB",
+    "F1 情绪矩阵: 中性(null)=1103ms/17KB 开心(0.3)=1132ms/16KB 悲伤(0.6)=1547ms/23KB 生气(0.9)=1051ms/17KB",
+    "F2 语气词/感叹: 1930ms/57KB",
+    "G1 多角色切换: [七海千秋=1198ms, 五条悟=976ms, 阿尔托莉雅·潘德拉贡=976ms], 池 2/10 显存空闲14.7GB",
+    "G2 往返切换: 七海千秋:1049ms 五条悟:989ms 七海千秋:1041ms ✓(末段池命中复用)",
+    "S1 合成缓存: 首次 1434ms(miss) → 二次 1560ms(hit) ✓命中(缓存生效, 重复台词秒回)",
+    "双端播放验证: GM 10/10 段, pl 11/10 段(每段一次不重复; 未播段 = 静音跳过或播放失败)",
+    "通道统计: 官方内部通道=0 段 | DB 内嵌=11 | 拉取=0 (官方未命中, pl 走DB兜底; 仍能听到, 但非即时官方 — 请确认 frp 证书受信)",
+    "立绘注入: 页面 119 张, URL=absolute (绝对地址, 远程端可显示)",
+    "播放通道实测: GM 官方界面通道=7 次, 原生Audio=1 次; pl 回执 impl={\"official\":11} (玩家端走官方界面通道)"
+  ],
+  "onlinePlayers": [
+    "Player2"
+  ],
+  "proxy": {
+    "realPath": "proxy",
+    "proxyMs": 19618,
+    "ok": true,
+    "flagsWritten": true,
+    "err": ""
+  },
+  "plAcks": [
+    {
+      "batch": 1,
+      "seg": 0,
+      "from": "Player2",
+      "arriveMs": 0,
+      "fetchMs": -2,
+      "played": true,
+      "bytes": 17325,
+      "skewMs": 0,
+      "via": "db",
+      "impl": "official",
+      "err": ""
+    },
+    {
+      "batch": 1,
+      "seg": 1,
+      "from": "Player2",
+      "arriveMs": 0,
+      "fetchMs": -2,
+      "played": true,
+      "bytes": 18477,
+      "skewMs": 0,
+      "via": "db",
+      "impl": "official",
+      "err": ""
+    },
+    {
+      "batch": 2,
+      "seg": 0,
+      "from": "Player2",
+      "arriveMs": 0,
+      "fetchMs": -2,
+      "played": true,
+      "bytes": 17613,
+      "skewMs": 0,
+      "via": "db",
+      "impl": "official",
+      "err": ""
+    },
+    {
+      "batch": 2,
+      "seg": 1,
+      "from": "Player2",
+      "arriveMs": 0,
+      "fetchMs": -2,
+      "played": true,
+      "bytes": 17037,
+      "skewMs": 0,
+      "via": "db",
+      "impl": "official",
+      "err": ""
+    },
+    {
+      "batch": 3,
+      "seg": 0,
+      "from": "Player2",
+      "arriveMs": 0,
+      "fetchMs": -2,
+      "played": true,
+      "bytes": 15021,
+      "skewMs": 0,
+      "via": "db",
+      "impl": "official",
+      "err": ""
+    },
+    {
+      "batch": 3,
+      "seg": 1,
+      "from": "Player2",
+      "arriveMs": 0,
+      "fetchMs": -2,
+      "played": true,
+      "bytes": 19629,
+      "skewMs": 0,
+      "via": "db",
+      "impl": "official",
+      "err": ""
+    },
+    {
+      "batch": 4,
+      "seg": 0,
+      "from": "Player2",
+      "arriveMs": 0,
+      "fetchMs": -2,
+      "played": true,
+      "bytes": 278541,
+      "skewMs": 0,
+      "via": "db",
+      "impl": "official",
+      "err": ""
+    },
+    {
+      "batch": 4,
+      "seg": 1,
+      "from": "Player2",
+      "arriveMs": 0,
+      "fetchMs": -2,
+      "played": true,
+      "bytes": 278541,
+      "skewMs": 0,
+      "via": "db",
+      "impl": "official",
+      "err": ""
+    },
+    {
+      "batch": 5,
+      "seg": 0,
+      "from": "Player2",
+      "arriveMs": 0,
+      "fetchMs": -2,
+      "played": true,
+      "bytes": 278541,
+      "skewMs": 0,
+      "via": "db",
+      "impl": "official",
+      "err": ""
+    },
+    {
+      "batch": 5,
+      "seg": 1,
+      "from": "Player2",
+      "arriveMs": 0,
+      "fetchMs": -2,
+      "played": true,
+      "bytes": 278541,
+      "skewMs": 0,
+      "via": "db",
+      "impl": "official",
+      "err": ""
+    },
+    {
+      "batch": 6,
+      "seg": 0,
+      "from": "Player2",
+      "arriveMs": 0,
+      "fetchMs": -2,
+      "played": true,
+      "bytes": 38925,
+      "skewMs": 0,
+      "via": "db",
+      "impl": "official",
+      "err": ""
+    }
+  ],
+  "playback": {
+    "gmPlayed": 10,
+    "plPlayed": 11,
+    "expect": 10
+  },
+  "channelUsage": {
+    "official": 0,
+    "db": 11,
+    "url": 0
+  },
+  "portrait": {
+    "injectedOnPage": 119,
+    "urlMode": "absolute"
+  },
+  "channelProbe": {
+    "gm": {
+      "official": 7,
+      "native": 1
+    },
+    "playerImpl": {
+      "official": 11
+    }
+  },
+  "done": true
+}

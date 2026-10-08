@@ -4,7 +4,7 @@
  * （每槽绑定一段音频，自动转写台词）、复制/导出/删除角色、头像、语速/音量。
  * 实现为自定义浮动面板(不依赖特定 Application 基类, 兼容 Foundry v11-13)。
  */
-import { gptSovitsStatus } from "./tts-engine.js";
+import { gptSovitsStatus, svcRequest } from "./tts-engine.js";
 
 const MODULE = "gpt-sovits-tts";
 
@@ -180,9 +180,22 @@ export class VoiceManager {
     return (cfg.serverUrl || "http://127.0.0.1:9880").replace(/\/+$/, "");
   }
 
+  // 服务端请求封装: socket 代理优先(https 页面/跨机场景 Mixed Content 根治) → 直连回退;
+  // 返回伪 Response({ ok, status, json(), text(), headers }) 兼容现有调用形态。
+  _svc(method, path, body) {
+    return svcRequest(this.base, method, path, body).then(r => ({
+      ok: r.ok,
+      status: r.status || 0,
+      json: () => Promise.resolve(r.json || {}),
+      jsonSafe: () => r.json || {},
+      text: () => Promise.resolve(JSON.stringify(r.json || {})),
+      headers: { get: () => null }
+    }));
+  }
+
   async refresh() {
     try {
-      const r = await fetch(`${this.base}/characters`, { signal: AbortSignal.timeout(15000) });
+      const r = await this._svc("GET", "/characters");
       this.charsData = r.ok ? await r.json() : { ok: false, chars: [], active: "" };
       try { (this.charsData.chars || []).forEach(c => { if (c && c.name) _providerByChar[c.name] = String(c.provider || "gpt-sovits"); }); } catch (e) { /* noop */ }
     } catch (e) { this.charsData = { ok: false, chars: [], active: "" }; }
@@ -195,13 +208,21 @@ export class VoiceManager {
       } catch (e) { /* noop */ }
     }
     try {
-      const r = await fetch(`${this.base}/voices`, { signal: AbortSignal.timeout(8000) });
+      const r = await this._svc("GET", "/voices");
       this.voicesData = r.ok ? await r.json() : { ok: false, gpt: [], sovits: [], base_model: { available: false } };
     } catch (e) { this.voicesData = { ok: false, gpt: [], sovits: [], base_model: { available: false } }; }
     try {
       const s = await gptSovitsStatus(this.base);
       this.status = s.ok ? s.data : null;
     } catch (e) { this.status = null; }
+  }
+
+  // 服务端状态(如 refresh 内 false 的旧路径)走 _svc:
+  async _statusSafe() {
+    try {
+      const r = await this._svc("GET", "/status");
+      return r.ok ? r.jsonSafe() : null;
+    } catch (e) { return null; }
   }
 
   get activeChar() {
@@ -648,7 +669,7 @@ function safeAssignments() {
         if (!name) return;
         this._setBusy(true, t("vm.switchingChar", "切换角色…"));
         try {
-          const r = await fetch(`${this.base}/characters/switch`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) });
+          const r = await this._svc("POST", "/characters/switch", { name });
           const j = await r.json();
           if (!r.ok || !j.ok) throw new Error(j.message || "switch failed");
           const prof = loadVoiceProfile();
@@ -672,7 +693,7 @@ function safeAssignments() {
         const pv = body.querySelector(".fvtt-tts-vm-provider").value;
         if (!nm) return;
         try {
-          const r = await fetch(`${this.base}/characters/update`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: nm, tts_provider: pv }) });
+          const r = await this._svc("POST", "/characters/update", { name: nm, tts_provider: pv });
           const j = await r.json().catch(() => ({}));
           if (!r.ok || !j.ok) throw new Error((j && j.message) || "save failed");
           ui.notifications.info(t("vm.providerSaved", "语音引擎已保存，说话即生效"));
@@ -808,7 +829,7 @@ function safeAssignments() {
         };
         this._setBusy(true, t("vm.creating", "创建角色…"));
         try {
-          const r = await fetch(`${this.base}/characters/create`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload), signal: AbortSignal.timeout(120000) });
+          const r = await this._svc("POST", "/characters/create", payload);
           const j = await r.json();
           if (!r.ok || !j.ok) throw new Error(j.message || "create failed");
           // 自动把额外音频绑定到语气槽(开心→轻松→…→困倦 顺序, 每槽一段)
@@ -828,7 +849,7 @@ function safeAssignments() {
                   const a = await fetch(`${this.base}/asr?lang=auto`, { method: "POST", headers: { "Content-Type": f.type || "audio/wav" }, body: f, signal: AbortSignal.timeout(180000) });
                   if (a.ok) { const aj = await a.json(); if (aj.ok && aj.text) { prompt = aj.text; lang = aj.lang || ""; } }
                 } catch (e) { /* 转写失败可手填 */ }
-                await fetch(`${this.base}/characters/update`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: j.name, emotions: { [key]: { prompt, lang } } }) });
+                await this._svc("POST", "/characters/update", { name: j.name, emotions: { [key]: { prompt, lang } } });
                 bound++;
               } catch (e) { /* 单段失败继续下一段 */ }
             }
@@ -900,7 +921,7 @@ function safeAssignments() {
             const a = await fetch(`${this.base}/asr?lang=auto`, { method: "POST", headers: { "Content-Type": f.type || "audio/wav" }, body: f, signal: AbortSignal.timeout(180000) });
             if (a.ok) { const aj = await a.json(); if (aj.ok && aj.text) { prompt = aj.text; lang = aj.lang || ""; } }
           } catch (e) { /* 转写失败可手填 */ }
-          const up = await fetch(`${this.base}/characters/update`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, emotions: { [key]: { prompt, lang } } }) });
+          const up = await this._svc("POST", "/characters/update", { name, emotions: { [key]: { prompt, lang } } });
           const uj = await up.json();
           if (!up.ok || !uj.ok) throw new Error(uj.message || "update failed");
           // 读音频时长(短样本情绪特征不足, 提示建议 3~10 秒)
@@ -933,7 +954,7 @@ function safeAssignments() {
       row.querySelector(".vm-slot-clear").addEventListener("click", async () => {
         this._setBusy(true, t("vm.slotClearing", "清空语气…"));
         try {
-          const r = await fetch(`${this.base}/characters/update`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, emotions: { [key]: { ref: "" } } }) });
+          const r = await this._svc("POST", "/characters/update", { name, emotions: { [key]: { ref: "" } } });
           const j = await r.json();
           if (!r.ok || !j.ok) throw new Error(j.message || "clear failed");
           this.render();
@@ -947,7 +968,7 @@ function safeAssignments() {
         try {
           const curChar = (this.charsData && this.charsData.chars || []).find(c => c.name === name);
           const slotNow = curChar && (curChar.emotions || []).find(s => s.key === key);
-          const r = await fetch(`${this.base}/characters/bind-slot`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, key, file: (slotNow && slotNow.ref_audio_path) || "", avatar: av }) });
+          const r = await this._svc("POST", "/characters/bind-slot", { name, key, file: (slotNow && slotNow.ref_audio_path) || "", avatar: av });
           const j = await r.json();
           if (!r.ok || !j.ok) throw new Error(j.message || "avatar save failed");
           ui.notifications.info(t("vm.slotAvatarSaved", "已保存情绪立绘"));
@@ -968,7 +989,7 @@ function safeAssignments() {
           const curChar = (this.charsData && this.charsData.chars || []).find(c => c.name === name);
           const keys = new Set((curChar && curChar.emotions || []).map(s => s.key));
           let n = 1; while (keys.has("custom_" + n)) n++;
-          const r = await fetch(`${this.base}/characters/bind-slot`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, key: "custom_" + n, label, file: "", avatar: "" }) });
+          const r = await this._svc("POST", "/characters/bind-slot", { name, key: "custom_" + n, label, file: "", avatar: "" });
           const j = await r.json();
           if (!r.ok || !j.ok) throw new Error(j.message || "add failed");
           ui.notifications.info(t("vm.addSlotDone", "已添加自定义语气") + "：" + label);
@@ -1019,7 +1040,7 @@ function safeAssignments() {
           const it = items.find(x => x.file === file);
           this._setBusy(true, t("vm.samplesBinding", "绑定样本…"));
           try {
-            const r = await fetch(`${this.base}/characters/bind-slot`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, key, file, prompt: it ? it.text : "", lang: it ? it.lang : "" }) });
+            const r = await this._svc("POST", "/characters/bind-slot", { name, key, file, prompt: it ? it.text : "", lang: it ? it.lang : "" });
             const j = await r.json();
             if (!r.ok || !j.ok) throw new Error(j.message || "bind failed");
             ui.notifications.info(t("vm.samplesBound", "已绑定样本到语气槽"));
@@ -1041,7 +1062,7 @@ function safeAssignments() {
     if (!newName) return;
     this._setBusy(true, t("vm.duping", "复制角色…"));
     try {
-      const r = await fetch(`${this.base}/characters/duplicate`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, new_name: newName }), signal: AbortSignal.timeout(120000) });
+      const r = await this._svc("POST", "/characters/duplicate", { name, new_name: newName });
       const j = await r.json();
       if (!r.ok || !j.ok) throw new Error(j.message || "duplicate failed");
       ui.notifications.info(t("vm.duped", "已复制角色") + "：" + newName);
@@ -1074,7 +1095,7 @@ function safeAssignments() {
     if (!window.confirm(t("vm.delConfirm", "确定删除角色") + " " + name + " ?")) return;
     this._setBusy(true, t("vm.deleting", "删除角色…"));
     try {
-      const r = await fetch(`${this.base}/characters/delete`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) });
+      const r = await this._svc("POST", "/characters/delete", { name });
       const j = await r.json();
       if (!r.ok || !j.ok) throw new Error(j.message || "delete failed");
       const prof = loadVoiceProfile();
@@ -1094,11 +1115,11 @@ function safeAssignments() {
     this._setBusy(true, t("vm.switching", "切换音色模型…"));
     try {
       if (gpt) {
-        const r = await fetch(`${this.base}/set_gpt_weights?weights_path=${encodeURIComponent("models/" + gpt)}`, { signal: AbortSignal.timeout(60000) });
+        const r = await this._svc("GET", "/set_gpt_weights?weights_path=" + encodeURIComponent("models/" + gpt));
         if (!r.ok) throw new Error(t("vm.gptFail", "GPT 模型切换失败") + " " + (await r.text()));
       }
       if (sovits) {
-        const r = await fetch(`${this.base}/set_sovits_weights?weights_path=${encodeURIComponent("models/" + sovits)}`, { signal: AbortSignal.timeout(60000) });
+        const r = await this._svc("GET", "/set_sovits_weights?weights_path=" + encodeURIComponent("models/" + sovits));
         if (!r.ok) throw new Error(t("vm.sovitsFail", "SoVITS 模型切换失败") + " " + (await r.text()));
       }
       ui.notifications.info(t("vm.switched", "音色模型已切换") + `: ${gpt} / ${sovits}`);

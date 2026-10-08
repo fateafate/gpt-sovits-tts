@@ -231,6 +231,12 @@ export async function gptSovitsSynth(text, lang, { serverUrl, speedFactor = 1, o
       return { url: pr.audioUrl && !overrides ? pr.audioUrl : dataUri, audioUrl: pr.audioUrl || "", dataUri };
     }
   } catch (e) { /* 代理失败 → 直连 */ }
+  // https 页面(远程 GM/frp)直连 http://9881 必被 Mixed Content 阻止: 直接短路, 交给上层转交/报错, 不再发注定失败的请求
+  if (typeof location !== "undefined" && location.protocol === "https:" && !/^https:\/\//i.test(base)) {
+    const mcErr = new Error("Mixed-Content: https 页面不可直连 http TTS 服务, 请确保 socket 代理(tts-proxy)可用");
+    mcErr.mixedContent = true;
+    throw mcErr;
+  }
   const ctrl2 = new AbortController();
   const timer2 = setTimeout(() => ctrl2.abort(), 120000);
   try {
@@ -336,5 +342,37 @@ export async function gptSovitsStatus(serverUrl) {
     return { ok: false, error: e };
   } finally {
     clearTimeout(timer);
+  }
+}
+
+/** 通用 TTS 服务请求(socket 代理优先 → 直连回退): https 页面(GM/玩家经 frp)Mixed Content 根治。
+ *  base=serverUrl(可带协议), method=GET|POST, path="/characters" 等, bodyJSON 可选。
+ *  返回 { ok, status, json, direct } — direct=false 表示走了 socket 代理, true 表示直连。 */
+export async function svcRequest(base, method, path, bodyJSON, { timeoutMs = 30000 } = {}) {
+  const b = String(base || "http://127.0.0.1:9881").replace(/\/+$/, "");
+  // 1) socket 代理(服务端转发 127.0.0.1:9881, 浏览器无 Mixed Content 问题)
+  const pr = await gptSovitsSocketProxy({ method: String(method || "GET").toUpperCase(), path: String(path), json: (bodyJSON === undefined ? null : bodyJSON), timeoutMs }, { engine: "http", timeoutMs });
+  if (pr && pr.ok && typeof pr.status === "number") {
+    return { ok: true, status: pr.status || 200, json: pr.json || null, direct: false };
+  }
+  // 2) 直连回退(仅 http 页面/本机场景可用; https 页面直接抛错由调用方处理)
+  if (typeof location !== "undefined" && location.protocol === "https:" && !/^https:\/\//i.test(b)) {
+    const mcErr = new Error("Mixed-Content: https 页面不可直连 http TTS(" + path + ")");
+    mcErr.mixedContent = true;
+    return { ok: false, status: 0, error: mcErr, direct: true };
+  }
+  try {
+    const r = await fetch(b + path, {
+      method: String(method || "GET").toUpperCase(),
+      headers: { "Content-Type": "application/json" },
+      body: (method !== "GET" && bodyJSON !== undefined) ? JSON.stringify(bodyJSON) : undefined,
+      signal: AbortSignal.timeout(timeoutMs)
+    });
+    const txt = await r.text();
+    let json = null;
+    try { json = JSON.parse(txt); } catch (e) { /* noop */ }
+    return { ok: r.ok, status: r.status, json, direct: true };
+  } catch (e) {
+    return { ok: false, status: 0, error: e, direct: true };
   }
 }
