@@ -63,6 +63,24 @@ function ttsUsersHandler() {
   }
 }
 
+// 自测/诊断报告落盘: 客户端自测结束后把完整步骤(含播放通道每步状态)写到 FVTT 主机
+// 模块 server/player-selftest-<user>.json — 作者直接读文件排查, 不依赖来回传话/控制台截图
+function ttsReportHandler(data) {
+  const d = (data && typeof data === "object") ? data : {};
+  try {
+    const _p = (game.modules.get(MODULE_ID) && game.modules.get(MODULE_ID).path) || "";
+    if (!_p) return { ok: false, err: "module path" };
+    const dir = _pathM.join(_p, "server");
+    try { _fs.mkdirSync(dir, { recursive: true }); } catch (e) { /* noop */ }
+    const user = String((d.user) || "player").replace(/[\\/:*?"<>|]/g, "_").slice(0, 40) || "player";
+    const fn = _pathM.join(dir, `player-selftest-${user}.json`);
+    _fs.writeFileSync(fn, JSON.stringify({ ts: Date.now(), server: "fvtt", ...d }, null, 1), "utf8");
+    return { ok: true, file: fn };
+  } catch (e) {
+    return { ok: false, err: String((e && e.message) || e).slice(0, 200) };
+  }
+}
+
 // 代理转发目标(语音运行者 = 谁生成语音, 与 Foundry 所在机器解耦 — 市场级: 多人用别的电脑跑 FVTT, 引擎只装一台机器):
 //  ① 世界设置 voiceRunnerMap(GM 指定"谁的语音由哪个玩家(pl)的电脑生成", 服务端自动取该玩家在线 IP:9881) — 压力分摊到各 pl 电脑
 //  ② 世界设置 voiceServerUrl(引擎机器可达地址) — 未分配用户的默认引擎机
@@ -212,7 +230,7 @@ Hooks.once("init", () => {
   try {
     if (typeof game.socket.register === "function") {
       // Foundry v13 socket v2: 服务端注册, 客户端 emit("gpt-sovits-tts.tts-proxy", data) 拿返回值
-      game.socket.register(MODULE_ID, { "tts-proxy": ttsProxyHandler, "tts-metadata": ttsMetaHandler, "tts-users": ttsUsersHandler });
+      game.socket.register(MODULE_ID, { "tts-proxy": ttsProxyHandler, "tts-metadata": ttsMetaHandler, "tts-users": ttsUsersHandler, "tts-report": ttsReportHandler });
     } else if (typeof game.socket.on === "function") {
       // Foundry v12 兼容: 传统 socket 服务端收包(reply 回调)
       game.socket.on(`module.${MODULE_ID}`, async (data, reply) => {
@@ -225,6 +243,9 @@ Hooks.once("init", () => {
             if (typeof reply === "function") reply(r);
           } else if (data && data.__proxyTs && data.__proxyType === "tts-users") {
             const r = ttsUsersHandler();
+            if (typeof reply === "function") reply(r);
+          } else if (data && data.__proxyTs && data.__proxyType === "tts-report") {
+            const r = ttsReportHandler(data);
             if (typeof reply === "function") reply(r);
           }
         } catch (e) { if (typeof reply === "function") reply({ ok: false, err: String(e).slice(0, 200) }); }

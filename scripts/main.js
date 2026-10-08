@@ -2619,20 +2619,23 @@ async function runPlayerSelfTest() {
     if (game.user && game.user.isGM) {
       let ok2 = false;
       try { ok2 = await speak("语音合成与播放测试正常。", { lang: "zh", skipAiEmotion: true }); } catch (e) { /* noop */ console.error(e); }
-      // 轮询等播放真正发生(合成+队列可能数秒, 固定 1s 常误判"未检测到"): 最长 20s
-      let impl = "", playErr = "";
-      const tEnd = Date.now() + 20000;
-      while (Date.now() < tEnd) {
+      // 轮询等播放真正发生(合成+队列可能数秒, 固定 1s 常误判"未检测到"): 最长 20s; 每轮记录轨迹供报告文件分析
+      let impl = "", playErr = "", playTrace = [];
+      const _ahOk = !!((typeof foundry !== "undefined") && foundry.audio && foundry.audio.AudioHelper && typeof foundry.audio.AudioHelper.play === "function");
+      const _t0 = Date.now();
+      while (Date.now() - _t0 < 20000) {
         try {
           const c0 = window.__fvttTTSCnt || {};
           impl = window.__fvttTTSPlayImpl || (c0.official > (c0.native || 0) ? "official" : (c0.native || 0) > 0 ? "native" : "");
           playErr = window.__fvttTTSPlayErr || "";
+          playTrace.push({ t: Date.now() - _t0, impl, o: c0.official || 0, n: c0.native || 0, err: (playErr || "").slice(0, 80) });
           if (impl) break;
         } catch (e) { /* noop */ }
         await new Promise(r => setTimeout(r, 400));
       }
       pass("合成播出", ok2 ? "成功 ✓" : "失败", !!ok2);
-      pass("播放通道", impl === "official" ? "官方界面通道 ✓" : impl ? ("走" + impl + (playErr ? "·" + playErr : "")) : "未检测到播放" + (playErr ? "·" + playErr : ""), impl === "official");
+      pass("播放通道", impl === "official" ? "官方界面通道 ✓" : impl ? ("走" + impl + (playErr ? "·" + playErr : "")) : "未检测到播放", impl === "official");
+      pass("通道细节", "AH=" + (_ahOk ? "有" : "无") + " 检测" + playTrace.length + "次 " + JSON.stringify(playTrace.slice(0, 8)), true);
       pass("说明", "GM 端本地直连自测" + (playErr ? " · 官方失败原因: " + playErr : ""), true);
       finishSelfTest(steps); return;
     }
@@ -2697,6 +2700,16 @@ function finishSelfTest(steps) {
     const payload = { ts: Date.now(), user: uName, role: "player", kind: "playerSelfTest", ok: okN === tot, pass: okN, total: tot, fail: fails, steps };
     try {
       svcRequest(getCfg().serverUrl, "POST", "/speedtest/report", payload).catch(() => { /* 代理不可达 → 走聊天回执 */ });
+    } catch (e) { /* noop */ }
+    // 可靠落盘: socket 通道(Foundry 内部必达) → FVTT 主机 server/player-selftest-<user>.json, 作者直接读文件排查
+    try {
+      if (game && game.socket && typeof game.socket.emit === "function") {
+        const rep = Object.assign({ user: uName, kind: "playerSelfTest" }, payload, { __proxyTs: Date.now(), __proxyType: "tts-report" });
+        const rr = game.socket.emit(MODULE + ".tts-report", rep);
+        if (rr && typeof rr.catch === "function") rr.catch(() => { /* noop */ });
+        const rv = game.socket.emit(MODULE, rep);
+        if (rv && typeof rv.catch === "function") rv.catch(() => { /* noop */ });
+      }
     } catch (e) { /* noop */ }
     try {
       const mark = okN === tot ? "✅" : "⚠️";
