@@ -3754,7 +3754,11 @@ Hooks.on("updateChatMessage", (message, changed) => {
       || (changed.flags && changed.flags[MODULE] && (changed.flags[MODULE].audioUrl != null || changed.flags[MODULE].audioData != null))
       || flags.audioUrl
       || flags.audioData;
-    if (hasUrl || !message.id) return;   // (原: 作者是自己→跳过) 改为: 仅当本机真的已播过(playedIds)才跳过 —
+    // ⚠️ 2026-10-09 修复: hasUrl(消息带音频) 绝不能当"本机已播"跳过 —— 否则 GM 合成写回 audioData 后
+    // 他端 update hook 永远跳过, 其他设备听不到任何语音("其他设备完全没声音"根因)。hasUrl=true 时继续走下方播放。
+    if (!message.id) return;
+    if (!hasUrl) return;
+    // (原: 作者是自己→跳过) 改为: 仅当本机真的已播过(playedIds)才跳过 —
     // 同账号多连接(其他设备登录同一 GM)时 author.isSelf 对所有连接都为 true, 会造成"只有本机有声";
     // 去重改由 playedIds(本机已播登记) + audioPlay 同 src 去重(__fvttTTSPlayedSrcs) 双重保证: 本机不重复, 他端不漏播
     if (flags.speedTestAck) return;   // 回执消息无音频; 速度测试消息不跳过(测试=实际, 走同一播放路径, create 时已登记 playedIds 防重复)
