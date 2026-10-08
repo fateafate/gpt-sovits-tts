@@ -997,6 +997,14 @@ async function maybeSpeak(message) {
   } else if (game.socket && typeof game.socket.on === "function") {
     // 其他客户端: 等发言者的广播音频; 兜底超时后本地合成(广播通道故障时)
     const mid = message.id || "";
+    // ⚠️ 代理模式玩家消息(flags.synthRequest): GM 端 createChatMessage hook 正在代合成并写回(玩家角色) →
+    // 绝不本端模型兜底(否则"玩家角色合成一遍 + GM 当前模型合成一遍" = 两个不同语音); 只登记 pending 等写回播放
+    if (fl && fl.synthRequest) {
+      try {
+        if (mid && !playedIds.has(mid)) pendingTts.set(mid, -1);   // -1 哨兵: 仅登记, 播放/超时清理
+      } catch (e) { /* noop */ }
+      return;
+    }
     pendingTts.set(mid, setTimeout(() => {
       pendingTts.delete(mid);
       if (mid && playedIds.has(mid)) return;   // 广播音频已播放过, 不再兜底
