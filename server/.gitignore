@@ -1,0 +1,9 @@
+﻿# 运行产物（不入库）
+_t.json
+speed_report*.json
+player_selftest_*.json
+selftest*.json
+tmp_selftest.json
+tts-server*.log
+audio_cache/
+engine/audio_export/
