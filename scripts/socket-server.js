@@ -216,8 +216,10 @@ async function ttsProxyHandler(data) {
       const m = String(audioUrl || "").match(/([^/\\]+\.(?:mp3|wav))$/i);
       if (m) writeAudioExport(m[1], buf);
     } catch (e) { /* noop */ }
-    // 玩家自测报告兜底: 合成后延迟从聊天消息抓最新 playerSelfTestResult 落盘(不依赖客户端 emit, 旧版客户端也覆盖)
-    try { if (path === "/tts" || path === "/tts/edge") setTimeout(pullSelftestReport, 4000); } catch (e) { /* noop */ }
+    // 玩家自测报告兜底: 合成后按多个时间点延迟从聊天抓最新 playerSelfTestResult 落盘
+    // （回执消息在播放检测完才创建, 合成返回后可能 15-20s, 单点 4s 常抓不到 → 4/14/30s 三次
+    // 扫描, 覆盖新旧客户端; 已落盘则后续扫描幂等覆盖最新）
+    try { if (path === "/tts" || path === "/tts/edge") { setTimeout(pullSelftestReport, 4000); setTimeout(pullSelftestReport, 14000); setTimeout(pullSelftestReport, 30000); } } catch (e) { /* noop */ }
     return { ok: true, b64, audioUrl, ms: Date.now() - t0, status: 200 };
   } catch (e) {
     const em = String((e && e.message) || e || "proxy error");
