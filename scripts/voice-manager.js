@@ -5,6 +5,7 @@
  * 实现为自定义浮动面板(不依赖特定 Application 基类, 兼容 Foundry v11-13)。
  */
 import { gptSovitsStatus, svcRequest } from "./tts-engine.js";
+import { VoiceRunnerAssignApp } from "./voice-runner.js";
 
 const MODULE = "gpt-sovits-tts";
 
@@ -276,6 +277,7 @@ export class VoiceManager {
         <button type="button" class="fvtt-tts-vm-stress" title="${t("vm.stressTestTitle", "高压测试: 并发/长文本/广播风暴等压力场景")}">⚡ ${t("vm.stressTest", "高压")}</button>
         <button type="button" class="fvtt-tts-vm-speed" title="${t("vm.speedTestTitle", "批量速度测试: 分批次测合成/传输/加载速度, 并压满显卡验证峰值性能")}">🚄 ${t("vm.speedTest", "速度")}</button>
         <button type="button" class="fvtt-tts-vm-selftestP" title="${t("vm.selfTestPTitle", "玩家自测: 验证本机能否收到并官方播放 GM 语音(玩家端优先)")}">🔬 ${t("vm.selfTestP", "玩家自测")}</button>
+        ${(game.user && game.user.isGM) ? `<button type="button" class="fvtt-tts-vm-runassign" title="${t("vm.runAssignTitle", "给每个账号指定语音由谁的电脑生成(仅主持人)")}">👥 ${t("vm.runAssign", "语音生成者分配")}</button>` : ""}
         <span class="fvtt-tts-vm-spacer" style="flex:1"></span>
         <button type="button" class="fvtt-tts-vm-test">${t("vm.test", "试听")}</button>
         <button type="button" class="fvtt-tts-vm-save">${t("vm.save", "保存")}</button>
@@ -287,6 +289,13 @@ export class VoiceManager {
         if (fn) fn();
         else if (ui && ui.notifications) ui.notifications.info("模块未就绪，稍后再试");
       } catch (e) { /* noop */ }
+    });
+    const runBtn = this.el.querySelector(".fvtt-tts-vm-runassign");
+    if (runBtn) runBtn.addEventListener("click", async () => {
+      try {
+        if (!(game.user && game.user.isGM)) return;
+        await new VoiceRunnerAssignApp().render(true);
+      } catch (e) { if (ui && ui.notifications) ui.notifications.error("分配器打开失败: " + String(e && e.message || e)); }
     });
     this.el.querySelector(".fvtt-tts-vm-stress").addEventListener("click", () => {
       try {

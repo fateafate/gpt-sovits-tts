@@ -49,8 +49,8 @@ export async function fetchAllUsers() {
 export class VoiceRunnerAssignApp extends foundry.applications.api.ApplicationV2 {
   static DEFAULT_OPTIONS = {
     id: "fvtt-tts-runner-assign",
-    window: { title: () => l("runAssign.title", "语音生成者分配（谁的语音由谁的电脑生成）"), resizable: true },
-    position: { width: 760, height: 600 },
+    window: { title: l("runAssign.title", "语音生成者分配（谁的语音由谁的电脑生成）"), resizable: true },
+    position: { width: 780, height: 620 },
     classes: ["fvtt-tts-runner-assign"],
     template: "modules/gpt-sovits-tts/templates/voice-runner.html",
   };
@@ -61,6 +61,14 @@ export class VoiceRunnerAssignApp extends foundry.applications.api.ApplicationV2
     const users = await fetchAllUsers();   // 全部账号(含未登录), 服务端返回
     const sorted = users.slice().sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
     const curMap = parseRunnerMap(await loadRunnerMap());
+    if (!sorted.length) {
+      // 空列表诊断: 大概率是 FVTT 未重启/未刷新(服务端 tts-users 通道没生效), 别让窗口白屏
+      return {
+        hint: l("runAssign.empty", "⚠ 没有拿到账号列表。请确认：① 已重启 FVTT 服务器（服务端脚本新增了账号通道）；② 已硬刷新浏览器。若仍为空，把这里截图发作者。"),
+        rows: `<div class="rv-row"><span style="color:#c96">${esc(l("runAssign.emptyShort", "账号列表为空"))}</span></div>`,
+        allDefault: "", allSelf: "", save: ""
+      };
+    }
     if (!isGM) {
       const rows = sorted.map((u) => {
         const uname = String(u.name || "");
