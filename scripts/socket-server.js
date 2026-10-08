@@ -45,6 +45,24 @@ async function ttsMetaHandler(data) {
   }
 }
 
+// 全量账号列表(含未登录玩家 — 客户端 game.users 只含在线账号, 分配器需要全部): 服务端返回 name/isGM/active/ip
+function ttsUsersHandler() {
+  try {
+    const us = (game.users && game.users.contents) || [];
+    return {
+      ok: true,
+      users: us.map(u => ({
+        name: String(u.name || ""),
+        isGM: !!u.isGM,
+        active: !!u.active,
+        ip: String((u.connections && u.connections[0] && u.connections[0].address) || "").trim()
+      }))
+    };
+  } catch (e) {
+    return { ok: false, err: String((e && e.message) || e).slice(0, 200) };
+  }
+}
+
 // 代理转发目标(语音运行者 = 谁生成语音, 与 Foundry 所在机器解耦 — 市场级: 多人用别的电脑跑 FVTT, 引擎只装一台机器):
 //  ① 世界设置 voiceRunnerMap(GM 指定"谁的语音由哪个玩家(pl)的电脑生成", 服务端自动取该玩家在线 IP:9881) — 压力分摊到各 pl 电脑
 //  ② 世界设置 voiceServerUrl(引擎机器可达地址) — 未分配用户的默认引擎机
@@ -194,7 +212,7 @@ Hooks.once("init", () => {
   try {
     if (typeof game.socket.register === "function") {
       // Foundry v13 socket v2: 服务端注册, 客户端 emit("gpt-sovits-tts.tts-proxy", data) 拿返回值
-      game.socket.register(MODULE_ID, { "tts-proxy": ttsProxyHandler, "tts-metadata": ttsMetaHandler });
+      game.socket.register(MODULE_ID, { "tts-proxy": ttsProxyHandler, "tts-metadata": ttsMetaHandler, "tts-users": ttsUsersHandler });
     } else if (typeof game.socket.on === "function") {
       // Foundry v12 兼容: 传统 socket 服务端收包(reply 回调)
       game.socket.on(`module.${MODULE_ID}`, async (data, reply) => {
@@ -204,6 +222,9 @@ Hooks.once("init", () => {
             if (typeof reply === "function") reply(r);
           } else if (data && data.__proxyTs && data.__proxyType === "tts-metadata") {
             const r = await ttsMetaHandler(data);
+            if (typeof reply === "function") reply(r);
+          } else if (data && data.__proxyTs && data.__proxyType === "tts-users") {
+            const r = ttsUsersHandler();
             if (typeof reply === "function") reply(r);
           }
         } catch (e) { if (typeof reply === "function") reply({ ok: false, err: String(e).slice(0, 200) }); }

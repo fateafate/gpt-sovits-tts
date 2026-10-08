@@ -28,6 +28,24 @@ export async function loadRunnerMap() {
   try { return String(game.settings.get(MOD, "voiceRunnerMap") || ""); } catch (e) { return ""; }
 }
 
+/** 全量账号: FVTT 服务器返回(含未登录玩家); 回退=在线账号 */
+export async function fetchAllUsers() {
+  try {
+    if (typeof game !== "undefined" && game && game.socket && typeof game.socket.emit === "function") {
+      const pr = game.socket.emit("gpt-sovits-tts.tts-users", { __proxyTs: Date.now(), __proxyType: "tts-users" });
+      if (pr && typeof pr.then === "function") {
+        const r = await pr;
+        if (r && r.ok && Array.isArray(r.users) && r.users.length) {
+          return r.users.map(u => ({ name: String(u.name || ""), isGM: !!u.isGM, active: !!u.active }));
+        }
+      }
+    }
+  } catch (e) { /* 回退 */ }
+  try {
+    return ((game && game.users && game.users.contents) || []).map(u => ({ name: String(u.name || ""), isGM: !!u.isGM, active: !!u.active }));
+  } catch (e) { return []; }
+}
+
 export class VoiceRunnerAssignApp extends foundry.applications.api.ApplicationV2 {
   static DEFAULT_OPTIONS = {
     id: "fvtt-tts-runner-assign",
@@ -40,7 +58,7 @@ export class VoiceRunnerAssignApp extends foundry.applications.api.ApplicationV2
   async _prepareContext() {
     // 权限: 仅 GM 可分配; 玩家看到只读提示
     const isGM = !!(game.user && game.user.isGM);
-    const users = (game.users && game.users.contents) || [];
+    const users = await fetchAllUsers();   // 全部账号(含未登录), 服务端返回
     const sorted = users.slice().sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
     const curMap = parseRunnerMap(await loadRunnerMap());
     if (!isGM) {
@@ -55,12 +73,12 @@ export class VoiceRunnerAssignApp extends foundry.applications.api.ApplicationV2
       const uname = String(u.name || "");
       const cur = curMap[uname] || "";
       const opts = [`<option value="" ${cur ? "" : "selected"}>${esc(l("runAssign.def", "(默认引擎机)"))}</option>`]
-        .concat(sorted.map((o) => `<option value="${esc(String(o.name || ""))}" ${cur === String(o.name || "") ? "selected" : ""}>${esc(String(o.name || ""))}</option>`))
+        .concat(sorted.map((o) => `<option value="${esc(String(o.name || ""))}" ${cur === String(o.name || "") ? "selected" : ""}>${esc(String(o.name || ""))}${o.active ? "" : esc(l("runAssign.offline", " (离线)"))}</option>`))
         .join("");
       return `<div class="rv-row"><span class="rv-name" title="${esc(uname)}">${esc(uname)}</span><span class="rv-tag ${u.isGM ? "" : "pl"}">${u.isGM ? esc(l("runAssign.gm", "主持")) : esc(l("runAssign.pl", "玩家"))}</span><span class="rv-arrow">→</span><select class="rv-sel" data-user="${esc(uname)}">${opts}</select></div>`;
     }).join("");
     return {
-      hint: l("runAssign.hint", "每个账号的语音由所选账号的电脑生成（被选中账号需开着 TTS 服务并与 FVTT 服务器互通，服务器会自动取该账号电脑的 IP）。不选 = 默认引擎机。所有账号（含主持人自己）都可分配，玩家不能自己调整。"),
+      hint: l("runAssign.hint2", "全部账号（含未登录玩家）都在这里，主持人直接给每个账号选「由谁的电脑生成」——没登录的账号也可以先安排（登录即生效）。被选中账号需开着 TTS 服务并与 FVTT 服务器互通，服务器自动取该账号电脑的 IP。玩家不能自己调整。"),
       rows,
       allDefault: l("runAssign.allDefault", "全部恢复默认"),
       allSelf: l("runAssign.allSelf", "全部由自己生成"),
