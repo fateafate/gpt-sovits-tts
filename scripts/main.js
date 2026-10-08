@@ -4,8 +4,9 @@
  *       麦克风听写(浏览器 Web Speech / 服务端 /asr) 直接发送或插入输入框
  *       消息重听按钮、状态指示灯、/ttssay 等命令、game.gptSoVitsTTS 宏 API
  */
-import { PlaybackQueue, audioPlay, webSpeechSpeak, gptSovitsSynth, gptSovitsStatus, synthEdge, svcRequest } from "./tts-engine.js";
+import { PlaybackQueue, audioPlay, webSpeechSpeak, gptSovitsSynth, gptSovitsStatus, synthEdge, svcRequest, installModuleSocket, moduleEmit } from "./tts-engine.js";
 import { installRunnerAssignUI } from "./voice-runner.js";
+import { installGmProxy } from "./gm-proxy.js";
 import { BrowserSTT, ServerSTT } from "./stt-engine.js";
 import { VoiceManager, loadVoiceProfile, saveVoiceProfile, currentVoice, makeDraggable, getStylePrompt, setStylePrompt } from "./voice-manager.js";
 import { prepareTextForLang, localizeNumbers } from "./text-lib.js";
@@ -611,15 +612,9 @@ async function speak(text, { lang = null, sender = "", refAudioPath = null, prom
               if (_upd.audioUrl) _fu["flags.gpt-sovits-tts.audioUrl"] = _upd.audioUrl;
               _msg.update(_fu).catch(() => { /* noop */ });
             } else {
-              // 玩家无写回权限 → Foundry 服务端代写(服务端恒有写入权, 文档更新广播全员 — 根治"只有发言人听到")
+              // 玩家无写回权限 → GM 端代写(v13 module 事件中继到 GM 客户端, GM 本端 update 广播全员 — 根治"只有发言人听到")
               try {
-                if (game.socket && typeof game.socket.emit === "function") {
-                  const meta = Object.assign({ messageId, __proxyTs: Date.now(), __proxyType: "tts-metadata" }, _upd);
-                  // v13 register 通道: 回调式(v13 emit 不返回 Promise; 响应仅用于诊断, 忽略)
-                  game.socket.emit(MODULE + ".tts-metadata", meta, () => { /* noop */ });
-                  // v12 兼容通道
-                  game.socket.emit(MODULE, meta, () => { /* noop */ });
-                }
+                moduleEmit("tts-metadata", Object.assign({ messageId, __proxyTs: Date.now() }, _upd), { timeoutMs: 15000 }).catch(() => { /* noop */ });
               } catch (e) { /* noop */ }
             }
           } catch (e) { /* noop */ }
@@ -2709,14 +2704,9 @@ function finishSelfTest(steps) {
     try {
       svcRequest(getCfg().serverUrl, "POST", "/speedtest/report", payload).catch(() => { /* 代理不可达 → 走聊天回执 */ });
     } catch (e) { /* noop */ }
-    // 可靠落盘: socket 通道(Foundry 内部必达) → FVTT 主机 server/player-selftest-<user>.json, 作者直接读文件排查
+    // 可靠落盘: GM 端代 POST 引擎 /speedtest/report → 引擎写 FVTT 主机 server/player_selftest_<user>.json(v13 module 事件中继)
     try {
-      if (game && game.socket && typeof game.socket.emit === "function") {
-        const rep = Object.assign({ user: uName, kind: "playerSelfTest" }, payload, { __proxyTs: Date.now(), __proxyType: "tts-report" });
-        // v13 register 通道回调式 + v12 兼容通道, 响应忽略(诊断用)
-        game.socket.emit(MODULE + ".tts-report", rep, () => { /* noop */ });
-        game.socket.emit(MODULE, rep, () => { /* noop */ });
-      }
+      moduleEmit("tts-report", { report: payload }, { timeoutMs: 15000 }).catch(() => { /* noop */ });
     } catch (e) { /* noop */ }
     try {
       const mark = okN === tot ? "✅" : "⚠️";
@@ -3270,6 +3260,9 @@ Hooks.once("init", async () => {
 
 Hooks.once("ready", () => {
   setupAPI();
+  // Foundry v13 socket: 模块 socket 中继(module.<id>) — 各端匹配响应 + GM 端执行代理(合成/代写/报告落盘)
+  try { installModuleSocket(); } catch (e) { /* noop */ }
+  try { installGmProxy(); } catch (e) { /* noop */ }
   // 🔊 Foundry playAudio 广播监听(记录已播 src): 与 audioData DB 兜底去重(双通道合一, 防重复播放);
     // 官方内部通道(fileURL)+DB 内嵌(dataURI) src 不同, 额外登记"官方即时已播"文件 URL 集(10s)供 DB 兜底判定是否跳过
     try {

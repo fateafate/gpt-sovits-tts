@@ -184,23 +184,48 @@ function pickVoice(lang) {
 
 /* ---------- GPT-SoVITS 服务端合成 ---------- */
 // 返回 { url(blob URL), audioUrl(服务端缓存文件相对路径, 空=无), blob(仅 asBlob=true 时) }
-/* ---------- 服务端合成代理(多设备根治): 任意端经 Foundry socket → 服务器本机 9881 ---------- */
-export async function gptSovitsSocketProxy(payload, { engine = "gpt", timeoutMs = 150000 } = {}) {
+/* ---------- module 事件(GM 委托, Foundry v13 官方 socket:true 中继) ----------
+ * v13 无服务端脚本(socket-server.js 约定已移除)。module.json "socket": true →
+ * 服务器把 "module.gpt-sovits-tts" 事件中继到其他客户端(不含发送者)。
+ * 玩家端用 moduleEmit 发起(附 __rid), GM 端(gm-proxy.js)执行后 emit 回传 __type 响应,
+ * 各端按 __rid 匹配 resolve; 无响应 → 超时 resolve null → 调用方退回直连。 */
+const _moduleReqs = new Map();
+export function moduleEmit(type, payload = {}, { timeoutMs = 20000 } = {}) {
   return new Promise((resolve) => {
-    let settled = false;
-    const finish = (v) => { if (settled) return; settled = true; clearTimeout(tm); resolve(v); };
-    let tm = null;
     try {
-      if (typeof game === "undefined" || !game || !game.socket || typeof game.socket.emit !== "function") { finish(null); return; }
-      // Foundry v13 socket: 回调式(socket.io ack; 官方 SocketInterface.dispatch 同款; emit 不返回 Promise)。
-      // 服务端 register 已注册该 scope.handler 时回调收到服务端返回值; 未注册/不响应 → 超时兜底 finish(null) → 调用方退回直连。
-      const req = Object.assign({}, payload, { engine, user: (() => { try { return (game.user && game.user.name) || ""; } catch (e) { return ""; } })() });
-      tm = setTimeout(() => finish(null), timeoutMs);
-      try {
-        game.socket.emit("gpt-sovits-tts.tts-proxy", req, (response) => finish(response || null));
-      } catch (e) { /* finish(null) via timer */ }
-    } catch (e) { finish(null); }
+      if (typeof game === "undefined" || !game || !game.socket || typeof game.socket.emit !== "function") { resolve(null); return; }
+      const rid = "r" + Date.now() + "_" + Math.floor(Math.random() * 1e6);
+      const timer = setTimeout(() => { try { _moduleReqs.delete(rid); } catch (e) { /* noop */ } resolve(null); }, timeoutMs);
+      _moduleReqs.set(rid, { resolve, timer });
+      game.socket.emit("module." + "gpt-sovits-tts", Object.assign({ __type: type, __rid: rid }, payload || {}));
+    } catch (e) { resolve(null); }
   });
+}
+// 各端监听 module 事件: GM 端由 gm-proxy 处理请求; 本端匹配响应
+export function installModuleSocket() {
+  try {
+    if (typeof game === "undefined" || !game || !game.socket || typeof game.socket.on !== "function") return;
+    game.socket.on("module." + "gpt-sovits-tts", (data) => {
+      try {
+        if (!data || typeof data !== "object") return;
+        if (typeof data.__type === "string" && data.__type.indexOf("-resp") > 0 && data.__rid) {
+          const e = _moduleReqs.get(data.__rid);
+          if (e) { clearTimeout(e.timer); _moduleReqs.delete(data.__rid); e.resolve(data.result || null); }
+        }
+      } catch (e) { /* noop */ }
+    });
+  } catch (e) { /* noop */ }
+}
+
+/* ---------- 服务端合成代理(多设备根治): 任意端经 module 事件 → GM 端 → 引擎 ---------- */
+export async function gptSovitsSocketProxy(payload, { engine = "gpt", timeoutMs = 150000 } = {}) {
+  // module 事件请求 GM 端执行(玩家端; GM 端自己发起 → 广播不含自己收不到 → 短超时退直连, 本机引擎直接可达)
+  try {
+    const gmSelf = !!(game && game.user && game.user.isGM);
+    const r = await moduleEmit("tts-proxy", Object.assign({}, payload, { engine, user: (() => { try { return (game.user && game.user.name) || ""; } catch (e) { return ""; } })() }), { timeoutMs: gmSelf ? 3000 : timeoutMs });
+    if (r && typeof r === "object") return r;
+  } catch (e) { /* fallthrough → 直连 */ }
+  return null;
 }
 
 export async function gptSovitsSynth(text, lang, { serverUrl, speedFactor = 1, overrides = null, mediaType = "wav", asBlob = false, role = "" } = {}) {

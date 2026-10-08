@@ -1,0 +1,127 @@
+/* ============================================================================
+ * scripts/gm-proxy.js — Foundry v13 "模块级服务端职责"的 GM 端执行器
+ *
+ * Foundry v13 没有服务端脚本机制(socket-server.js 约定已移除, 实测 socket:true
+ * 仅启用 "module.<id>" 事件由服务器中继到其他客户端)。因此原本服务端承担的
+ * 合成代理 / 代写 flags / 自测报告落盘, 改为: 玩家端 moduleEmit 请求 → GM 端
+ * 客户端执行(本机直连引擎) → 回传结果。GM 是引擎机(本模块场景), 天然可达。
+ *
+ * module.json 需 "socket": true(启用 module 事件中继)。
+ * main.js 在 ready 后调用 installGmProxy() 注册 GM 端监听。
+ * ============================================================================ */
+const MOD = "gpt-sovits-tts";
+
+function _base() {
+  try {
+    const s = String(game.settings.get(MOD, "voiceServerUrl") || "").trim();
+    if (/^https?:\/\//i.test(s)) return s.replace(/\/+$/, "");
+  } catch (e) { /* noop */ }
+  return "http://127.0.0.1:9881";
+}
+
+function _b64ToArr(b64) {
+  const bin = atob(String(b64));
+  const arr = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+  return arr;
+}
+
+/** GM 端执行合成/通用请求(直连引擎, 本机无 Mixed Content) */
+async function gmTtsProxy(d) {
+  try {
+    const method = String(d.method || "POST").toUpperCase();
+    const path = String(d.path || "/tts");
+    const hasB64 = (typeof d.b64Body === "string" && d.b64Body);
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), Math.min(Number(d.timeoutMs) || 30000, 120000));
+    try {
+      const resp = await fetch(_base() + path, {
+        method,
+        headers: hasB64 ? { "Content-Type": String(d.contentType || "application/octet-stream") } : { "Content-Type": "application/json" },
+        body: hasB64 ? _b64ToArr(d.b64Body) : (method !== "GET" && d.json !== undefined) ? JSON.stringify(d.json) : undefined,
+        signal: ctrl.signal
+      });
+      if (d.binary) {
+        const ab = await resp.arrayBuffer();
+        let b64 = "";
+        try {
+          const arr = new Uint8Array(ab);
+          let s = "";
+          for (let i = 0; i < arr.length; i += 32768) s += String.fromCharCode.apply(null, arr.subarray(i, i + 32768));
+          b64 = btoa(s);
+        } catch (e) { /* noop */ }
+        return {
+          ok: resp.ok,
+          status: resp.status,
+          b64,
+          mime: String(resp.headers.get("content-type") || "application/octet-stream").split(";")[0].trim(),
+          audioUrl: String(resp.headers.get("X-Fvtt-Audio-Url") || resp.headers.get("X-Audio-Url") || "").trim()
+        };
+      }
+      const text = await resp.text();
+      let json = null;
+      try { json = JSON.parse(text); } catch (e) { /* noop */ }
+      return {
+        ok: resp.ok,
+        status: resp.status,
+        json,
+        text: text.slice(0, 2000),
+        audioUrl: String(resp.headers.get("X-Fvtt-Audio-Url") || resp.headers.get("X-Audio-Url") || "").trim(),
+        cache: String(resp.headers.get("X-Fvtt-Cache") || "miss").trim()
+      };
+    } finally { clearTimeout(timer); }
+  } catch (e) {
+    return { ok: false, status: 0, err: String((e && e.message) || e || "gm-proxy error").slice(0, 200) };
+  }
+}
+
+/** GM 端代写 flags(玩家 speak 合成成功但无写回权限时) */
+async function gmTtsMeta(d) {
+  const msgId = String((d && d.messageId) || "");
+  if (!msgId) return;
+  try {
+    const msg = game.messages.get(msgId);
+    if (!msg) return;
+    const upd = {};
+    if (d.audioData && String(d.audioData).length > 20 && String(d.audioData).length < 400000) upd["flags." + MOD + ".audioData"] = String(d.audioData);
+    if (d.audioUrl && typeof d.audioUrl === "string" && d.audioUrl) upd["flags." + MOD + ".audioUrl"] = String(d.audioUrl);
+    if (Object.keys(upd).length) await msg.update(upd);
+  } catch (e) { /* noop */ }
+}
+
+/** GM 端把自测报告 POST 引擎 /speedtest/report → 引擎写 FVTT 主机 server/player_selftest_<user>.json */
+async function gmTtsReport(d) {
+  try {
+    const rep = (d && d.report) || {};
+    await fetch(_base() + "/speedtest/report", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(rep),
+      signal: AbortSignal.timeout(15000)
+    }).catch(() => { /* noop */ });
+  } catch (e) { /* noop */ }
+}
+
+/** 注册 module 事件监听: GM 端执行请求; 任意端匹配响应(tts-engine 的 moduleEmit) */
+export function installGmProxy() {
+  try {
+    if (typeof game === "undefined" || !game || !game.socket || typeof game.socket.on !== "function") return;
+    game.socket.on("module." + MOD, (data) => {
+      try {
+        if (!data || typeof data !== "object") return;
+        const t = String(data.__type || "");
+        // GM 端只执行请求类(响应由 moduleEmit 处理, 见 tts-engine.installModuleSocket)
+        if (!game.user || !game.user.isGM) return;
+        if (t === "tts-proxy") {
+          gmTtsProxy(data).then((r) => {
+            try { game.socket.emit("module." + MOD, { __type: "tts-proxy-resp", __rid: String(data.__rid || ""), result: r || null }); } catch (e) { /* noop */ }
+          }).catch(() => { /* noop */ });
+        } else if (t === "tts-metadata") {
+          gmTtsMeta(data).catch(() => { /* noop */ });
+        } else if (t === "tts-report") {
+          gmTtsReport(data).catch(() => { /* noop */ });
+        }
+      } catch (e) { /* noop */ }
+    });
+  } catch (e) { /* noop */ }
+}
