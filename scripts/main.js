@@ -410,7 +410,7 @@ function safeGetFlag(message, key) {
 }
 
 /* ============ 核心: 朗读 ============ */
-async function speak(text, { lang = null, sender = "", refAudioPath = null, promptText = null, promptLang = null, speed = null, volume = null, auxRefAudioPaths = null, emotionMix = null, broadcast = false, messageId = "", skipAiEmotion = false } = {}) {
+async function speak(text, { lang = null, sender = "", refAudioPath = null, promptText = null, promptLang = null, speed = null, volume = null, auxRefAudioPaths = null, emotionMix = null, broadcast = false, messageId = "", skipAiEmotion = false, role = null } = {}) {
   const cfg = getCfg();
   if (!cfg.enabled) return false;
   // 调试: 记录每次朗读调用(来源/语言), 排查"日语+中文重复读"
@@ -546,7 +546,7 @@ async function speak(text, { lang = null, sender = "", refAudioPath = null, prom
           blob = cc.blob; audioUrl = cc.audioUrl || "";
           diagPlay("cache", messageId, finalText);
         } else {
-          const res = await _synthIt(finalText, finalLang, { spdIn: spd, ov: overrides, blobOnly: true, role: prof0.current });
+          const res = await _synthIt(finalText, finalLang, { spdIn: spd, ov: overrides, blobOnly: true, role: role || prof0.current });
           blob = res.blob; audioUrl = res.audioUrl || "";
           try {
             _synthCache.set(ck, { blob, audioUrl });
@@ -601,6 +601,20 @@ async function speak(text, { lang = null, sender = "", refAudioPath = null, prom
               if (_b64 && _b64.length < 400000) _upd.audioData = "data:audio/mpeg;base64," + _b64;
             }
             if (audioUrl) _upd.audioUrl = audioUrl.startsWith("http") ? new URL(audioUrl).pathname : audioUrl;
+            // 角色上下文写进 flags: 他端 15s 兜底/重播缓存 miss 用**作者的声音**重新合成,
+            // 不再用各端本端模型(根治"几个玩家几遍 / 玩家角色+GM模型两个不同语音")
+            try {
+              const _pvCtx = pv0 || currentVoice();
+              if (_pvCtx) {
+                if (_pvCtx.name) _upd.role = _pvCtx.name;
+                if (_pvCtx.ref) _upd.ref = _pvCtx.ref;
+                if (_pvCtx.promptText) _upd.promptText = _pvCtx.promptText;
+                if (_pvCtx.promptLang) _upd.promptLang = _pvCtx.promptLang;
+                if (_pvCtx.auxRef) _upd.auxRef = _pvCtx.auxRef;
+                if (typeof _pvCtx.emotionMix === "number") _upd.emotionMix = _pvCtx.emotionMix;
+                if (_pvCtx.emotion) _upd.emotion = _pvCtx.emotion;
+              }
+            } catch (e) { /* noop */ }
             if (!Object.keys(_upd).length) { /* 无可用数据 */ }
             else if (_canWrite() && _msg) {
               // GM: 本端直接写回(数据库同步广播全员)
@@ -625,7 +639,7 @@ async function speak(text, { lang = null, sender = "", refAudioPath = null, prom
           // 是广播不可达时的同通道兜底(pl 端收到消息后走同一 AudioHelper 播放)。不再自定义 socket 广播。
         } catch (e) { /* 广播兜底: 仅本地播放 */ }
       } else {
-        const res = await _synthIt(finalText, finalLang, { spdIn: spd, ov: overrides, blobOnly: false, role: prof0.current });
+        const res = await _synthIt(finalText, finalLang, { spdIn: spd, ov: overrides, blobOnly: false, role: role || prof0.current });
         // 官方文件路径优先(相对 /modules/... + push 广播全家官方通道); 无落盘才 blob/dataURI
         const mpx = (() => { try { return _modulePath(res.audioUrl || ""); } catch (e) { return ""; } })();
         const url = mpx || res.dataUri || res.url;
@@ -1008,7 +1022,19 @@ async function maybeSpeak(message) {
     pendingTts.set(mid, setTimeout(() => {
       pendingTts.delete(mid);
       if (mid && playedIds.has(mid)) return;   // 广播音频已播放过, 不再兜底
-      speak(speakText, { ...opts, broadcast: false });
+      // 作者已写回音频(flags.audioUrl/audioData 存在 → update hook 会播/已播) → 不再兜底合成 —
+      // 根治"作者一遍 + 他端兜底一遍 = 两个语音/几遍"(兜底仅在作者 15s 内完全没产出音频时)
+      try {
+        const mNow = mid ? game.messages.get(mid) : null;
+        const fNow = (mNow && mNow.flags && mNow.flags[MODULE]) || {};
+        if (fNow.audioUrl || fNow.audioData) {
+          try { playedIds.add(mid); setTimeout(() => { try { playedIds.delete(mid); } catch (e2) { /* noop */ } }, 30000); } catch (e2) { /* noop */ }
+          return;
+        }
+      } catch (e) { /* noop */ }
+      // 兜底合成用**消息 flags 的作者角色/参考音频**(speak role 参数 + overrides 已带 fl.ref 等),
+      // 绝不用本端当前模型 — 两个不同语音的根治
+      speak(speakText, { ...opts, broadcast: false, role: (fl && fl.role) || null });
     }, 15000));
   } else {
     speak(speakText, { ...opts, broadcast: false });
@@ -3636,6 +3662,8 @@ async function _proxySynthFor(message) {
   const fl2 = (message && message.flags && message.flags[MODULE]) || {};
   const req = fl2.synthRequest || {};
   if (!req.text) return { ok: false, err: "no-synth-request" };
+  // 已有音频(作者端预加载写回/其他端已代合成) → 跳过代合成, 防双写/双语音(相同声音两个文件 → 全员播两遍)
+  if (fl2.audioUrl || fl2.audioData) return { ok: true, skipped: "audio-exists" };
   try {
     const cfg = getCfg();
     const lang = String(req.lang || "zh") || "zh";
@@ -3657,6 +3685,12 @@ async function _proxySynthFor(message) {
     }
     const audioUrl = res.audioUrl || "";
     const out = { ok: !!audioUrl, ms: Date.now() - t0, audioUrl: audioUrl || "", text: String(req.text).slice(0, 40) };
+    // 写回前竞态复查: 合成期间作者端已写回音频(预加载) → 放弃本次写回, 防止双音频双播放
+    try {
+      const _mN = (message && typeof message.getFlag === "function") ? await message.getFlag(MODULE, "audioUrl").catch(() => null) : null;
+      const _mD = (message && typeof message.getFlag === "function") ? await message.getFlag(MODULE, "audioData").catch(() => null) : null;
+      if (_mN || _mD) return { ok: true, skipped: "audio-exists-race", ms: Date.now() - t0 };
+    } catch (e) { /* noop */ }
     if (audioUrl && message && message.id && typeof message.update === "function") {
       const rel = audioUrl.startsWith("http") ? new URL(audioUrl).pathname : audioUrl;
       const upd = { "flags.gpt-sovits-tts.audioUrl": rel, "flags.gpt-sovits-tts.synthResult": "ok" };
