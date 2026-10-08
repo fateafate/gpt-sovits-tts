@@ -71,7 +71,12 @@ async function gmTtsProxy(d) {
       }
       const text = await resp.text();
       if (!resp.ok && resp.status >= 400) {
-        try { console.warn("[gm-proxy] " + path + " → " + resp.status + ": " + text.slice(0, 400) + " | reqBody=" + String(jbody || "").slice(0, 300)); } catch (e) { /* noop */ }
+        // 合成路径(/tts)失败是核心问题, 打 warn 附请求体; /llm/* 等辅助功能失败静默(避免每消息刷屏)
+        try {
+          if (path.indexOf("/llm") !== 0) {
+            console.warn("[gm-proxy] " + path + " → " + resp.status + ": " + text.slice(0, 400) + " | reqBody=" + String(jbody || "").slice(0, 300));
+          }
+        } catch (e) { /* noop */ }
       }
       let json = null;
       try { json = JSON.parse(text); } catch (e) { /* noop */ }

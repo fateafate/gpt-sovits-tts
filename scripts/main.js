@@ -3998,6 +3998,8 @@ function applyEmotionAvatar(message, html) {
 // 无角色(默认音色)消息: AI 从角色列表选最像说话者的角色 → 更新 flags → 立绘随角色显示
 async function maybePickAvatarRole(message) {
   try {
+    // LLM 失败降级: 一次失败(API 不通/404/超时)后本会话禁用, 避免每消息反复调失败刷屏
+    if (window.__fvttTTSPickRoleBroken === true) return;
     if (!message || !message.flags || !message.flags[MODULE]) return;
     const fl = message.flags[MODULE];
     if (fl.role) return;                       // 已带角色
@@ -4010,8 +4012,11 @@ async function maybePickAvatarRole(message) {
     const j = (r.jsonSafe ? r.jsonSafe() : (r.json || {})) || {};
     if (r.ok && j.ok && j.role && names.includes(j.role)) {
       safeMsgWrite(message, { flags: { [MODULE]: { ...fl, role: j.role, aiPicked: true } } });
+    } else {
+      // 失败降级(网络/LLM服务异常): 本会话不再尝试(用户可重进会话恢复)
+      try { window.__fvttTTSPickRoleBroken = true; console.warn("[gpt-sovits-tts] AI 自动选角失败, 本会话停用(可在设置检查 LLM API 地址/密钥)"); } catch (e) { /* noop */ }
     }
-  } catch (e) { /* noop */ }
+  } catch (e) { try { window.__fvttTTSPickRoleBroken = true; } catch (e2) { /* noop */ } }
 }
 
 Hooks.on("chatInput", (event, inputOptions) => {
