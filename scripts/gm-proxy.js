@@ -32,13 +32,24 @@ async function gmTtsProxy(d) {
     const method = String(d.method || "POST").toUpperCase();
     const path = String(d.path || "/tts");
     const hasB64 = (typeof d.b64Body === "string" && d.b64Body);
+    // 请求体字段标准化(兼容各端 payload 命名): lang→text_lang / speedFactor→speed_factor / mediaType→media_type;
+    // null/undefined 体 → 空对象(避免 JSON "null" 触发引擎 422)
+    let jbody = null;
+    try {
+      const j0 = (d.json && typeof d.json === "object" && !Array.isArray(d.json)) ? d.json : {};
+      const j = Object.assign({}, j0);
+      if (j.lang !== undefined && j.text_lang === undefined) { j.text_lang = j.lang; delete j.lang; }
+      if (j.speedFactor !== undefined && j.speed_factor === undefined) { j.speed_factor = j.speedFactor; delete j.speedFactor; }
+      if (j.mediaType !== undefined && j.media_type === undefined) { j.media_type = j.mediaType; delete j.mediaType; }
+      jbody = JSON.stringify(j);
+    } catch (e) { jbody = "{}"; }
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), Math.min(Number(d.timeoutMs) || 30000, 120000));
     try {
       const resp = await fetch(_base() + path, {
         method,
         headers: hasB64 ? { "Content-Type": String(d.contentType || "application/octet-stream") } : { "Content-Type": "application/json" },
-        body: hasB64 ? _b64ToArr(d.b64Body) : (method !== "GET" && d.json !== undefined) ? JSON.stringify(d.json) : undefined,
+        body: hasB64 ? _b64ToArr(d.b64Body) : (method !== "GET") ? jbody : undefined,
         signal: ctrl.signal
       });
       if (d.binary) {
@@ -59,6 +70,9 @@ async function gmTtsProxy(d) {
         };
       }
       const text = await resp.text();
+      if (!resp.ok && resp.status >= 400) {
+        try { console.warn("[gm-proxy] " + path + " → " + resp.status + ": " + text.slice(0, 400)); } catch (e) { /* noop */ }
+      }
       let json = null;
       try { json = JSON.parse(text); } catch (e) { /* noop */ }
       return {

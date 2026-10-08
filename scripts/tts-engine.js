@@ -230,13 +230,22 @@ export async function gptSovitsSocketProxy(payload, { engine = "gpt", timeoutMs 
 
 export async function gptSovitsSynth(text, lang, { serverUrl, speedFactor = 1, overrides = null, mediaType = "wav", asBlob = false, role = "" } = {}) {
   const base = String(serverUrl || "http://127.0.0.1:9880").replace(/\/+$/, "");
+  // socket 代理 payload: 直接用引擎 TTS_Request 字段名(text_lang/speed_factor/media_type), 避免未知字段被忽略→缺参
   const payload = {
     text: String(text),
-    lang: lang,
-    speedFactor,
-    mediaType,
-    role,
-    overrides: overrides || null
+    text_lang: lang,
+    speed_factor: speedFactor,
+    media_type: mediaType,
+    role: String(role || ""),
+    ...(overrides ? {
+      ...(overrides.refAudioPath ? { ref_audio_path: overrides.refAudioPath } : {}),
+      ...(overrides.promptText ? { prompt_text: overrides.promptText } : {}),
+      ...(overrides.promptLang ? { prompt_lang: overrides.promptLang } : {}),
+      ...(overrides.auxRefAudioPaths && overrides.auxRefAudioPaths.length ? { aux_ref_audio_paths: overrides.auxRefAudioPaths } : {}),
+      ...(typeof overrides.emotionMix === "number" ? { emotion_mix: overrides.emotionMix } : {}),
+      ...(overrides.textSplitMethod ? { text_split_method: overrides.textSplitMethod } : {}),
+      ...(typeof overrides.fragmentInterval === "number" ? { fragment_interval: overrides.fragmentInterval } : {})
+    } : {})
   };
   // 服务端合成代理优先(socket 回传 base64): 任意端(远程 GM/玩家)都走服务器本机 9881, 无 Mixed Content/证书/拓扑差异;
   // 代理不可用(旧版 Foundry/服务未注册/超时)时退回直连(本地设备仍有声)
