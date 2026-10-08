@@ -3664,9 +3664,10 @@ Hooks.on("updateChatMessage", (message, changed) => {
       || (changed.flags && changed.flags[MODULE] && (changed.flags[MODULE].audioUrl != null || changed.flags[MODULE].audioData != null))
       || flags.audioUrl
       || flags.audioData;
-    if (!hasUrl || !message.id) return;
+    if (hasUrl || !message.id) return;   // (原: 作者是自己→跳过) 改为: 仅当本机真的已播过(playedIds)才跳过 —
+    // 同账号多连接(其他设备登录同一 GM)时 author.isSelf 对所有连接都为 true, 会造成"只有本机有声";
+    // 去重改由 playedIds(本机已播登记) + audioPlay 同 src 去重(__fvttTTSPlayedSrcs) 双重保证: 本机不重复, 他端不漏播
     if (flags.speedTestAck) return;   // 回执消息无音频; 速度测试消息不跳过(测试=实际, 走同一播放路径, create 时已登记 playedIds 防重复)
-    if (message.author && message.author.isGM && message.author.isSelf) return;   // 仅 GM 作者跳过(本地已直连合成播出); 代理模式下 pl 作者也靠 flags 播放
     if (playedIds.has(message.id)) return;   // socket 广播/本地已播过则不重复
     playedIds.add(message.id);   // 先登记(防 flags 再次 update 的 fetch 竞态重复); 拉取失败再放行重试
     setTimeout(() => { try { playedIds.delete(message.id); } catch (e) { /* noop */ } }, 30000);

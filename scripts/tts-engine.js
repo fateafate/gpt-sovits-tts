@@ -115,8 +115,9 @@ export function audioPlay(src, { volume = 1, onStart = null, push = true } = {})
         ivN = setTimeout(doneN, 60000);
       } catch (e) { done(); }
     };
-    if (srcs.startsWith("data:")) { nativePlay(); return; }   // 内嵌 data URI → 原生(必可播, 无 Sound/证书/加载噪音)
-    // 文件/网络 URL → Foundry 内置声音通道(官方 Soundboard 等 mod 同款): 本端播 + push 时推给全员同一官方通道(不含自己者)
+    // 播放实现: 一律先走 Foundry 官方界面通道(AudioHelper, channel:"interface") —
+    // ① 音量跟随"界面音量"滑块(interface GainNode 实时级联, 含正在播放的) ② Sound 支持 data: URI 与同源 URL
+    // 官方不可用/加载失败才退回原生 Audio(至少有声, 兜底不丢声音)。
     try {
       const AH = (typeof foundry !== "undefined" && foundry.audio && foundry.audio.AudioHelper)
         || (typeof AudioHelper !== "undefined" ? AudioHelper : null);
@@ -127,7 +128,7 @@ export function audioPlay(src, { volume = 1, onStart = null, push = true } = {})
         if (ret && typeof ret.then === "function") {
           ret.then(
             () => { try { window.__fvttTTSPlayImpl = "official"; } catch (e) { /* noop */ } try { if (onStart) onStart(); } catch (e) { /* noop */ } setTimeout(done, 1500); },
-            () => nativePlay()   // 官方通道加载失败(证书/文件缺失) → 原生兜底
+            () => { try { window.__fvttTTSCnt.native++; } catch (e) { /* noop */ } try { window.__fvttTTSPlayImpl = "native"; } catch (e) { /* noop */ } nativePlay(); }
           );
           return;
         }
