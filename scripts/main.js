@@ -5,6 +5,7 @@
  *       消息重听按钮、状态指示灯、/ttssay 等命令、game.gptSoVitsTTS 宏 API
  */
 import { PlaybackQueue, audioPlay, webSpeechSpeak, gptSovitsSynth, gptSovitsStatus, synthEdge, svcRequest } from "./tts-engine.js";
+import { installRunnerAssignUI } from "./voice-runner.js";
 import { BrowserSTT, ServerSTT } from "./stt-engine.js";
 import { VoiceManager, loadVoiceProfile, saveVoiceProfile, currentVoice, makeDraggable, getStylePrompt, setStylePrompt } from "./voice-manager.js";
 import { prepareTextForLang, localizeNumbers } from "./text-lib.js";
@@ -3206,6 +3207,7 @@ function setupAPI() {
 Hooks.once("init", async () => {
   await ensureZhDict(); // 先加载中文兜底词典, 再注册设置(保证设置界面始终中文)
   registerSettings();
+  installRunnerAssignUI(); // 语音生成者分配器: 设置项 → "打开分配器, 列出全部账号"(仅 GM 可分配)
 });
 
 Hooks.once("ready", () => {
