@@ -277,10 +277,10 @@ export class VoiceManager {
         <button type="button" class="fvtt-tts-vm-stress" title="${t("vm.stressTestTitle", "高压测试: 并发/长文本/广播风暴等压力场景")}">⚡ ${t("vm.stressTest", "高压")}</button>
         <button type="button" class="fvtt-tts-vm-speed" title="${t("vm.speedTestTitle", "批量速度测试: 分批次测合成/传输/加载速度, 并压满显卡验证峰值性能")}">🚄 ${t("vm.speedTest", "速度")}</button>
         <button type="button" class="fvtt-tts-vm-selftestP" title="${t("vm.selfTestPTitle", "玩家自测: 验证本机能否收到并官方播放 GM 语音(玩家端优先)")}">🔬 ${t("vm.selfTestP", "玩家自测")}</button>
-        ${(game.user && game.user.isGM) ? `<button type="button" class="fvtt-tts-vm-runassign" title="${t("vm.runAssignTitle", "给每个账号指定语音由谁的电脑生成(仅主持人)")}">👥 ${t("vm.runAssign", "语音生成者分配")}</button>` : ""}
         <span class="fvtt-tts-vm-spacer" style="flex:1"></span>
         <button type="button" class="fvtt-tts-vm-test">${t("vm.test", "试听")}</button>
         <button type="button" class="fvtt-tts-vm-save">${t("vm.save", "保存")}</button>
+        ${(game.user && game.user.isGM) ? `<button type="button" class="fvtt-tts-vm-runassign" title="${t("vm.runAssignTitle", "给每个账号指定语音由谁的电脑生成(仅主持人)")}">👥 ${t("vm.runAssign", "语音生成者分配")}</button>` : ""}
       </footer>`;
     this.el.querySelector(".fvtt-tts-vm-close").addEventListener("click", () => this.close());
     this.el.querySelector(".fvtt-tts-vm-selftest").addEventListener("click", () => {

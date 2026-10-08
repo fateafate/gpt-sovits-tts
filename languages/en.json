@@ -351,6 +351,8 @@
   "runAssign": {
     "title": "Voice Generator Assignment (whose PC generates whose voice)",
     "open": "Open Voice Generator Assignment (list all accounts)…",
+    "loading": "Fetching account list…",
+    "close": "Close",
     "initFail": "⚠ Assigner initialization failed: ",
     "empty": "⚠ Could not retrieve the account list. Please check: ① the FVTT server has been restarted (the server script added an account channel); ② hard-refresh the browser. If still empty, screenshot this and send to the author.",
     "emptyShort": "Account list empty (restart FVTT and refresh)",
