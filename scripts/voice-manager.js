@@ -280,7 +280,8 @@ export class VoiceManager {
         <span class="fvtt-tts-vm-spacer" style="flex:1"></span>
         <button type="button" class="fvtt-tts-vm-test">${t("vm.test", "试听")}</button>
         <button type="button" class="fvtt-tts-vm-save">${t("vm.save", "保存")}</button>
-        ${(game.user && game.user.isGM) ? `<button type="button" class="fvtt-tts-vm-runassign" title="${t("vm.runAssignTitle", "给每个账号指定语音由谁的电脑生成(仅主持人)")}">👥 ${t("vm.runAssign", "语音生成者分配")}</button>` : ""}
+        ${(game.user && game.user.isGM) ? `<button type="button" class="fvtt-tts-vm-preload" title="${t("vm.preloadAllTitle", "并行预加载全部角色模型进常驻池(多模型同时驻留, 切换不重载, 合成即用)")}">🚀 ${t("vm.preloadAll", "预加载全部角色")}</button>
+        <button type="button" class="fvtt-tts-vm-runassign" title="${t("vm.runAssignTitle", "给每个账号指定语音由谁的电脑生成(仅主持人)")}">👥 ${t("vm.runAssign", "语音生成者分配")}</button>` : ""}
       </footer>`;
     this.el.querySelector(".fvtt-tts-vm-close").addEventListener("click", () => this.close());
     this.el.querySelector(".fvtt-tts-vm-selftest").addEventListener("click", () => {
@@ -296,6 +297,29 @@ export class VoiceManager {
         if (!(game.user && game.user.isGM)) return;
         openRunnerAssign();
       } catch (e) { console.error("[gpt-sovits-tts] 分配器入口异常:", e); }
+    });
+    const preBtn = this.el.querySelector(".fvtt-tts-vm-preload");
+    if (preBtn) preBtn.addEventListener("click", async () => {
+      try {
+        if (!(game.user && game.user.isGM)) return;
+        const chars = ((this.charsData && this.charsData.chars) || []).map(c => (c && c.name) || "").filter(Boolean);
+        if (!chars.length) { ui.notifications.info(t("vm.preloadNoChars", "暂无角色可预加载")); return; }
+        preBtn.disabled = true;
+        preBtn.textContent = "⏳ …";
+        const r = await this._svc("POST", "/characters/preload", { names: chars, max_workers: 3 });
+        preBtn.disabled = false;
+        preBtn.textContent = "🚀 " + t("vm.preloadAll", "预加载全部角色");
+        const j = r && r.ok ? r.jsonSafe() : null;
+        if (j && j.ok) {
+          const n = (j.loaded || []).length;
+          ui.notifications.info(t("vm.preloadDone", "并行常驻") + " " + n + "/" + chars.length + " " + t("vm.preloadDone2", "个角色, 之后合成即用"));
+        } else {
+          ui.notifications.warn(t("vm.preloadFail", "预加载失败") + ": " + String((j && j.err) || "engine"));
+        }
+      } catch (e) {
+        try { preBtn.disabled = false; preBtn.textContent = "🚀 " + t("vm.preloadAll", "预加载全部角色"); } catch (e2) { /* noop */ }
+        ui.notifications.error(t("vm.preloadFail", "预加载失败") + ": " + String(e && e.message || e));
+      }
     });
     this.el.querySelector(".fvtt-tts-vm-stress").addEventListener("click", () => {
       try {

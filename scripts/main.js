@@ -563,15 +563,25 @@ async function speak(text, { lang = null, sender = "", refAudioPath = null, prom
         } catch (e) { /* noop */ }
         const modPath = _modulePath(audioUrl);   // 官方内部通道: 本端自己的 origin 绝对 URL 走官方 Sound(跨机广播 src 不通用, 已弃用 push)
         let cleanupObj = null;
-        let url4 = (modPath ? (() => { try { return new URL(modPath, window.location.origin).href; } catch (e) { return modPath; } })() : "") || playSrc || "";
+        // 播放源: data URI 优先(必可播, 且与 update 兜底同 src → audioPlay 内 __fvttTTSPlayedSrcs 去重防重复);
+        // URL 次之(本端同源拉取); 都没有 → blob URL
+        let url4 = playSrc || (modPath ? (() => { try { return new URL(modPath, window.location.origin).href; } catch (e) { return modPath; } })() : "") || "";
         if (!url4) { const o = URL.createObjectURL(blob); url4 = o; cleanupObj = o; }
         // push:false — 官方广播的 src 只能是单一绝对 URL(跨机 localhost/frp 不通用), 且 Sound 需本端可加载绝对地址;
         // 全端同步改由 Foundry 聊天数据通道(flags.audioUrl + 各端官方本播)负责, arrive≈0, 不再等广播
-        item = { play: () => audioPlay(url4, { volume: vol, push: false }), cleanup: () => { try { if (cleanupObj) URL.revokeObjectURL(cleanupObj); } catch (e) { /* noop */ } } };
+        // onStart 登记: 播放**真正开始**才登记 playedIds — 若 URL 播放失败(onStart 不触发)则不登记,
+        // 玩家端 updateChatMessage 兜底(audioData 内嵌, 必可播)照常播放 — 根治"玩家说话只有 GM 能听到"
+        const _registerPlayed = () => {
+          try {
+            if (messageId) {
+              playedIds.add(messageId);
+              setTimeout(() => { try { playedIds.delete(messageId); } catch (e) { /* noop */ } }, 30000);
+            }
+          } catch (e) { /* noop */ }
+        };
+        item = { play: () => audioPlay(url4, { volume: vol, push: false, onStart: _registerPlayed }), cleanup: () => { try { if (cleanupObj) URL.revokeObjectURL(cleanupObj); } catch (e) { /* noop */ } } };
         if (messageId) {
           recentBroadcastIds.add(messageId);
-          playedIds.add(messageId);   // 本地已播 → updateChatMessage 收到 flags 写回时跳过(防重复播放)
-          setTimeout(() => { try { playedIds.delete(messageId); } catch (e) { /* noop */ } }, 30000);
           if (recentBroadcastIds.size > 12) {   // 只记最近 12 条, 防无限增长
             const it = recentBroadcastIds.values().next();
             if (!it.done) recentBroadcastIds.delete(it.value);

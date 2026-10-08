@@ -1051,6 +1051,20 @@ def _pool_config_path():
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "engine", "config.json")
 
 
+def _vram_based_pool_max():
+    """按显存估算可常驻模型数(每实例 ~2.5GB + 共享文本模型基础), clamp 2..8 — 多模型并行不顶掉的前提是显存放得下."""
+    try:
+        import torch
+        if torch.cuda.is_available():
+            tot_mb = int(torch.cuda.get_device_properties(0).total_memory) // (1024 * 1024)
+            est = max(2, min(8, tot_mb // 2560))
+            print("[模型池] 显存 %dMB → 估算可常驻并行上限 %d" % (tot_mb, est))
+            return est
+    except Exception:
+        pass
+    return 3
+
+
 def load_pool_config():
     global MAX_MODEL_POOL
     try:
@@ -1058,10 +1072,18 @@ def load_pool_config():
         if os.path.isfile(_p):
             with open(_p, "r", encoding="utf-8") as _f:
                 j = json.load(_f)
-            MAX_MODEL_POOL = max(1, min(20, int(j.get("max_concurrent_models", 10))))
-            print("[模型池] 同时运行上限(读配置): %d" % MAX_MODEL_POOL)
+            v = int(j.get("max_concurrent_models", 0) or 0)
+            if v > 0:
+                MAX_MODEL_POOL = max(1, min(20, v))
+                print("[模型池] 同时运行上限(读配置): %d" % MAX_MODEL_POOL)
+            else:
+                MAX_MODEL_POOL = _vram_based_pool_max()
+                print("[模型池] 同时运行上限(配置缺省→显存估算): %d" % MAX_MODEL_POOL)
+        else:
+            MAX_MODEL_POOL = _vram_based_pool_max()
+            print("[模型池] 同时运行上限(config.json 不存在→显存估算): %d" % MAX_MODEL_POOL)
     except Exception:
-        pass
+        MAX_MODEL_POOL = _vram_based_pool_max()
 
 
 def save_pool_config(v):
@@ -1990,6 +2012,44 @@ async def characters_switch(request: Request):
         return {"ok": True, "active": CHAR_CONFIG.get("name") if CHAR_CONFIG else name}
     finally:
         _SWITCHING = False
+
+
+@APP.post("/characters/preload")
+async def characters_preload(request: Request):
+    """并行预加载多个角色模型进常驻池(多模型并行, 不互相顶掉): 此后这些角色合成即用, 无首次加载等待.
+    body: {"names": ["角色A", ...], "max_workers": 3}
+    → {"ok": True, "loaded": [...], "failed": {name: err}, "pool_size": n, "max": 池上限, "pool_active": [...]}"""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    names = [str(n).strip() for n in (body.get("names") or []) if str(n).strip()]
+    if not names:
+        return {"ok": False, "err": "names empty"}
+    from concurrent.futures import ThreadPoolExecutor
+    mw = max(1, min(4, int(body.get("max_workers") or 3)))
+    print("[模型池] 并行预加载 %d 个角色(max_workers=%d): %s" % (len(names), mw, names))
+
+    def _do(nm):
+        try:
+            p = _pool_get(nm)
+            return (nm, "ok" if p is not tts_pipeline else "fallback")
+        except Exception as e:
+            return (nm, "err:" + str(e)[:160])
+
+    loaded, failed = [], {}
+    with ThreadPoolExecutor(max_workers=mw) as ex:
+        for nm, st in ex.map(_do, names):
+            if st == "ok":
+                loaded.append(nm)
+            elif st.startswith("err"):
+                failed[nm] = st[4:]
+            else:
+                failed[nm] = "权重不完整/回退激活角色"
+    print("[模型池] 预加载完成: ok=%s failed=%s (常驻 %d/%d)" % (loaded, failed, len(TTS_POOL), MAX_MODEL_POOL))
+    return {"ok": True, "loaded": loaded, "failed": failed,
+            "pool_size": len(TTS_POOL), "max": MAX_MODEL_POOL,
+            "pool_active": list(TTS_POOL.keys())}
 
 
 @APP.post("/characters/update")
