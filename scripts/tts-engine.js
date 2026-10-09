@@ -52,6 +52,13 @@ export async function bytesToB64Async(bytes) {
   return out;
 }
 
+/** 按文件名扩展名推断音频 content-type(浏览器 file.type 为空/octet-stream 时, 分片导入用) */
+function _extToCtype(name) {
+  const m = { wav: "audio/wav", mp3: "audio/mpeg", flac: "audio/flac", ogg: "audio/ogg", opus: "audio/ogg", aac: "audio/aac", m4a: "audio/mp4", webm: "audio/webm" };
+  const e = String(name || "").split(".").pop().toLowerCase();
+  return m[e] || "application/octet-stream";
+}
+
 /** 角色包导入(自动分片, 1.6.12): ≤12MB 单次原路径; 大包分片(每片 10MB, 边转边发不保留全量 b64,
  *  引擎边收边落盘, 消除单次几百 MB body 与内存峰值 → 不再丢 FVTT 连接)。
  *  返回 {ok, name, message}; onProgress(0~1) 可选。 */
@@ -60,7 +67,7 @@ export async function importCharPackChunked(base, file, { target = "/characters/
   const ab = await file.arrayBuffer();
   const bytes = new Uint8Array(ab);
   const total = bytes.length;
-  const ctype = file.type || "application/octet-stream";
+  const ctype = file.type || _extToCtype(file.name || "");
   if (total <= 12 * 1024 * 1024) {
     const b64 = await bytesToB64Async(bytes);
     if (onProgress) { try { onProgress(1); } catch (e) { /* noop */ } }

@@ -2279,7 +2279,7 @@ async def import_session(request: Request):
     tmp = os.path.join(os.getcwd(), "fvtt_chars", ".tmp_imports")
     os.makedirs(tmp, exist_ok=True)
     path = os.path.join(tmp, "%s.zip" % sid)
-    _IMPORT_SESSIONS[sid] = {"path": path, "total": size, "received": 0, "ts": time.time(), "target": target, "ctype": ctype}
+    _IMPORT_SESSIONS[sid] = {"path": path, "total": size, "received": 0, "ts": time.time(), "target": target, "ctype": ctype, "name": str(body.get("name") or "")}
     return {"ok": True, "session": sid}
 
 
@@ -2318,7 +2318,7 @@ async def import_finish(request: Request, session: str = ""):
             pass
     # 按目标分发: 参考音频 → 落盘 imports/; 角色包 → zip 导入
     if s.get("target") == "/ref-import":
-        ref_rel, fname, err = _import_ref_audio(data, s.get("ctype") or "application/octet-stream")
+        ref_rel, fname, err = _import_ref_audio(data, s.get("ctype") or "application/octet-stream", None, None, s.get("name") or "")
         if err:
             return JSONResponse(status_code=400, content={"ok": False, "message": err})
         return {"ok": True, "name": fname, "ref_audio_path": ref_rel, "message": "参考音频导入成功"}
@@ -2427,7 +2427,7 @@ def _copytree(src, dst):
     _sh.copytree(src, dst, dirs_exist_ok=True)
 
 
-def _import_ref_audio(data: bytes, ctype: str, role: str = None, slot: str = None):
+def _import_ref_audio(data: bytes, ctype: str, role: str = None, slot: str = None, fname_hint: str = ""):
     """共用: 参考音频落盘; 返回 (ref_rel, fname, err)。"""
     ext_map = {
         "audio/wav": "wav", "audio/x-wav": "wav", "audio/wave": "wav",
@@ -2439,8 +2439,13 @@ def _import_ref_audio(data: bytes, ctype: str, role: str = None, slot: str = Non
         "audio/webm": "webm",
     }
     ext = ext_map.get(ctype.split(";")[0].strip().lower(), "")
+    if not ext and fname_hint:
+        # 浏览器 file.type 为空/octet-stream 时按文件名扩展名兜底推断
+        _fe = os.path.splitext(str(fname_hint))[1].lstrip(".").lower()
+        _ext_map2 = {"wav": "wav", "mp3": "mp3", "flac": "flac", "ogg": "ogg", "opus": "ogg", "aac": "aac", "m4a": "m4a", "webm": "webm"}
+        ext = _ext_map2.get(_fe, "")
     if not ext:
-        return None, None, "不支持的音频格式: %s" % ctype
+        return None, None, "不支持的音频格式: %s(文件名 %s)" % (ctype, fname_hint or "?")
     ts = time.strftime("%Y%m%d_%H%M%S")
     try:
         if role:

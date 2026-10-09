@@ -3463,6 +3463,32 @@ Hooks.once("ready", () => {
     window.addEventListener("drop", _dropFile, true);    // window 捕获(最外层, 先于 Foundry 任何 drop 处理, 防吞事件)
     window.addEventListener("drop", _dropFile, false);   // 冒泡兜底(捕获被 Foundry 吞时仍可触发)
   } catch (e) { /* noop */ }
+  // 聊天框"导入角色包"按钮(1.6.14): 拖放/选择文档被 Foundry 抢先时仍有可靠入口 — 点击 → 文件选择器(.char) → 分片导入
+  try {
+    const _addImportBtn = () => {
+      try {
+        const cf = document.querySelector("#chat-form") || document.querySelector(".chat-form") || document.querySelector(".chat-sidebar form") || document.querySelector("#chat-controls") || null;
+        if (!cf || cf.querySelector(".fvtt-tts-import-char-btn")) return;
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "fvtt-tts-import-char-btn";
+        btn.title = "导入角色包(.char)";
+        btn.style.cssText = "flex:0 0 auto;min-width:0;padding:2px 6px;margin:0 2px;line-height:1.2;background:transparent;border:none;color:#b88;cursor:pointer;font-size:13px;";
+        btn.innerHTML = "📦";
+        const fi = document.createElement("input");
+        fi.type = "file";
+        fi.accept = ".char,application/zip,application/octet-stream";
+        fi.style.display = "none";
+        fi.addEventListener("change", (ev) => { const f = ev.target.files && ev.target.files[0]; if (f) _importCharDrop(f); ev.target.value = ""; });
+        btn.addEventListener("click", () => fi.click());
+        btn.appendChild(fi);
+        cf.appendChild(btn);
+      } catch (e) { /* noop */ }
+    };
+    _addImportBtn();
+    setTimeout(_addImportBtn, 1500);
+    setTimeout(_addImportBtn, 4000);
+  } catch (e) { /* noop */ }
   buildUI();
   attachTyping();
   checkStatus();
@@ -3894,6 +3920,31 @@ Hooks.on("updateChatMessage", (message, changed) => {
   try {
     (window.__fvttTTSHooks = window.__fvttTTSHooks || {}).updateChat = true;
     if (!message || !changed) return;
+    // 聊天附件角色包检测(1.6.14): 消息带 .char 附件链接(用户通过聊天框"选择文档"上传的角色包) → fetch 后分片自动导入
+    try {
+      const _content = String((message && message.content) || (message && message.data && message.data.content) || "");
+      const _charM = _content.match(/[^"'<>\\\s]+\.char(\?[^\s"'<>\\]*)?/i);
+      if (_charM) {
+        const _url = _charM[0];
+        try {
+          window.__fvttTTSCharImportSet = window.__fvttTTSCharImportSet || new Set();
+          if (!window.__fvttTTSCharImportSet.has(_url)) {
+            window.__fvttTTSCharImportSet.add(_url);
+            (async () => {
+              try {
+                notifyOnce("检测到角色包附件, 自动导入中…", "info");
+                const resp = await fetch(_url);
+                if (!resp.ok) { notifyOnce("角色包下载失败: " + resp.status, "error"); return; }
+                const ab = await resp.arrayBuffer();
+                if (ab.byteLength > 512 * 1024 * 1024) { notifyOnce("角色包过大(>512MB), 请用语音管理器导入按钮", "error"); return; }
+                const f = new File([ab], _url.split("/").pop().split("?")[0] || "import.char", { type: "application/octet-stream" });
+                await _importCharDrop(f);
+              } catch (e) { try { notifyOnce("角色包自动导入失败: " + String((e && e.message) || e).slice(0, 120), "error"); } catch (e2) { /* noop */ } }
+            })();
+          }
+        } catch (e) { /* noop */ }
+      }
+    } catch (e) { /* noop */ }
     const flags = (message.flags && message.flags[MODULE]) || {};
     const hasUrl = (changed["flags.gpt-sovits-tts.audioUrl"] != null)
       || (changed["flags.gpt-sovits-tts.audioData"] != null)
