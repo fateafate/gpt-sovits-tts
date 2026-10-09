@@ -583,8 +583,11 @@ async function speak(text, { lang = null, sender = "", refAudioPath = null, prom
             }
           } catch (e) { /* noop */ }
         };
-        // push 广播仅当 src 是官方文件路径(相对, 各端同 origin 可加载); data URI/blob 仅本端(flags 写回兜底他端)
-        item = { play: () => audioPlay(url4, { volume: vol, push: !!modPath, onStart: _registerPlayed }), cleanup: () => { try { if (cleanupObj) URL.revokeObjectURL(cleanupObj); } catch (e) { /* noop */ } } };
+        // 🔊 单通道(1.6.5): 不再走官方 AudioHelper push 广播 — 官方通道在他端由 Foundry 并发播放,
+        // 不受本模块串行队列约束, 多条消息同时到达就"一起响"(重叠混乱)。
+        // 改为 flags 写回单通道: 他端经 updateChatMessage 统一走模块 queue(串行, 一条播完下一条)。
+        // 全员同声保留(写回同步全员), 只是本机内部不再重叠。sc20/26 测试自触发广播, 不受影响。
+        item = { play: () => audioPlay(url4, { volume: vol, push: false, onStart: _registerPlayed }), cleanup: () => { try { if (cleanupObj) URL.revokeObjectURL(cleanupObj); } catch (e) { /* noop */ } } };
         if (messageId) {
           recentBroadcastIds.add(messageId);
           if (recentBroadcastIds.size > 12) {   // 只记最近 12 条, 防无限增长

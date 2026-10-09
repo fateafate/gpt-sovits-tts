@@ -2202,6 +2202,8 @@ async def characters_import(request: Request):
     data = await request.body()
     if not data:
         return JSONResponse(status_code=400, content={"ok": False, "message": "empty body"})
+    if data.strip() in (b"null", b"", b"{}"):   # 防御: 旧客户端超限时曾发 "null"/空 → 明确提示而不是误导成"不是压缩包"
+        return JSONResponse(status_code=400, content={"ok": False, "message": "未收到文件内容(角色包可能过大或读取失败), 请重新选择后导入"})
     try:
         zf = _zipfile.ZipFile(io.BytesIO(data))
     except Exception as e:

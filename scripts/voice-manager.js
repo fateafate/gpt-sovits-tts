@@ -204,13 +204,18 @@ export class VoiceManager {
         let bin = ""; const CH = 0x8000;
         for (let i = 0; i < bytes.length; i += CH) bin += String.fromCharCode.apply(null, bytes.subarray(i, Math.min(i + CH, bytes.length)));
         const b64 = btoa(bin);
-        if (b64.length <= 8 * 1024 * 1024) {
-          const r = await svcRequest(this.base, method, path, null, { b64Body: b64, contentType: file.type || "application/octet-stream", timeoutMs });
-          return { ok: r.ok, status: r.status || 0, json: () => Promise.resolve(r.jsonSafe ? r.jsonSafe() : (r.json || {})), jsonSafe: () => r.jsonSafe ? r.jsonSafe() : (r.json || {}), text: () => Promise.resolve(JSON.stringify((r.jsonSafe ? r.jsonSafe() : (r.json || {})) || {})), headers: { get: () => null } };
+        if (b64.length > 64 * 1024 * 1024) {
+          // 角色包过大(>48MB): 明确报错, 不再静默 fallthrough 发空/"null" body(否则引擎 400 "不是有效的 .char 压缩包"误导)
+          throw new Error("角色包过大(>48MB), 请缩小后导入");
         }
-      } catch (e) { /* 回退直连 */ }
+        const r = await svcRequest(this.base, method, path, null, { b64Body: b64, contentType: file.type || "application/octet-stream", timeoutMs });
+        return { ok: r.ok, status: r.status || 0, json: () => Promise.resolve(r.jsonSafe ? r.jsonSafe() : (r.json || {})), jsonSafe: () => r.jsonSafe ? r.jsonSafe() : (r.json || {}), text: () => Promise.resolve(JSON.stringify((r.jsonSafe ? r.jsonSafe() : (r.json || {})) || {})), headers: { get: () => null } };
+      } catch (e) {
+        // 不静默兜底: 明确原因回抛(导入失败可见), 绝不发空 body 让引擎误报
+        throw (e && e.message) ? e : new Error(String(e));
+      }
     }
-    return this._svc(method, path, null);
+    throw new Error("无法读取文件(浏览器不支持 arrayBuffer)");
   }
 
   async refresh() {
