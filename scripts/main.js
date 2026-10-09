@@ -711,8 +711,6 @@ function getChatContext(maxN = 8, maxLen = 900) {
       try {
         const st = m.style || "";
         if (st === ooc) return false;
-        const tp = m.type || 0;
-        if (typeof CONST !== "undefined" && tp === CONST.CHAT_MESSAGE_TYPES.OOC) return false;
       } catch (e) { /* noop */ }
       return !!m.content;
     }).slice(-maxN);
@@ -3393,7 +3391,7 @@ Hooks.once("ready", () => {
         .then((r) => { if (r && !r.ok && r.status >= 400) { try { window.__fvttTTSLlmBroken = true; } catch (e) { /* noop */ } } })
         .catch(() => { try { window.__fvttTTSLlmBroken = true; } catch (e) { /* noop */ } });
     } catch (e) { /* noop */ }
-  }, 8000);
+  }, 3000);
   // 🔊 Foundry playAudio 广播监听(记录已播 src): 与 audioData DB 兜底去重(双通道合一, 防重复播放);
     // 官方内部通道(fileURL)+DB 内嵌(dataURI) src 不同, 额外登记"官方即时已播"文件 URL 集(10s)供 DB 兜底判定是否跳过
     try {
