@@ -3592,6 +3592,18 @@ Hooks.on("renderChatInput", (app, elements, options) => _deferUI());   // v13
 Hooks.on("renderChatLog", (app, html, options) => _deferUI());        // v11/12 兼容
 Hooks.on("renderSidebarTab", (app, html, options) => _deferUI());     // 聊天面板重渲染后重建
 
+// 立绘轮换(1.6.19): 同角色说话换不同立绘(无情绪标签时近似"AI 在立绘中自选"); 情绪变化时开新轮次
+let _spriteRotKeys = null;
+function getSpriteRotation(name, emotion) {
+  try {
+    if (!_spriteRotKeys) _spriteRotKeys = new Map();
+    const key = String(name || "") + "|" + String(emotion || "");
+    const v = _spriteRotKeys.get(key) || 0;
+    _spriteRotKeys.set(key, v + 1);
+    return v;
+  } catch (e) { return 0; }
+}
+
 Hooks.on("chatMessage", (chatLog, message, chatData) => {
     (window.__fvttTTSHooks = window.__fvttTTSHooks || {}).chatMessage = true;
     handleCommand(chatLog, message, chatData);
@@ -3603,8 +3615,16 @@ Hooks.on("chatMessage", (chatLog, message, chatData) => {
         role: prof0.current || "",
         emotion: (cur && cur.emotion) || "",
         ttsProvider: String((cur && cur.ttsProvider) || ""),
-        // 立绘路径随消息同步(跨端一致, 不依赖各端本地角色缓存): 角色头像 + 当前语气槽立绘
-        avatar: (() => { try { const cD = (quickChars && quickChars.chars || []).find(x => x.name === (prof0.current || "")); return (cD && cD.avatar) || (cur && cur.avatar) || ""; } catch (e) { return ""; } })(),
+        // 立绘路径随消息同步(跨端一致, 不依赖各端本地角色缓存): 角色立绘集轮换(每次说话换一张, 近似 AI 自选) > 语气槽立绘
+        avatar: (() => { try {
+          const prof0n = (prof0 && prof0.current) || "";
+          const cD = (quickChars && quickChars.chars || []).find(x => x.name === prof0n);
+          if (cD && Array.isArray(cD.sprites) && cD.sprites.length >= 1) {
+            const rot = getSpriteRotation(prof0n, (cur && cur.emotion) || "");
+            return cD.sprites[rot % cD.sprites.length];
+          }
+          return (cD && cD.avatar) || (cur && cur.avatar) || "";
+        } catch (e) { return ""; } })(),
         slotAvatar: (() => { try { const sD = (cur && cur.emotion) ? findEmotionSlot(cur.emotion, prof0.current || "") : null; return (sD && sD.avatar) || ""; } catch (e) { return ""; } })(),
         ref: (cur && cur.ref) || "",
         auxRef: (cur && cur.auxRef) || "",

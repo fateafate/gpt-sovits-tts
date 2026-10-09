@@ -1914,6 +1914,10 @@ async def characters():
         gpt = cfg.get("gpt_model_path", "")
         sovits = cfg.get("sovits_model_path", "")
         ref = cfg.get("refer_audio_path", "")
+        sprites = _export_char_sprites(name)
+        _av = str(cfg.get("avatar", "") or "")
+        if not _av and sprites:
+            _av = sprites[0]   # 无显式头像 → 立绘集首张(客户端 toAvatarUrl 拼 Foundry 静态路径可加载)
         chars.append({
             "name": name,
             "gpt_model_path": os.path.basename(str(gpt)) if gpt else "",
@@ -1922,7 +1926,8 @@ async def characters():
             "prompt_text": cfg.get("prompt_text", ""),
             "prompt_lang": cfg.get("prompt_lang", ""),
             "setting": str(cfg.get("character_setting", "") or "")[:1500],
-            "avatar": str(cfg.get("avatar", "") or ""),
+            "avatar": _av,
+            "sprites": sprites,
             "provider": str(cfg.get("tts_provider") or "gpt-sovits"),   # 多引擎并行: gpt-sovits / edge / web
             "emotions": emotion_slot_state(cfg),
         })
@@ -1955,6 +1960,43 @@ async def characters():
     return {"ok": True, "chars": chars, "active": active, "detail": detail}
 
 
+AUDIO_EXPORT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "engine", "audio_export")
+
+
+def _export_char_sprites(name):
+    """把角色 sprites(立绘)惰性复制到 audio_export/chars/<name>/(Foundry 静态 /modules/gpt-sovits-tts/engine/audio_export/ 可加载)。
+    返回相对 audio_export 的立绘路径列表 chars/<name>/<file>(客户端 toAvatarUrl 直接拼 origin)。"""
+    try:
+        ch_dir = os.path.join(os.getcwd(), "fvtt_chars", name)
+        src_dirs = []
+        for sub in ("sprites", "images", "img"):
+            sd = os.path.join(ch_dir, sub)
+            if os.path.isdir(sd):
+                src_dirs.append(sd)
+        if not src_dirs:
+            return []
+        dst = os.path.join(AUDIO_EXPORT_DIR, "chars", name)
+        files = []
+        for sd in src_dirs:
+            for root, _dirs, fns in os.walk(sd):
+                for fn in sorted(fns):
+                    if not fn.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
+                        continue
+                    rel = os.path.relpath(os.path.join(root, fn), sd)
+                    dp = os.path.join(dst, rel)
+                    sp = os.path.join(root, fn)
+                    if not os.path.exists(dp) or os.path.getmtime(dp) < os.path.getmtime(sp):
+                        try:
+                            os.makedirs(os.path.dirname(dp), exist_ok=True)
+                            shutil.copy2(sp, dp)
+                        except Exception:
+                            continue
+                    files.append("chars/%s/%s" % (name, rel.replace("\\", "/")))
+        return files
+    except Exception:
+        return []
+
+
 def _write_chars_snapshot(chars):
     """角色清单快照(通用架构): 只留客户端 UI/立绘所需字段, 导出到模块目录 engine/audio_export/chars_meta.json,
     经 Foundry 30000 静态路径(/modules/gpt-sovits-tts/engine/audio_export/chars_meta.json)分发给所有客户端 —
@@ -1968,6 +2010,7 @@ def _write_chars_snapshot(chars):
             sparsed.append({
                 "name": c.get("name", ""),
                 "avatar": c.get("avatar", ""),
+                "sprites": c.get("sprites") or [],
                 "provider": c.get("provider", "gpt-sovits"),
                 "prompt_lang": c.get("prompt_lang", ""),
                 "setting": c.get("setting", ""),
