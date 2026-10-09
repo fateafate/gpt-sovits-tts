@@ -29,6 +29,7 @@ const autoServerUrl = () => {
 
 const SETTINGS = [
   ["enabled",       { type: Boolean, scope: "client", default: true,            name: "settings.enabled.name",       hint: "settings.enabled.hint" }],
+  ["allowStressTest",{ type: Boolean, scope: "client", default: true,           name: "settings.allowStressTest.name", hint: "settings.allowStressTest.hint" }],
   ["engine",        { type: String,  scope: "client", default: "gptsovits",      choices: { gptsovits: "GPT-SoVITS", webspeech: "Web Speech" }, name: "settings.engine.name", hint: "settings.engine.hint" }],
   ["serverUrl",     { type: String,  scope: "client", default: autoServerUrl(), name: "settings.serverUrl.name", hint: "settings.serverUrl.hint" }],
   ["voiceServerUrl",{ type: String,  scope: "world",  default: "",                name: "settings.voiceServerUrl.name", hint: "settings.voiceServerUrl.hint" }],

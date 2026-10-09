@@ -123,7 +123,7 @@ async function gmTtsReport(d) {
   } catch (e) { /* noop */ }
 }
 
-/** 注册 module 事件监听: GM 端执行请求; 任意端匹配响应(tts-engine 的 moduleEmit) */
+/** 注册 module 事件监听: 合成执行者=引擎可达端; 写回/报告=GM 端; 任意端匹配响应(tts-engine 的 moduleEmit) */
 export function installGmProxy() {
   try {
     if (typeof game === "undefined" || !game || !game.socket || typeof game.socket.on !== "function") return;
@@ -131,13 +131,20 @@ export function installGmProxy() {
       try {
         if (!data || typeof data !== "object") return;
         const t = String(data.__type || "");
-        // GM 端只执行请求类(响应由 moduleEmit 处理, 见 tts-engine.installModuleSocket)
-        if (!game.user || !game.user.isGM) return;
+        // 合成代理(tts-proxy): 引擎可达端执行 — GM 或本端 CanDirect=true(引擎机挂任意账号) —
+        // 根治"其他设备登录 GM(不在引擎机/服务器)": 引擎机客户端代合成(fetch 127.0.0.1:9881),
+        // 远程 GM/玩家只需发起请求; 远程 GM(CanDirect=false)不执行(够不到引擎)
         if (t === "tts-proxy") {
+          const canExec = !!(game.user) && (game.user.isGM === true || window.__fvttTTSCanDirect === true);
+          if (!canExec) return;
           gmTtsProxy(data).then((r) => {
             try { game.socket.emit("module." + MOD, { __type: "tts-proxy-resp", __rid: String(data.__rid || ""), result: r || null }); } catch (e) { /* noop */ }
           }).catch(() => { /* noop */ });
-        } else if (t === "tts-metadata") {
+          return;
+        }
+        // 写回/报告: 仅 GM(update 消息/写引擎报告需要 GM 权限)
+        if (!game.user || !game.user.isGM) return;
+        if (t === "tts-metadata") {
           gmTtsMeta(data).catch(() => { /* noop */ });
         } else if (t === "tts-report") {
           gmTtsReport(data).catch(() => { /* noop */ });

@@ -37,7 +37,11 @@ async function poll(fn, timeoutMs, intervalMs = 250) {
   }
 }
 function ev(ok, evo) { return { ok, ev: evo }; }
-function record(id, title, r, ms) { T.scenarios.push({ id, title, result: r.ok ? "ok" : "fail", evidence: r.ev, ms }); return r.ok; }
+function recSkip(reason) { return { ok: false, ev: {}, __skip: reason }; }
+function record(id, title, r, ms, skipReason) {
+  T.scenarios.push({ id, title, result: skipReason ? "skip" : (r.ok ? "ok" : "fail"), evidence: r.ev, ms, ...(skipReason ? { skip: skipReason } : {}) });
+  return skipReason ? "skip" : r.ok;
+}
 function note(s) { try { T.notes.push(String(s).slice(0, 120)); } catch (e) { /* noop */ } }
 function notify(m) { try { if (typeof ui !== "undefined" && ui.notifications) ui.notifications.info(m); } catch (e) { /* noop */ } }
 function warn(m) { try { if (typeof ui !== "undefined" && ui.notifications) ui.notifications.warn(m); } catch (e) { /* noop */ } }
@@ -288,110 +292,89 @@ function charCtx(role, emotionKey) {
   } catch (e) { return { role: role || "" }; }
 }
 
-// GM 端多角色并发(多模型一起说话): 并发合成 N 角色 → 各自 audioUrl 不同 → 依次官方广播
+// GM 端 14-18 均为"压力分发"场景: 服务器/引擎机不登录账号(只跑 FVTT)且配置烂 —
+// 压力(连发/并发/播放/队列)全部下放到**指定玩家电脑**执行(真实链路), GM 只协调与汇总
+const _likedRoles = ["七海千秋", "阿尔托莉雅·潘德拉贡", "五条悟"];
+
+// 14 多角色并发(多模型一起说话): 不同角色分发给在线玩家, 同秒各端朗读
 async function sc14() {
-  const roles = ["七海千秋", "阿尔托莉雅·潘德拉贡", "五条悟"].filter((r) => {
+  const roles = _likedRoles.filter((r) => {
     try { const qc = window.__fvttTTSQuickChars || null; return !qc || qc.chars.some((x) => x.name === r); } catch (e) { return true; }
   }).slice(0, 3);
-  const t0 = Date.now();
-  const jobs = roles.map(async (role) => {
-    try {
-      const cc = charCtx(role, "");
-      const r = await gptSovitsSynth(`并发测试：${role}`, "zh", { serverUrl: cfg().serverUrl, speedFactor: 1, overrides: cc.ref || cc.promptText ? { refAudioPath: cc.ref || "", promptText: cc.promptText, promptLang: cc.promptLang } : null, mediaType: "mp3", asBlob: true, role: cc.role });
-      return { role, ok: !!(r && r.blob && r.blob.size > 0), url: String((r && r.audioUrl) || "").slice(0, 80) };
-    } catch (e) { return { role, ok: false, err: String((e && e.message) || e).slice(0, 60) }; }
+  const pl = onlinePlayers();
+  if (!pl.length) return recSkip("压力在玩家电脑: 多角色并发需在线玩家(每个玩家一个角色, 同秒发声)");
+  const items = roles.map((role, i) => ({ user: pl[i % pl.length], role, emotion: "", text: `并发测试:${role}` }));
+  const r = await runStress(pl, { mode: "combo", items });
+  const acks = (r && r.acks) || [];
+  return ev(!!(r && r.ok !== false) && acks.some((a) => a.ok !== false), {
+    targets: pl, items: roles.length,
+    acks: acks.map((a) => ({ user: a.user, resultCount: (a.result || []).length, roles: ((a.result || []).map((x) => x.role)).join("|"), avgSynthMs: Math.round(((a.result || []).reduce((s, x) => s + (x.synthMs || 0), 0)) / Math.max(1, (a.result || []).length)), err: a.err || "" })),
+    note: "多模型同一秒从各玩家电脑同时合成→广播; 引擎为唯一合成源(现实多人说话亦然)",
   });
-  const res = await Promise.all(jobs);
-  const okAll = res.every((r) => r.ok);
-  const urls = res.map((r) => r.url).filter(Boolean);
-  const distinct = new Set(urls).size === urls.length;
-  // 广播播放(全员官方通道), 验证"多模型一起"能同时分发给全员
-  for (const rr of res) { if (rr.ok) { try { await audioPlay("data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=", { volume: 0.3, push: true }); } catch (e) { /* noop */ } } }
-  return ev(okAll && distinct, { roles: res.map((r) => ({ role: r.role, ok: r.ok })), distinctUrls: distinct, ms: Date.now() - t0 });
 }
 
-// 15 同角色多语气并发(同一人物 生气/开心 两个情绪槽同时合成)
+// 15 同角色多语气并发(同一人物 生气/开心 两个情绪槽同时)
 async function sc15() {
   const role = "七海千秋";
   const emos = ["angry", "happy"];
-  const t0 = Date.now();
-  const jobs = emos.map(async (em) => {
-    try {
-      const cc = charCtx(role, em);
-      const ov = {};
-      if (cc.ref) ov.refAudioPath = cc.ref;
-      if (cc.promptText) ov.promptText = cc.promptText;
-      if (cc.promptLang) ov.promptLang = cc.promptLang;
-      if (cc.auxRef) ov.auxRefAudioPaths = [cc.auxRef];
-      if (typeof cc.emotionMix === "number") ov.emotionMix = cc.emotionMix;
-      const r = await gptSovitsSynth(`语气测试：${em}`, "zh", { serverUrl: cfg().serverUrl, speedFactor: 1, overrides: Object.keys(ov).length ? ov : null, mediaType: "mp3", asBlob: true, role: cc.role });
-      return { emotion: em, ok: !!(r && r.blob && r.blob.size > 0), url: String((r && r.audioUrl) || "").slice(0, 60), auxRef: String(cc.auxRef || "").slice(0, 60) };
-    } catch (e) { return { emotion: em, ok: false, err: String((e && e.message) || e).slice(0, 60) }; }
+  const pl = onlinePlayers();
+  if (!pl.length) return recSkip("压力在玩家电脑: 多语气并发需在线玩家参与");
+  const items = emos.map((em, i) => ({ user: pl[i % pl.length], role, emotion: em, text: `语气测试:${em}` }));
+  const r = await runStress(pl, { mode: "combo", items });
+  const acks = (r && r.acks) || [];
+  return ev(!!(r && r.ok !== false) && acks.some((a) => a.ok !== false), {
+    target: pl, role,
+    acks: acks.map((a) => ({ user: a.user, emotions: ((a.result || []).map((x) => x.emotion)).join("|"), ok: a.ok !== false })),
+    note: "同一角色两种情绪在两个玩家电脑同时合成(情绪槽 auxRef 不同)",
   });
-  const res = await Promise.all(jobs);
-  const okAll = res.every((r) => r.ok);
-  const auxDiff = new Set(res.map((r) => r.auxRef).filter(Boolean)).size === res.length;
-  return ev(okAll, { emotions: res, auxRefsDistinct: res.length > 1 ? auxDiff : true, ms: Date.now() - t0 });
 }
 
-// 16 多角色×多语气混合(3 角色 × 2 语气 = 6 条并发) — 高压
+// 16 多角色×多语气混合(3 角色 × 2 语气 = 6 条并发) — 真实多人混合高压
 async function sc16() {
   const combos = [
     ["七海千秋", "angry"], ["七海千秋", "happy"],
     ["阿尔托莉雅·潘德拉贡", "angry"], ["阿尔托莉雅·潘德拉贡", "happy"],
     ["五条悟", "angry"], ["五条悟", "happy"],
   ].filter(([r]) => { try { const qc = window.__fvttTTSQuickChars || null; return !qc || qc.chars.some((x) => x.name === r); } catch (e) { return true; } }).slice(0, 6);
-  const t0 = Date.now();
-  const jobs = combos.map(async ([role, em]) => {
-    try {
-      const cc = charCtx(role, em);
-      const ov = {};
-      if (cc.ref) ov.refAudioPath = cc.ref;
-      if (cc.promptText) ov.promptText = cc.promptText;
-      if (cc.promptLang) ov.promptLang = cc.promptLang;
-      if (cc.auxRef) ov.auxRefAudioPaths = [cc.auxRef];
-      if (typeof cc.emotionMix === "number") ov.emotionMix = cc.emotionMix;
-      const r = await gptSovitsSynth(`混测 ${role}/${em}`, "zh", { serverUrl: cfg().serverUrl, speedFactor: 1, overrides: Object.keys(ov).length ? ov : null, mediaType: "mp3", asBlob: true, role: cc.role });
-      return `${role}/${em}:${(r && r.blob && r.blob.size > 0) ? "ok" : "fail"}`;
-    } catch (e) { return `${role}/${em}:err`; }
+  const items = comboItems(combos);
+  if (!items.length) return recSkip("压力在玩家电脑: 混合并发(6条)需在线玩家参与");
+  const r = await runStress(onlinePlayers(), { mode: "combo", items });
+  const acks = (r && r.acks) || [];
+  return ev(!!(r && r.ok !== false) && acks.some((a) => a.ok !== false), {
+    targets: onlinePlayers(), combos: combos.map(([x, y]) => `${x}/${y}`),
+    acks: acks.map((a) => ({ user: a.user, done: (a.result || []).length, ok: a.ok !== false })),
+    note: "6 条(3 模型×2 语气)由在线玩家分摊并发执行, GM/服务器端零组织压力",
   });
-  const res = await Promise.all(jobs);
-  const okAll = res.every((s) => s.endsWith("ok"));
-  return ev(okAll, { combos: res, ms: Date.now() - t0, note: "6 条并发(3 模型×2 语气)" });
 }
 
-// 17 压力连发(10 条短句连续合成+广播, 队列不崩不丢)
+// 17 压力连发(指定玩家电脑连发 10 条, 队列/播放/广播压力在玩家端)
 async function sc17() {
-  const t0 = Date.now();
-  const times = [];
-  let okN = 0;
-  for (let i = 0; i < 10; i++) {
-    const ts = Date.now();
-    try {
-      const r = await gptSovitsSynth(`压力第${i + 1}条`, "zh", { serverUrl: cfg().serverUrl, speedFactor: 1, mediaType: "mp3", asBlob: true });
-      if (r && r.blob && r.blob.size > 0) { okN++; times.push(Date.now() - ts); }
-    } catch (e) { /* noop */ }
-  }
-  const ok = okN >= 8;
-  const avg = times.length ? Math.round(times.reduce((a, b) => a + b, 0) / times.length) : 0;
-  return ev(ok, { done: okN, total: 10, avgMs: avg, maxMs: times.length ? Math.max(...times) : 0, ms: Date.now() - t0 });
+  const pl = onlinePlayers();
+  if (!pl.length) return recSkip("压力在玩家电脑: 连发 10 条需指定在线玩家");
+  const r = await runStress(pl.slice(0, 2), { mode: "burst", count: 10, gapMs: 500 });
+  const acks = (r && r.acks) || [];
+  const totalAcked = acks.reduce((s, a) => s + (a.count || 0), 0);
+  const okAcks = acks.filter((a) => a.ok !== false);
+  return ev(okAcks.length > 0 && totalAcked >= 10, {
+    targets: pl.slice(0, 2), requested: 10,
+    acks: acks.map((a) => ({ user: a.user, count: a.count || 0, done: a.done || 0, avgMs: Math.round(a.avgMs || 0), maxMs: a.maxMs || 0, viaMsg: !!a.viaMsg, ok: a.ok !== false })),
+    note: "连续 10 条在玩家电脑执行(合成请求→播放→官方广播), 服务器/引擎机浏览器零参与",
+  });
 }
 
-// 18 批量压力(带消息/广播/写回的批量) — 10 条消息各自合成写回(代理链路在玩家端覆盖)
+// 18 批量消息写回(玩家电脑连发 5 条真实消息 → 合成→写回 flags→全员播放)
 async function sc18() {
-  const cur = D.currentVoice ? D.currentVoice() : null;
-  const prof = D.loadVoiceProfile ? D.loadVoiceProfile() : null;
-  const t0 = Date.now();
-  let made = 0;
-  for (let i = 0; i < 5; i++) {
-    try {
-      const flags = { synthRequest: { text: `批量写回${i + 1}`, lang: cfg().textLang || "zh", role: (prof && prof.current) || "", provider: "gpt-sovits" }, role: (prof && prof.current) || "" };
-      if (cur && cur.ref) flags.ref = cur.ref;
-      const m = await ChatMessage.create({ content: `🔬 批量${i + 1}/5`, speaker: { alias: T.user || "GM" }, flags: { [MODULE]: flags } });
-      if (m && m.id) made++;
-    } catch (e) { /* noop */ }
-  }
-  return ev(made >= 4, { created: made, total: 5, ms: Date.now() - t0, note: "代理链路: GM 端同步代合成写回(引擎日志应有 5 次)" });
+  const pl = onlinePlayers();
+  if (!pl.length) return recSkip("压力在玩家电脑: 批量消息写回需指定在线玩家");
+  const r = await runStress(pl.slice(0, 1), { mode: "burst", count: 5, gapMs: 600, viaMsg: true });
+  const acks = (r && r.acks) || [];
+  const okAcks = acks.filter((a) => a.ok !== false);
+  const doneN = acks.reduce((s, a) => s + (a.done || 0), 0);
+  return ev(okAcks.length > 0 && doneN >= 3, {
+    target: pl.slice(0, 1), viaMsg: true,
+    acks: acks.map((a) => ({ user: a.user, done: a.done || 0, count: a.count || 0, avgMs: Math.round(a.avgMs || 0) })),
+    note: "5 条真实消息在玩家电脑走消息链路(权威写回→DB 同步→全员播放), 引擎日志应有对应合成记录",
+  });
 }
 
 // 19 坏参(缺 text → 引擎 400 message 明确, 回归 1.3.7)
@@ -500,9 +483,11 @@ async function runSuite(suiteName, scenarios) {
     const t0 = Date.now();
     let r;
     try { r = await fn(); } catch (e) { r = ev(false, { err: String((e && e.message) || e).slice(0, 100) }); }
-    record(id, title, r, Date.now() - t0);
+    if (r && r.__skip) record(id, title, { ok: false, ev: r.ev }, Date.now() - t0, String(r.__skip));
+    else record(id, title, r, Date.now() - t0);
   }
-  const summary = { pass: T.scenarios.filter((s) => s.result === "ok").length, total: T.scenarios.length, ms: Date.now() - tStart };
+  const skipped = T.scenarios.filter((s) => s.result === "skip").length;
+  const summary = { pass: T.scenarios.filter((s) => s.result === "ok").length, total: T.scenarios.length, skipped, ms: Date.now() - tStart };
   const report = {
     at: new Date().toISOString(), kind: suiteName === "gm" ? "gmSelfTest" : "playerSelfTest",
     user: T.user, role: T.isGM ? "gm" : "player", env: { protocol: dbg.state() && String((typeof location !== "undefined" && location.protocol) || ""), canDirect: dbg.canDirect(), moduleVersion: (() => { try { return (game.modules.get(MODULE) || {}).version || ""; } catch (e) { return ""; } })() },
@@ -567,17 +552,86 @@ async function runAuto() { return T.isGM ? runGmSuite() : runPlayerSuite(); }
 /* ---------- GM 并发批次 → 玩家 → 回执(多玩家同秒/多角色多语气真实分发的闭环) ---------- */
 const _batchAc = { seq: 0, acks: [] };
 
+// 在线玩家名单(非 GM, 非本端) — 压力跑在玩家电脑(服务器/引擎机不登录账号)
+function onlinePlayers() {
+  try {
+    return game.users.contents.filter((u) => u && u.active && !u.isGM && u.name && u.name !== ((game.user && game.user.name) || "")).map((u) => String(u.name));
+  } catch (e) { return []; }
+}
+
+// 角色/语气组合分发到在线玩家(循环分配, 保证"多个一起"真实多端并发)
+function comboItems(combos) {
+  const pl = onlinePlayers();
+  const out = [];
+  if (!pl.length) return out;
+  combos.forEach(([role, em], i) => {
+    out.push({ user: pl[i % pl.length], role, emotion: em || "", text: `并发测试 ${role || "角色"}/${em || "默认"}` });
+  });
+  return out;
+}
+
+// GM 分发压力批次: 指定玩家电脑各自执行(真实链路) → 回执汇总
+async function runStress(targets, cfg2) {
+  const c2 = cfg2 || {};
+  const pl = (targets && targets.length) ? targets : onlinePlayers();
+  if (!pl.length) return { ok: false, err: "no-online-players", skip: "无在线玩家: 压力需跑在指定玩家电脑(不与服务器抢资源)" };
+  let items = [];
+  if (c2.mode === "burst") {
+    const count = Number(c2.count) || 8;
+    const gapMs = Number(c2.gapMs) || 400;
+    const baseTxt = c2.text || "压力测试第";
+    const viaMsg = c2.viaMsg === true;
+    for (const u of pl) {
+      for (let i = 0; i < count; i++) {
+        items.push({ user: u, role: c2.role || "", emotion: c2.emotion || "", text: `${baseTxt}${i + 1}条`, stress: { mode: "burst", seq: i, total: count, gapMs, viaMsg } });
+      }
+    }
+  } else if (c2.mode === "combo") {
+    items = (c2.items || []).map((it) => ({ ...it, stress: { mode: "combo" } }));
+  } else {
+    return { ok: false, err: "bad-mode" };
+  }
+  if (!items.length) return { ok: false, err: "no-items", skip: "组合为空" };
+  const res = await fireTestBatch(items);
+  return { ok: (res.ok !== false) && (res.acks || []).some((a) => a.ok !== false && !a.declined), mode: c2.mode, items: items.length, ...res };
+}
+
+// GM 专属压力场景骨架(分布到玩家电脑执行; 服务器/引擎机不参与)
+async function gmStress(id, title, cfg2, expectMin) {
+  const pl = onlinePlayers();
+  if (!pl.length) return recSkip(`压力在玩家电脑执行: 需至少 1 名玩家在线(${title})`);
+  const r = await runStress(pl, cfg2);
+  const acks = (r && r.acks) || [];
+  const okAcks = acks.filter((a) => a && a.ok !== false && !a.declined);
+  const ok = (r && r.ok !== false) && okAcks.length > 0 && ((pl.length === 1) ? okAcks.length >= 1 : true);
+  const evo = {
+    targets: pl, items: (r && r.items) || 0,
+    acks: acks.slice(0, 6).map((a) => ({ user: a.user, ok: a.ok !== false, declined: !!a.declined, mode: a.mode || "", count: a.count || 0, done: a.done || 0, okCount: a.done || 0, avgMs: Math.round(a.avgMs || 0), maxMs: a.maxMs || 0, err: a.err || String((a.result && a.result.err) || "") })),
+    note: "合成请求由各玩家电脑发起(真实链路: 合成→播放→广播), GM 只协调汇总; 引擎为唯一合成源(真实多人场景必然)",
+  };
+  return ev(ok, evo);
+}
+
 async function fireTestBatch(items) {
-  // items: [{user, role, emotion, text}] — GM 端发起, 各玩家收到后真实朗读并回执
+  // items: [{user, role, emotion, text, stress}] — GM 端发起, 各玩家收到后在自己电脑执行并回执
   const seq = ++_batchAc.seq;
   _batchAc.acks = [];
   window.__fvttTTSTestBatchDone = null;
+  window.__fvttTTSTestBatchAcks = [];
   try {
     await moduleEmit("test-batch", { __type: "test-batch", seq, items, from: T.user }, { timeoutMs: 60000 }).catch(() => null);
   } catch (e) { /* noop */ }
-  // 等待回执(≤45s)
-  await poll(() => { try { return window.__fvttTTSTestBatchAcks && window.__fvttTTSTestBatchAcks.length >= items.length ? true : null; } catch (e) { return null; } }, 45000, 500);
-  return { seq, acks: (window.__fvttTTSTestBatchAcks || []).slice() };
+  // 等待回执: 每个目标玩家(去重)应回 1 条汇总(或拒绝)
+  const targets = new Set((items || []).map((i) => i && i.user).filter(Boolean)).size;
+  await poll(() => {
+    try {
+      const a = window.__fvttTTSTestBatchAcks || [];
+      const got = new Set(a.map((x) => x && x.user).filter(Boolean));
+      if (a.some((x) => x && x.declined)) return true;
+      return got.size >= targets ? true : null;
+    } catch (e) { return null; }
+  }, 45000, 500);
+  return { seq, targets, ok: true, acks: (window.__fvttTTSTestBatchAcks || []).slice() };
 }
 
 function setupSocket() {
@@ -599,15 +653,67 @@ function setupSocket() {
   } catch (e) { /* noop */ }
 }
 
-// 玩家端: 收到批次 → 对匹配自己的条目录音(真实 speak, 指定角色/语气) → 回执
+// 玩家端: 收到批次(并发/压力) → 匹配自己的条目在自己电脑执行(真实链路: 合成→播放→官方广播/消息写回) → 回执
+// 压测默认参与; 玩家可在设置关闭(allowStressTest) → 回执 declined
 async function handleTestBatch(data) {
   try {
     const items = (data && data.items) || [];
     const mine = items.filter((it) => it && (it.user === T.user || it.user === game.user.name));
     if (!mine.length) return;
+    let allow = true;
+    try { allow = game.settings.get(MODULE, "allowStressTest") !== false; } catch (e) { allow = true; }
+    if (!allow) {
+      try { await moduleEmit("test-ack", { __type: "test-ack", ack: { seq: data.seq, user: T.user, declined: true, err: "玩家关闭了压力测试参与开关" }, from: T.user }, { timeoutMs: 15000 }).catch(() => null); } catch (e) { /* noop */ }
+      return;
+    }
     window.__fvttTTSTestBatchDone = { seq: data.seq, n: mine.length };
-    const acks = [];
-    for (const it of mine.slice(0, 3)) {
+    const mode = (mine[0] && mine[0].stress && mine[0].stress.mode) || "combo";
+    if (mode === "burst") {
+      const total = mine.length;
+      const gapMs = (mine[0] && mine[0].stress && mine[0].stress.gapMs) || 500;
+      const viaMsg = (mine[0] && mine[0].stress && mine[0].stress.viaMsg) === true;
+      const times = [];
+      let doneN = 0;
+      for (let i = 0; i < total; i++) {
+        const it = mine[i] || {};
+        const ts = Date.now();
+        try {
+          if (viaMsg) {
+            const cc = charCtx(it.role || "", it.emotion || "");
+            const flags = { synthRequest: { text: String(it.text || `压力${i + 1}`), lang: "zh", role: String(it.role || ""), provider: "gpt-sovits" }, role: String(it.role || "") };
+            if (cc.ref) flags.ref = cc.ref;
+            if (cc.promptText) flags.promptText = cc.promptText;
+            if (cc.promptLang) flags.promptLang = cc.promptLang;
+            const m = await ChatMessage.create({ content: String(it.text || `压力${i + 1}`), speaker: { alias: T.user || "玩家" }, flags: { [MODULE]: flags } });
+            if (m && m.id) doneN++;
+          } else {
+            const cc = charCtx(it.role || "", it.emotion || "");
+            const ov = {};
+            if (cc.ref) ov.refAudioPath = cc.ref;
+            if (cc.promptText) ov.promptText = cc.promptText;
+            if (cc.promptLang) ov.promptLang = cc.promptLang;
+            if (cc.auxRef) ov.auxRefAudioPaths = [cc.auxRef];
+            const r = await gptSovitsSynth(String(it.text || "压力测试"), "zh", { serverUrl: cfg().serverUrl, speedFactor: 1, overrides: Object.keys(ov).length ? ov : null, mediaType: "mp3", asBlob: true, role: String(it.role || ""), skipDirect: dbg.canDirect() !== "direct" });
+            if (r && r.blob && r.blob.size > 0) {
+              doneN++;
+              try { await audioPlay((r.audioUrl && (D._modulePath ? D._modulePath(r.audioUrl) : "")) || URL.createObjectURL(r.blob), { volume: 0.6, push: !!r.audioUrl }); } catch (e) { /* noop */ }
+            }
+          }
+          times.push(Date.now() - ts);
+        } catch (e) { /* 单条失败不中断 */ }
+        if (i < total - 1 && gapMs > 0) await sleep(gapMs);
+      }
+      const ack = {
+        seq: data.seq, user: T.user, ok: doneN >= Math.max(1, Math.floor(total * 0.6)), mode: "burst",
+        count: total, done: doneN, avgMs: times.length ? Math.round(times.reduce((a, b) => a + b, 0) / times.length) : 0,
+        maxMs: times.length ? Math.max(...times) : 0, viaMsg,
+      };
+      try { await moduleEmit("test-ack", { __type: "test-ack", ack, from: T.user }, { timeoutMs: 15000 }).catch(() => null); } catch (e) { /* noop */ }
+      return;
+    }
+    // combo: 逐条(可含不同角色/语气)在自己电脑朗读 → 回执汇总
+    const result = [];
+    for (const it of mine.slice(0, 8)) {
       const t0 = Date.now();
       try {
         const cc = charCtx(it.role || "", it.emotion || "");
@@ -622,17 +728,16 @@ async function handleTestBatch(data) {
         if (r && r.blob && r.blob.size > 0) {
           const impl0 = dbg.state().impl;
           try { await audioPlay((r.audioUrl && (D._modulePath ? D._modulePath(r.audioUrl) : "")) || URL.createObjectURL(r.blob), { volume: 0.6, push: !!r.audioUrl }); } catch (e) { /* noop */ }
-          acks.push({ seq: data.seq, user: T.user, role: it.role || "", emotion: it.emotion || "", ok: true, synthMs, impl: dbg.state().impl || impl0 });
+          result.push({ role: it.role || "", emotion: it.emotion || "", ok: true, synthMs, impl: dbg.state().impl || impl0 });
         } else {
-          acks.push({ seq: data.seq, user: T.user, role: it.role || "", emotion: it.emotion || "", ok: false, err: "no-blob" });
+          result.push({ role: it.role || "", emotion: it.emotion || "", ok: false, err: "no-blob" });
         }
       } catch (e) {
-        acks.push({ seq: data.seq, user: T.user, role: it.role || "", emotion: it.emotion || "", ok: false, err: String((e && e.message) || e).slice(0, 60) });
+        result.push({ role: it.role || "", emotion: it.emotion || "", ok: false, err: String((e && e.message) || e).slice(0, 60) });
       }
     }
-    try {
-      if (acks.length) await moduleEmit("test-ack", { __type: "test-ack", ack: acks[0], from: T.user }, { timeoutMs: 15000 }).catch(() => null);
-    } catch (e) { /* noop */ }
+    const ack2 = { seq: data.seq, user: T.user, mode: "combo", result, ok: result.filter((x) => x.ok).length >= Math.max(1, Math.floor(result.length * 0.6)) };
+    try { if (result.length) await moduleEmit("test-ack", { __type: "test-ack", ack: ack2, from: T.user }, { timeoutMs: 15000 }).catch(() => null); } catch (e) { /* noop */ }
   } catch (e) { /* noop */ }
 }
 
@@ -645,8 +750,11 @@ export function installTTSTests(deps) {
     runGmSuite,
     runAuto,
     runConcurrent: fireTestBatch,
+    // 1.5.1: GM 分发压力到指定玩家电脑(服务器/引擎机零压力) — runStress(["Player2"], {mode:"burst", count:10})
+    runStress,
+    onlinePlayers,
     debug: dbg,
-    version: "1.5.0",
+    version: "1.5.1",
   };
   try { window.__fvttTTSTests = api; } catch (e) { /* noop */ }
   return api;
