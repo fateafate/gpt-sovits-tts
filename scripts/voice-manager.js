@@ -4,7 +4,7 @@
  * （每槽绑定一段音频，自动转写台词）、复制/导出/删除角色、头像、语速/音量。
  * 实现为自定义浮动面板(不依赖特定 Application 基类, 兼容 Foundry v11-13)。
  */
-import { gptSovitsStatus, svcRequest, bytesToB64Async } from "./tts-engine.js";
+import { gptSovitsStatus, svcRequest, bytesToB64Async, importCharPackChunked } from "./tts-engine.js";
 import { openRunnerAssign } from "./voice-runner.js";
 
 const MODULE = "gpt-sovits-tts";
@@ -853,9 +853,10 @@ function safeAssignments() {
         if (!f) return;
         this._setBusy(true, t("vm.importingChar", "导入角色包…"));
         try {
-          const r = await this._svcFile("POST", "/characters/import", f);
-          const j = await r.json();
-          if (!r.ok || !j.ok) throw new Error(j.message || "import failed");
+          // 分片导入(≤12MB 单次, 大包分片 10MB/片 — 消除单次几百MB body → 不再丢 FVTT 连接)
+          const r = await importCharPackChunked(this.base, f, { onProgress: (p) => { try { const _pct = Math.round(p * 100); if (_pct % 20 === 0) this._setBusy(true, t("vm.importingChar", "导入角色包…") + " " + _pct + "%"); } catch (e) { /* noop */ } } });
+          if (!r.ok) throw new Error(r.message || "import failed");
+          const j = { name: r.name };
           const prof = loadVoiceProfile();
           prof.current = j.name;
           prof.chars = prof.chars || {};

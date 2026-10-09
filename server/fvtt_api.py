@@ -2194,35 +2194,27 @@ async def characters_create(request: Request):
     return {"ok": True, "name": name}
 
 
-@APP.post("/characters/import")
-async def characters_import(request: Request):
-    """上传 .char(zip) -> 解压到 fvtt_chars/<name> -> 语气映射 -> 切换激活."""
+def _import_char_zip(data: bytes):
+    """共用: 校验 zip + 解压到 fvtt_chars/<name> + 激活; 返回 (name, err)。"""
     import io
     import zipfile as _zipfile
-    data = await request.body()
-    if not data:
-        return JSONResponse(status_code=400, content={"ok": False, "message": "empty body"})
-    if data.strip() in (b"null", b"", b"{}"):   # 防御: 旧客户端超限时曾发 "null"/空 → 明确提示而不是误导成"不是压缩包"
-        return JSONResponse(status_code=400, content={"ok": False, "message": "未收到文件内容(角色包可能过大或读取失败), 请重新选择后导入"})
     try:
         zf = _zipfile.ZipFile(io.BytesIO(data))
     except Exception as e:
-        return JSONResponse(status_code=400, content={"ok": False, "message": "不是有效的 .char 压缩包: %s" % e})
-    yaml_names = [n for n in zf.namelist() if n.replace("\\", "/").endswith("character.yaml")]
-    if not yaml_names:
-        return JSONResponse(status_code=400, content={"ok": False, "message": "包内没有 character.yaml"})
+        return None, "不是有效的 .char 压缩包: %s" % e
+    d = None
     try:
+        yaml_names = [n for n in zf.namelist() if n.replace("\\", "/").endswith("character.yaml")]
+        if not yaml_names:
+            return None, "包内没有 character.yaml"
         raw = _yaml.safe_load(zf.read(yaml_names[0]).decode("utf-8", errors="replace")) or {}
         cfg = raw[0] if isinstance(raw, list) and raw else raw
         name = os.path.basename(str(cfg.get("name", ""))).strip() or "导入角色"
-    except Exception as e:
-        return JSONResponse(status_code=400, content={"ok": False, "message": "解析 character.yaml 失败: %s" % e})
-    name = "".join(c for c in name if c not in '\\/:*?"<>|')
-    d = os.path.join(_CHARS_ROOT, name)
-    # 已存在检查放 try 外: 绝不因"已存在"误删磁盘上的角色目录
-    if os.path.isdir(d) and os.path.isfile(os.path.join(d, "character.yaml")):
-        return JSONResponse(status_code=400, content={"ok": False, "message": "角色 %s 已存在, 请先删除或改名" % name})
-    try:
+        name = "".join(c for c in name if c not in '\\/:*?"<>|')
+        d = os.path.join(_CHARS_ROOT, name)
+        # 已存在检查: 绝不因"已存在"误删磁盘上的角色目录
+        if os.path.isdir(d) and os.path.isfile(os.path.join(d, "character.yaml")):
+            return None, "角色 %s 已存在, 请先删除或改名" % name
         if os.path.isdir(d):
             shutil_rm(d)   # 残留空壳(无 character.yaml 的上次失败遗留)直接清理
         os.makedirs(d, exist_ok=True)
@@ -2240,14 +2232,103 @@ async def characters_import(request: Request):
             with open(dst, "wb") as f:
                 f.write(zf.read(n))
     except Exception as e:
-        shutil_rm(d)
-        return JSONResponse(status_code=400, content={"ok": False, "message": "解压失败: %s" % e})
+        try:
+            if d:
+                shutil_rm(d)
+        except Exception:
+            pass
+        return None, "解压失败: %s" % e
     finally:
-        zf.close()
+        try:
+            zf.close()
+        except Exception:
+            pass
     err = activate_character(name)
     if err:
-        return JSONResponse(status_code=400, content={"ok": False, "message": "已导入但切换失败: %s" % err})
+        return None, "已导入但切换失败: %s" % err
+    return name, None
+
+
+@app.post("/characters/import")
+async def characters_import(request: Request):
+    """上传 .char(zip) -> 解压到 fvtt_chars/<name> -> 语气映射 -> 切换激活(单次, 小包)."""
+    data = await request.body()
+    if not data:
+        return JSONResponse(status_code=400, content={"ok": False, "message": "empty body"})
+    if data.strip() in (b"null", b"", b"{}"):   # 防御: 旧客户端超限时曾发 "null"/空 → 明确提示而不是误导成"不是压缩包"
+        return JSONResponse(status_code=400, content={"ok": False, "message": "未收到文件内容(角色包可能过大或读取失败), 请重新选择后导入"})
+    name, err = _import_char_zip(data)
+    if err:
+        return JSONResponse(status_code=400, content={"ok": False, "message": err})
     return {"ok": True, "name": name, "message": "角色包导入成功"}
+
+
+# ---- 角色包分片上传(超大包: 客户端分片发送, 引擎边收边落盘, 单次大 body/内存峰值消除) ----
+_IMPORT_SESSIONS = {}
+
+
+@app.post("/characters/import-session")
+async def import_session(request: Request):
+    body = await request.json()
+    size = int(body.get("size") or 0)
+    if size <= 0 or size > 8 * 1024 * 1024 * 1024:
+        return JSONResponse(status_code=400, content={"ok": False, "message": "size 无效(0~8GB)"})
+    sid = uuid.uuid4().hex[:16]
+    tmp = os.path.join(os.getcwd(), "fvtt_chars", ".tmp_imports")
+    os.makedirs(tmp, exist_ok=True)
+    path = os.path.join(tmp, "%s.zip" % sid)
+    _IMPORT_SESSIONS[sid] = {"path": path, "total": size, "received": 0, "ts": time.time()}
+    return {"ok": True, "session": sid}
+
+
+@app.post("/characters/import-chunk")
+async def import_chunk(request: Request, session: str = ""):
+    s = _IMPORT_SESSIONS.get(session)
+    if not s:
+        return JSONResponse(status_code=400, content={"ok": False, "message": "上传会话不存在或已过期"})
+    data = await request.body()
+    if not data:
+        return JSONResponse(status_code=400, content={"ok": False, "message": "empty chunk"})
+    with open(s["path"], "ab") as f:
+        f.write(data)
+    s["received"] += len(data)
+    if s["received"] > s["total"] + 64 * 1024 * 1024:
+        return JSONResponse(status_code=400, content={"ok": False, "message": "超出声明大小"})
+    return {"ok": True, "received": s["received"], "total": s["total"]}
+
+
+@app.post("/characters/import-finish")
+async def import_finish(request: Request, session: str = ""):
+    s = _IMPORT_SESSIONS.pop(session, None)
+    if not s:
+        return JSONResponse(status_code=400, content={"ok": False, "message": "上传会话不存在"})
+    if s["received"] < s["total"]:
+        return JSONResponse(status_code=400, content={"ok": False, "message": "分片不完整(%d/%d), 请重试" % (s["received"], s["total"])})
+    try:
+        with open(s["path"], "rb") as f:
+            data = f.read()
+    except Exception as e:
+        return JSONResponse(status_code=400, content={"ok": False, "message": "读取临时文件失败: %s" % e})
+    finally:
+        try:
+            os.remove(s["path"])
+        except Exception:
+            pass
+    name, err = _import_char_zip(data)
+    if err:
+        return JSONResponse(status_code=400, content={"ok": False, "message": err})
+    return {"ok": True, "name": name, "message": "角色包导入成功"}
+
+
+@app.post("/characters/import-abort")
+async def import_abort(request: Request, session: str = ""):
+    s = _IMPORT_SESSIONS.pop(session, None)
+    if s:
+        try:
+            os.remove(s["path"])
+        except Exception:
+            pass
+    return {"ok": True}
 
 
 @APP.post("/characters/duplicate")

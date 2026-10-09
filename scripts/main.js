@@ -4,7 +4,7 @@
  *       麦克风听写(浏览器 Web Speech / 服务端 /asr) 直接发送或插入输入框
  *       消息重听按钮、状态指示灯、/ttssay 等命令、game.gptSoVitsTTS 宏 API
  */
-import { PlaybackQueue, audioPlay, webSpeechSpeak, gptSovitsSynth, gptSovitsStatus, synthEdge, svcRequest, installModuleSocket, moduleEmit, normPlayKey, hasPlayedSrc, markPlayedSrc, bytesToB64Async } from "./tts-engine.js";
+import { PlaybackQueue, audioPlay, webSpeechSpeak, gptSovitsSynth, gptSovitsStatus, synthEdge, svcRequest, installModuleSocket, moduleEmit, normPlayKey, hasPlayedSrc, markPlayedSrc, bytesToB64Async, importCharPackChunked } from "./tts-engine.js";
 import { installRunnerAssignUI } from "./voice-runner.js";
 import { installGmProxy } from "./gm-proxy.js";
 import { installTTSTests } from "./tests.js";
@@ -3430,12 +3430,12 @@ Hooks.once("ready", () => {
     const _importCharDrop = async (file) => {
       try {
         notifyOnce("正在导入角色包…", "info");
-        const ab = await file.arrayBuffer();
-        const b64 = await bytesToB64Async(new Uint8Array(ab));   // 分块异步转码, 超大包不冻结/崩溃浏览器
-        const r = await svcRequest(getCfg().serverUrl, "POST", "/characters/import", null, { b64Body: b64, contentType: file.type || "application/octet-stream", timeoutMs: 600000 });
-        const j = (r.jsonSafe ? r.jsonSafe() : (r.json || {})) || {};
-        if (r.ok && j.ok) { notifyOnce("角色包导入成功: " + (j.name || ""), "info"); try { refreshQuickUI(); updateCharIndicator(); } catch (e) { /* noop */ } }
-        else notifyOnce("导入失败: " + (j.message || String(r.status || "")), "error");
+        // 分片导入(≤12MB 单次, 大包分片 10MB/片 — 不再单次发送几百MB body, 不丢 FVTT 连接)
+        const r = await importCharPackChunked(getCfg().serverUrl, file, {
+          onProgress: (p) => { try { const _pct = Math.round(p * 100); if (_pct % 20 === 0) notifyOnce("正在导入角色包… " + _pct + "%", "info"); } catch (e) { /* noop */ } },
+        });
+        if (r.ok) { notifyOnce("角色包导入成功: " + (r.name || ""), "info"); try { refreshQuickUI(); updateCharIndicator(); } catch (e) { /* noop */ } }
+        else notifyOnce("导入失败: " + (r.message || ""), "error");
       } catch (e) { notifyOnce("导入失败: " + String((e && e.message) || e).slice(0, 120), "error"); }
     };
     const _dropFile = (e) => {
