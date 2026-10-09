@@ -1358,7 +1358,7 @@ function buildSendPop() {
         <label class="fvtt-tts-sendpop-tuneline"><span>${_L("ui.speed", "语速")}</span><input type="range" class="fvtt-tts-sendpop-speed" min="0.5" max="1.5" step="0.05" value="1"></label>
         <label class="fvtt-tts-sendpop-tuneline"><span title="${_L("ui.emotionMixTip", "0% 纯默认主参考；100% 情绪音频作唯一参考；中间主参考+情绪融合")}">${_L("ui.emotionMix", "情绪占比")} <b class="fvtt-tts-sendpop-mixval">50%</b></span><input type="range" class="fvtt-tts-sendpop-mix" min="0" max="100" step="5" value="50"></label>
         <label class="fvtt-tts-sendpop-tuneline"><span title="${_L("ui.emotionModTip", "用语速等参数调制情感：0% 不调制；100% 完全按情绪语速(开心快/悲伤慢)")}">${_L("ui.emotionMod", "情感参数调制")} <b class="fvtt-tts-sendpop-modval">50%</b></span><input type="range" class="fvtt-tts-sendpop-mod" min="0" max="100" step="5" value="50"></label>
-<label class="fvtt-tts-sendpop-tuneline"><span title="${_L("ui.styleTip", "朗读风格提示词：如“更严肃认真、中间不要中断”。会翻译成语速/停顿等合成参数，角色独立记得。")}">${_L("ui.stylePrompt", "朗读风格")}</span><input type="text" class="fvtt-tts-sendpop-style" placeholder="${_L("ui.stylePh", "如：更严肃认真，中间不要中断")}" maxlength="120"></label>
+<label class="fvtt-tts-sendpop-tuneline"><span title="${_L("ui.styleTip", "朗读提示词：如“更严肃认真、中间不要中断”。会翻译成语速/停顿等合成参数，角色独立记得。")}">${_L("ui.stylePrompt", "朗读提示词")}</span><input type="text" class="fvtt-tts-sendpop-style" placeholder="${_L("ui.stylePh", "如：更严肃认真，中间不要中断")}" maxlength="120"></label>
       </div>
       <div class="fvtt-tts-sendpop-actions">
         <button type="button" class="fvtt-tts-sendpop-preload">🚀 ${_L("ui.sendPopPreload", "AI 预加载")}</button>
@@ -3592,18 +3592,39 @@ function getSpriteRotation(name, emotion) {
   } catch (e) { return 0; }
 }
 
-// 情绪→立绘分组(1.6.21): 无情绪标签的立绘集按情绪分桶 — 不同语气固定取不同组立绘(视觉可区分), 同情绪内仍轮换
-// 6 组按立绘数量均分: 0=neutral/calm 1=joy 2=sad 3=angry 4=surprised 5=fear
+// 情绪→立绘候选(1.6.26): ①文件名含情绪词(angry/joy/sad/... 或中文"怒/笑/泪/惊/怕"等"称呼")优先精确匹配;
+// ②纯数字编号则按 6 情绪分段兜底; 返回候选索引数组(调用方在组内轮换, 不会串到别的情绪段)
 function spriteBucketForEmotion(sprites, emotion) {
   try {
     const n = Array.isArray(sprites) ? sprites.length : 0;
-    if (n <= 1) return 0;
+    if (n <= 1) return [0];
     const emo = String(emotion || "").toLowerCase();
-    const gmap = { joy: 1, happy: 1, sad: 2, angry: 3, surprised: 4, fear: 5 };
+    const kw = {
+      angry: ["angry", "anger", "rage", "mad", "怒", "气", "咆哮"],
+      joy: ["joy", "happy", "laugh", "smile", "笑", "开心", "高兴", "喜", "欢"],
+      sad: ["sad", "cry", "crying", "tear", "泪", "哭", "伤心", "悲", "难过", "泣"],
+      surprised: ["surprised", "shock", "wow", "惊", "惊讶", "震惊"],
+      fear: ["fear", "scared", "afraid", "horror", "怕", "恐惧"],
+      calm: ["calm", "serene", "gentle", "平静", "温柔", "娴静"],
+      neutral: ["neutral", "normal", "平静", "普通"]
+    };
+    const wants = kw[emo] || [];
+    if (wants.length) {
+      const hits = [];
+      sprites.forEach((s, i) => {
+        const f = String(s || "").toLowerCase();
+        if (wants.some(w => f.includes(w))) hits.push(i);
+      });
+      if (hits.length) return hits;
+    }
+    // 纯数字编号 → 6 情绪分段兜底(索引均分)
+    const gmap = { joy: 1, happy: 1, sad: 2, angry: 3, surprised: 4, fear: 5, calm: 0 };
     const g = gmap[emo] !== undefined ? gmap[emo] : 0;
     const per = Math.max(1, Math.floor(n / 6));
-    return Math.min(g * per, n - 1);
-  } catch (e) { return 0; }
+    const list = [];
+    for (let i = g * per; i < Math.min((g + 1) * per, n); i++) list.push(i);
+    return list.length ? list : [0];
+  } catch (e) { return [0]; }
 }
 
 // 情绪规则判定(1.6.20): 无 LLM 依赖 — 台词关键词/标点 → 情绪key(引擎后处理调制近似语气); 显式选择的语气优先
@@ -3666,9 +3687,9 @@ Hooks.on("chatMessage", (chatLog, message, chatData) => {
           const cD = (quickChars && quickChars.chars || []).find(x => x.name === prof0n);
           if (cD && Array.isArray(cD.sprites) && cD.sprites.length >= 1) {
             const _emoS = String((cur && cur.emotion) || detectEmotion(String(message.content || chatData.content || ""), null) || "");
-            const _base = spriteBucketForEmotion(cD.sprites, _emoS);
+            const _emoList = spriteBucketForEmotion(cD.sprites, _emoS);
             const _rot = getSpriteRotation(prof0n + "|" + _emoS, _emoS);
-            return cD.sprites[(_base + _rot) % cD.sprites.length];
+            return cD.sprites[_emoList[_rot % _emoList.length]];
           }
           return (cD && cD.avatar) || (cur && cur.avatar) || "";
         } catch (e) { return ""; } })(),
@@ -4069,9 +4090,9 @@ Hooks.on("createChatMessage", (message) => {
         if (!_e) return;
         const cD = (quickChars && quickChars.chars || []).find(x => x.name === _roleN);
         if (!cD || !Array.isArray(cD.sprites) || !cD.sprites.length) return;
-        const _base = spriteBucketForEmotion(cD.sprites, _e);
+        const _emoList = spriteBucketForEmotion(cD.sprites, _e);
         const _rot = getSpriteRotation(_roleN + "|" + _e + "|ai", _e);
-        const _av = cD.sprites[(_base + _rot) % cD.sprites.length];
+        const _av = cD.sprites[_emoList[_rot % _emoList.length]];
         await message.update({ flags: { [MODULE]: { ..._fl, emotion: _e, avatar: _av } } }).catch(() => {});
         try { if (message.element) applyEmotionAvatar(message, message.element); } catch (e2) { /* noop */ }
       } catch (e) { /* noop */ }

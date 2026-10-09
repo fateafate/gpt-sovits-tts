@@ -510,7 +510,7 @@ export class VoiceManager {
         <input class="fvtt-tts-vm-vol" data-field="volume" type="range" min="0" max="1" step="0.05" value="${vol}">
         <span class="fvtt-tts-vm-val" data-for="volume">${vol.toFixed(2)}</span>
       </label>
-      <label class="fvtt-tts-vm-row"><span title="${t("vm.styleTip", "朗读风格提示词：如“更严肃认真、中间不要中断”。会翻译成语速/停顿等合成参数，角色独立记得。")}">${t("vm.stylePrompt", "朗读风格")}</span>
+      <label class="fvtt-tts-vm-row"><span title="${t("vm.styleTip", "朗读提示词：如“更严肃认真、中间不要中断”。会翻译成语速/停顿等合成参数，角色独立记得。")}">${t("vm.stylePrompt", "朗读提示词")}</span>
         <input class="fvtt-tts-vm-style" type="text" maxlength="120" value="${esc(getStylePrompt(this.editName || (this.charsData && this.charsData.active) || "") || ((p && p.stylePrompt) || ""))}" placeholder="${t("vm.stylePh", "如：更严肃认真，中间不要中断")}">
       </label></section>`;
 
