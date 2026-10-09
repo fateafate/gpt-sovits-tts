@@ -971,6 +971,23 @@ function safeAssignments() {
         <button type="button" class="fvtt-tts-vm-btn vm-slot-addok" style="display:none">${t("vm.ok", "确定")}</button>
       </div>
     </section>`;
+    // ---- 立绘库(1.6.29): 角色全部立绘独立选择(蓝色=纯立绘不绑语音, 单选) — 语音跟语气槽/情绪, 立绘跟这里选中的图 ----
+    const spritesLib = (char && char.sprites) || [];
+    if (spritesLib.length) {
+      const profL = loadVoiceProfile();
+      const selSpriteL = ((profL && profL.chars && profL.chars[name] && profL.chars[name].selSprite) || "");
+      const spriteBaseL = (location.origin || "") + "/modules/gpt-sovits-tts/engine/audio_export/";
+      html += `<section class="fvtt-tts-vm-sec">
+        <div class="fvtt-tts-vm-title2">${t("vm.spriteLib", "立绘库")} <span class="fvtt-tts-vm-sprite-hint">${t("vm.spriteLibHint", "蓝色=纯立绘(不绑语音)，单选；与语气槽同用时语音跟语气、立绘跟这里。再点同张取消(恢复自动)")}</span></div>
+        <div class="fvtt-tts-vm-sprites">
+          ${spritesLib.map((s, i) => {
+            const on = selSpriteL === s ? " fvtt-tts-vm-sprite-on" : "";
+            const sUrl = spriteBaseL + String(s || "").replace(/^chars\//, "chars/");
+            return `<div class="fvtt-tts-vm-sprite-item${on}" data-sprite="${esc(s)}" title="${esc(s)}"><img src="${esc(sUrl)}" loading="lazy"><span class="fvtt-tts-vm-sprite-no">${i + 1}</span></div>`;
+          }).join("")}
+        </div>
+      </section>`;
+    }
     // ---- 语音样本库: 角色自带样本直接选用 ----
     html += `<section class="fvtt-tts-vm-sec">
       <div class="fvtt-tts-vm-title2">${t("vm.samples", "语音样本库（内置样本）")}</div>
@@ -1051,6 +1068,22 @@ function safeAssignments() {
           if (!r.ok || !j.ok) throw new Error(j.message || "avatar save failed");
           ui.notifications.info(t("vm.slotAvatarSaved", "已保存情绪立绘"));
         } catch (err) { ui.notifications.warn(t("vm.slotAvatarFail", "保存立绘失败") + ": " + (err.message || err)); }
+      });
+    });
+    // 立绘库单选(1.6.29): 点击选中(蓝框)存 profile.chars[name].selSprite; 再点同张取消(恢复自动)
+    body.querySelectorAll(".fvtt-tts-vm-sprite-item").forEach(it => {
+      it.addEventListener("click", () => {
+        try {
+          const s = it.dataset.sprite;
+          const prof = loadVoiceProfile();
+          prof.chars = prof.chars || {};
+          const c = prof.chars[name] || (prof.chars[name] = { name });
+          const nv = (c.selSprite === s) ? "" : s;
+          c.selSprite = nv;
+          saveVoiceProfile(prof);
+          body.querySelectorAll(".fvtt-tts-vm-sprite-item").forEach(x => x.classList.toggle("fvtt-tts-vm-sprite-on", x === it && !!nv));
+          ui.notifications.info(nv ? (t("vm.spritePicked", "已选立绘：") + s) : t("vm.spriteAuto", "已取消，说话立绘按语气自动"));
+        } catch (e) { /* noop */ }
       });
     });
     // 添加自定义语气槽(每个角色独立情绪集, 如阿尔托莉雅/五条悟的自带情绪也这样加)

@@ -3710,6 +3710,9 @@ Hooks.on("chatMessage", (chatLog, message, chatData) => {
         // 立绘路径随消息同步(跨端一致): 情绪分组(不同语气不同立绘) + 组内轮换(同语气连说换不同张) > 语气槽立绘 — 1.6.21
         avatar: (() => { try {
           const prof0n = (prof0 && prof0.current) || "";
+          // 1.6.29 手动选立绘(立绘库)最高优先: 语音跟语气槽/情绪, 立绘跟这里
+          const _selSp = (prof0 && prof0.chars && prof0.chars[prof0n] && prof0.chars[prof0n].selSprite) || "";
+          if (_selSp) return _selSp;
           const cD = (quickChars && quickChars.chars || []).find(x => x.name === prof0n);
           if (cD && Array.isArray(cD.sprites) && cD.sprites.length >= 1) {
             const _emoS = String((cur && cur.emotion) || detectEmotion(String(message.content || chatData.content || ""), null) || "");
@@ -4114,6 +4117,9 @@ Hooks.on("createChatMessage", (message) => {
       try {
         const _e = await aiJudgeEmotionNow(String(message.content), _roleN);
         if (!_e) return;
+        // 1.6.29 手动选立绘(立绘库)优先, AI 不覆盖
+        const profAi = loadVoiceProfile();
+        if (profAi && profAi.chars && profAi.chars[_roleN] && profAi.chars[_roleN].selSprite) return;
         const cD = (quickChars && quickChars.chars || []).find(x => x.name === _roleN);
         if (!cD || !Array.isArray(cD.sprites) || !cD.sprites.length) return;
         const _emoList = spriteBucketForEmotion(cD.sprites, _e, cD.emotion_tags);

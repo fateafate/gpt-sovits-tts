@@ -732,3 +732,47 @@ body.fvtt-tts-pink .fvtt-tts-sendpop-openvm {
 }
 /* GM 全局静音按钮(开启态红色) */
 .fvtt-tts-floatbar .fvtt-tts-mute.fvtt-tts-mute-on { color: #ff6b6b; }
+
+/* 立绘库(1.6.29): 纯立绘蓝色单选槽 — 与语气槽解耦, 语音跟语气/情绪, 立绘跟这里 */
+.fvtt-tts-vm-sprites {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+.fvtt-tts-vm-sprite-item {
+  position: relative;
+  width: 64px;
+  height: 64px;
+  border: 2px solid #3a4a66;
+  border-radius: 6px;
+  overflow: hidden;
+  cursor: pointer;
+  background: #111;
+  flex: 0 0 auto;
+}
+.fvtt-tts-vm-sprite-item img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.fvtt-tts-vm-sprite-item .fvtt-tts-vm-sprite-no {
+  position: absolute;
+  left: 2px;
+  top: 2px;
+  font-size: 10px;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.55);
+  padding: 0 3px;
+  border-radius: 3px;
+  line-height: 1.4;
+}
+.fvtt-tts-vm-sprite-item:hover { border-color: #8899bb; }
+.fvtt-tts-vm-sprite-on {
+  border-color: #4a90d9 !important;
+  box-shadow: 0 0 6px rgba(74, 144, 217, 0.8);
+}
+.fvtt-tts-vm-sprite-hint {
+  font-size: 11px;
+  color: #7ab3e8;
+  font-weight: normal;
+  margin-left: 6px;
+}
