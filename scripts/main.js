@@ -3465,6 +3465,7 @@ Hooks.once("ready", () => {
   } catch (e) { /* noop */ }
   // 聊天框"导入角色包"按钮(1.6.14): 拖放/选择文档被 Foundry 抢先时仍有可靠入口 — 点击 → 文件选择器(.char) → 分片导入
   try {
+    try { window.__fvttTTSImportCharDrop = _importCharDrop; } catch (e) { /* noop */ }   // 供附件检测/create 路径复用
     const _addImportBtn = () => {
       try {
         const cf = document.querySelector("#chat-form") || document.querySelector(".chat-form") || document.querySelector(".chat-sidebar form") || document.querySelector("#chat-controls") || null;
@@ -3897,9 +3898,37 @@ Hooks.on("renderSettingsConfig", (app, html) => {
 // v13 起 renderChatMessage 废弃, 改用 renderChatMessageHTML(传 HTMLElement); v11/12 用旧 hook
 // 注意: game.version 在 v13 是字符串("13.351"), 不能 typeof number 判断
 const _fv = typeof game.version === "number" ? game.version : (parseInt(String(game.version || "0"), 10) || 0);
+// 聊天附件角色包检测(1.6.15): 消息 content 带 .char 附件链接(FVTT"选择文档"上传的角色包) → fetch 后分片自动导入。
+// create/update/render 全路径调用(防"选择文档上传"走 create 不被 update 检测到)。同附件只导一次。
+function _detectCharAttachment(message) {
+  try {
+    const _content = String((message && message.content) || (message && message.data && message.data.content) || "");
+    const _charM = _content.match(/[^"'<>\\\s]+\.char(\?[^\s"'<>\\]*)?/i);
+    if (!_charM) return;
+    const _url = _charM[0];
+    window.__fvttTTSCharImportSet = window.__fvttTTSCharImportSet || new Set();
+    if (window.__fvttTTSCharImportSet.has(_url)) return;
+    window.__fvttTTSCharImportSet.add(_url);
+    (async () => {
+      try {
+        notifyOnce("检测到角色包附件, 自动导入中…", "info");
+        const resp = await fetch(_url);
+        if (!resp.ok) { notifyOnce("角色包下载失败: " + resp.status, "error"); return; }
+        const ab = await resp.arrayBuffer();
+        if (ab.byteLength > 512 * 1024 * 1024) { notifyOnce("角色包过大(>512MB), 请用语音管理器导入按钮", "error"); return; }
+        const f = new File([ab], _url.split("/").pop().split("?")[0] || "import.char", { type: "application/octet-stream" });
+        const _fn = window.__fvttTTSImportCharDrop;
+        if (typeof _fn === "function") await _fn(f);
+        else notifyOnce("导入器未就绪, 请稍后或使用语音管理器导入", "error");
+      } catch (e) { try { notifyOnce("角色包自动导入失败: " + String((e && e.message) || e).slice(0, 120), "error"); } catch (e2) { /* noop */ } }
+    })();
+  } catch (e) { /* noop */ }
+}
+
 // 立绘插入: 立即插 + 250ms 延迟补插(等 Foundry/系统后续渲染完成后重插, 防止图被渲染流程冲掉)
 // 自检 manualApply 已证明: 对"已挂载的消息元素"调用必然成功, 所以补插必须用 message.element(挂载后)
 function _applyAvatarWithRetry(message, html) {
+  _detectCharAttachment(message);
   addReplayButton(message, html);
   applyEmotionAvatar(message, html);
   setTimeout(() => {
@@ -3916,35 +3945,14 @@ if (_fv >= 13) {
 }
 // 聊天同步播放(主通道, 替代依赖 socket 广播): 发送方合成后把音频 Foundry 路径写回消息 flags,
 // 聊天文档同步是数据库级(可靠) → 其他客户端(pl)收到 update 立即播放 — socket 广播不通/延迟时不再等 15s 兜底
+// 新消息(create)也检测附件角色包 — "选择文档"上传的消息走 create 不触发 update, 1.6.15 全路径覆盖
+Hooks.on("createChatMessage", (message) => { try { _detectCharAttachment(message); } catch (e) { /* noop */ } });
 Hooks.on("updateChatMessage", (message, changed) => {
   try {
     (window.__fvttTTSHooks = window.__fvttTTSHooks || {}).updateChat = true;
     if (!message || !changed) return;
-    // 聊天附件角色包检测(1.6.14): 消息带 .char 附件链接(用户通过聊天框"选择文档"上传的角色包) → fetch 后分片自动导入
-    try {
-      const _content = String((message && message.content) || (message && message.data && message.data.content) || "");
-      const _charM = _content.match(/[^"'<>\\\s]+\.char(\?[^\s"'<>\\]*)?/i);
-      if (_charM) {
-        const _url = _charM[0];
-        try {
-          window.__fvttTTSCharImportSet = window.__fvttTTSCharImportSet || new Set();
-          if (!window.__fvttTTSCharImportSet.has(_url)) {
-            window.__fvttTTSCharImportSet.add(_url);
-            (async () => {
-              try {
-                notifyOnce("检测到角色包附件, 自动导入中…", "info");
-                const resp = await fetch(_url);
-                if (!resp.ok) { notifyOnce("角色包下载失败: " + resp.status, "error"); return; }
-                const ab = await resp.arrayBuffer();
-                if (ab.byteLength > 512 * 1024 * 1024) { notifyOnce("角色包过大(>512MB), 请用语音管理器导入按钮", "error"); return; }
-                const f = new File([ab], _url.split("/").pop().split("?")[0] || "import.char", { type: "application/octet-stream" });
-                await _importCharDrop(f);
-              } catch (e) { try { notifyOnce("角色包自动导入失败: " + String((e && e.message) || e).slice(0, 120), "error"); } catch (e2) { /* noop */ } }
-            })();
-          }
-        } catch (e) { /* noop */ }
-      }
-    } catch (e) { /* noop */ }
+    // 聊天附件角色包检测(create/update/render 全路径, 1.6.15): 消息带 .char 附件链接 → 自动分片导入
+    _detectCharAttachment(message);
     const flags = (message.flags && message.flags[MODULE]) || {};
     const hasUrl = (changed["flags.gpt-sovits-tts.audioUrl"] != null)
       || (changed["flags.gpt-sovits-tts.audioData"] != null)
