@@ -838,12 +838,12 @@ function safeAssignments() {
         try {
           const r = await this._svcFile("POST", "/ref-import", f0);
           const j = await r.json();
-          if (!r.ok || !j.ok) throw new Error(j.message || "upload failed");
+          if (!r.ok || !j || !j.ok) throw new Error((j && j.message) || "upload failed: " + String(r.status || ""));
           mainRefPath = j.ref_audio_path;
           this._pendingExtra = files.slice(1);
           const n = this._pendingExtra.length;
           body.querySelector(".vm-new-refname").textContent = j.ref_audio_path + (n ? `（另 ${n} 段将自动绑定到语气槽）` : "");
-        } catch (err) { ui.notifications.error(t("vm.importFail", "参考音频导入失败") + ": " + (err.message || err)); }
+        } catch (err) { ui.notifications.error(t("vm.importFail", "参考音频导入失败") + ": " + String(((err && err.message) || err) || "未知错误").slice(0, 120)); }
         finally { this._setBusy(false); }
       });
       // 导入 .char

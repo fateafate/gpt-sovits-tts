@@ -2361,8 +2361,8 @@ async def ref_import(request: Request, role: str = None, slot: str = None):
     ext = ext_map.get(ctype, "")
     if not ext:
         return JSONResponse(status_code=400, content={"ok": False, "message": "不支持的音频格式: %s" % ctype})
-    if len(data) > 50 * 1024 * 1024:
-        return JSONResponse(status_code=400, content={"ok": False, "message": "音频文件过大(>50MB)"})
+    if len(data) > 200 * 1024 * 1024:
+        return JSONResponse(status_code=400, content={"ok": False, "message": "音频文件过大(>200MB)"})
     ts = time.strftime("%Y%m%d_%H%M%S")
     try:
         if role:

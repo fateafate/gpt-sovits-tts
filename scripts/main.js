@@ -3442,9 +3442,7 @@ Hooks.once("ready", () => {
       try {
         const dt = e && e.dataTransfer;
         if (!dt || !dt.files || !dt.files.length) return;
-        const tgt = e.target;
-        const inChat = tgt && tgt.closest && (tgt.closest("#chat-log") || tgt.closest(".chat-log") || tgt.closest("#chat-controls") || tgt.closest("#chat-form") || tgt.closest("textarea"));
-        if (!inChat) return;
+        // 全局接管(不限聊天区域, 兼容 Foundry v11-13 各布局): .char/.zip → 模块导入; ≥20MB → 拦截提示; 小文件放行
         const f = dt.files[0];
         const sizeMB = (f.size || 0) / 1048576;
         const ext = String(f.name || "").split(".").pop().toLowerCase();
@@ -3455,7 +3453,7 @@ Hooks.once("ready", () => {
         }
         if (sizeMB >= 20) {
           e.preventDefault(); e.stopPropagation();
-          notifyOnce(`文件过大(${Math.round(sizeMB)}MB): 聊天上传不支持大文件(会卡), 请缩小后重试或放入世界数据目录`, "error");
+          notifyOnce(`文件过大(${Math.round(sizeMB)}MB): 上传大文件会卡, 请缩小后重试或放入世界数据目录`, "error");
         }
       } catch (e2) { /* noop */ }
     }, true);
