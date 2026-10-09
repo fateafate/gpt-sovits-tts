@@ -3592,13 +3592,27 @@ function getSpriteRotation(name, emotion) {
   } catch (e) { return 0; }
 }
 
-// 情绪→立绘候选(1.6.26): ①文件名含情绪词(angry/joy/sad/... 或中文"怒/笑/泪/惊/怕"等"称呼")优先精确匹配;
-// ②纯数字编号则按 6 情绪分段兜底; 返回候选索引数组(调用方在组内轮换, 不会串到别的情绪段)
-function spriteBucketForEmotion(sprites, emotion) {
+// 情绪→立绘候选(1.6.27): ①角色 emotion_tags 标注匹配(对标 Shinsekai: "立绘 3：（巫女服）开心") → ②文件名情绪词 → ③6 情绪分段兜底
+// 返回候选索引数组(组内轮换不串段)
+function spriteBucketForEmotion(sprites, emotion, emotionTags) {
   try {
     const n = Array.isArray(sprites) ? sprites.length : 0;
     if (n <= 1) return [0];
     const emo = String(emotion || "").toLowerCase();
+    const et = String(emotionTags || "");
+    if (et.trim()) {
+      const lines = et.split(/\n+/).map(l => l.trim()).filter(l => /立绘\s*\d+/.test(l));
+      const hits = [];
+      const etw = emoTagWords(emo);
+      lines.forEach(ln => {
+        const m = ln.match(/立绘\s*(\d+)/);
+        if (!m) return;
+        const idx = (parseInt(m[1], 10) || 1) - 1;
+        if (idx < 0 || idx >= n) return;
+        if (etw.some(w => ln.toLowerCase().includes(w))) hits.push(idx);
+      });
+      if (hits.length) return hits;
+    }
     const kw = {
       angry: ["angry", "anger", "rage", "mad", "怒", "气", "咆哮"],
       joy: ["joy", "happy", "laugh", "smile", "笑", "开心", "高兴", "喜", "欢"],
@@ -3625,6 +3639,18 @@ function spriteBucketForEmotion(sprites, emotion) {
     for (let i = g * per; i < Math.min((g + 1) * per, n); i++) list.push(i);
     return list.length ? list : [0];
   } catch (e) { return [0]; }
+}
+
+// 情绪 → emotion_tags 中文关键词(1.6.27, 对标 Shinsekai 标注文本)
+function emoTagWords(emo) {
+  const em = String(emo || "").toLowerCase();
+  if (em === "joy" || em === "happy") return ["开心", "高兴", "大笑", "眯眼笑", "笑", "有兴趣", "兴奋", "元气"];
+  if (em === "sad") return ["难过", "伤心", "哭", "泪", "悲", "沮丧", "没干劲", "失落"];
+  if (em === "angry") return ["生气", "怒", "训斥", "厌恶", "恶心", "敌意", "防守", "生闷气", "骂"];
+  if (em === "surprised") return ["震惊", "惊讶", "惊", "愣"];
+  if (em === "fear") return ["害怕", "恐惧", "怕", "惊吓", "颤抖"];
+  if (em === "calm") return ["平静", "温柔", "娴静", "说话", "闭眼", "吐槽", "看着你", "想事情", "反问", "调侃"];
+  return ["平静", "说话", "看着你", "闭眼", "中性"];
 }
 
 // 情绪规则判定(1.6.20): 无 LLM 依赖 — 台词关键词/标点 → 情绪key(引擎后处理调制近似语气); 显式选择的语气优先
@@ -3687,7 +3713,7 @@ Hooks.on("chatMessage", (chatLog, message, chatData) => {
           const cD = (quickChars && quickChars.chars || []).find(x => x.name === prof0n);
           if (cD && Array.isArray(cD.sprites) && cD.sprites.length >= 1) {
             const _emoS = String((cur && cur.emotion) || detectEmotion(String(message.content || chatData.content || ""), null) || "");
-            const _emoList = spriteBucketForEmotion(cD.sprites, _emoS);
+            const _emoList = spriteBucketForEmotion(cD.sprites, _emoS, cD.emotion_tags);
             const _rot = getSpriteRotation(prof0n + "|" + _emoS, _emoS);
             return cD.sprites[_emoList[_rot % _emoList.length]];
           }
@@ -4090,7 +4116,7 @@ Hooks.on("createChatMessage", (message) => {
         if (!_e) return;
         const cD = (quickChars && quickChars.chars || []).find(x => x.name === _roleN);
         if (!cD || !Array.isArray(cD.sprites) || !cD.sprites.length) return;
-        const _emoList = spriteBucketForEmotion(cD.sprites, _e);
+        const _emoList = spriteBucketForEmotion(cD.sprites, _e, cD.emotion_tags);
         const _rot = getSpriteRotation(_roleN + "|" + _e + "|ai", _e);
         const _av = cD.sprites[_emoList[_rot % _emoList.length]];
         await message.update({ flags: { [MODULE]: { ..._fl, emotion: _e, avatar: _av } } }).catch(() => {});

@@ -311,11 +311,23 @@ _MODEL_LIB = os.path.join(os.getcwd(), "fvtt_chars", "models")
 
 
 def save_char_yaml(name, cfg):
-    """写角色元数据回 character.yaml(UTF-8)."""
+    """写角色元数据回 character.yaml(UTF-8). 1.6.27: 保留原文件里不在 cfg 中的展示字段
+    (sprites/emotion_tags/character_setting/avatar/color 等 — 角色包自带的立绘情绪标注不能被覆盖丢失)."""
     name = os.path.basename(str(name))
     d = os.path.join(_CHARS_ROOT, name)
     os.makedirs(d, exist_ok=True)
     y = os.path.join(d, "character.yaml")
+    try:
+        with open(y, "r", encoding="utf-8") as f:
+            old = _yaml.safe_load(f) or {}
+        old = old[0] if isinstance(old, list) and old else old
+        if isinstance(old, dict):
+            for k in ("sprites", "emotion_tags", "character_setting", "avatar", "color", "sprite_prefix", "sprite_scale", "pronunciation_map"):
+                if k not in cfg and old.get(k) is not None:
+                    cfg = dict(cfg)
+                    cfg[k] = old[k]
+    except Exception:
+        pass
     with open(y, "w", encoding="utf-8") as f:
         _yaml.safe_dump(cfg, f, allow_unicode=True, sort_keys=False)
     return y
@@ -1993,6 +2005,7 @@ async def characters():
             "setting": str(cfg.get("character_setting", "") or "")[:1500],
             "avatar": _av,
             "sprites": sprites,
+            "emotion_tags": str(cfg.get("emotion_tags", "") or ""),   # 1.6.27 立绘情绪标注(对标 Shinsekai: "立绘 3：开心"), 客户端标注匹配选立绘
             "provider": str(cfg.get("tts_provider") or "gpt-sovits"),   # 多引擎并行: gpt-sovits / edge / web
             "emotions": emotion_slot_state(cfg),
         })
