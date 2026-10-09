@@ -1250,6 +1250,7 @@ class TTS_Request(BaseModel):
     super_sampling: bool = False
     overlap_length: int = 2
     min_chunk_length: int = 16
+    emotion: str = None      # 1.6.20 情绪后处理(单参考角色近似语气: 变调/变速/增益, EMOTION_FX 表)
 
 
 def pack_ogg(io_buffer: BytesIO, data: np.ndarray, rate: int):
@@ -1414,6 +1415,69 @@ def check_params(req: dict):
         )
 
     return None
+
+
+# 情绪 → 合成后处理调制(1.6.20): 单参考音频角色的近似语气 — pitch_semi 半音变调 / tempo 语速倍率 / gain_db 增益dB
+# 有真实情绪槽音频(emotion_mix>0)时引擎走参考音频融合, 不重复做 DSP; 此表用于无情绪槽的单参考角色
+EMOTION_FX = {
+    "neutral":   {"pitch_semi": 0.0, "tempo": 1.0,  "gain_db": 0.0},
+    "calm":      {"pitch_semi": -0.5, "tempo": 0.98, "gain_db": -1.0},
+    "joy":       {"pitch_semi": 2.0,  "tempo": 1.06, "gain_db": 1.0},
+    "happy":     {"pitch_semi": 2.0,  "tempo": 1.06, "gain_db": 1.0},
+    "sad":       {"pitch_semi": -2.5, "tempo": 0.94, "gain_db": -2.0},
+    "angry":     {"pitch_semi": 1.0,  "tempo": 1.03, "gain_db": 3.0},
+    "surprised": {"pitch_semi": 4.0,  "tempo": 1.08, "gain_db": 1.5},
+    "fear":      {"pitch_semi": -1.5, "tempo": 1.04, "gain_db": -1.5},
+}
+
+
+def _apply_emotion_fx(wav_bytes, emotion):
+    """合成后处理情绪调制: 变调(asetrate 改采样率→变调) + aresample 还原 + atempo 时长补偿×语速 + volume 增益。
+    用引擎自带 runtime/ffmpeg.exe; 无情绪/无调制需求/任何失败 → 原样返回(绝不破坏正常音频)。"""
+    try:
+        fx = EMOTION_FX.get(str(emotion or "").strip().lower())
+        if not fx:
+            return wav_bytes
+        ratio = 2 ** (float(fx["pitch_semi"]) / 12.0)
+        tempo = float(fx["tempo"])
+        gain = float(fx["gain_db"])
+        if abs(ratio - 1.0) < 0.001 and abs(tempo - 1.0) < 0.001 and abs(gain) < 0.05:
+            return wav_bytes
+        import struct
+        sr = 24000
+        if len(wav_bytes) >= 44 and wav_bytes[0:4] == b"RIFF":
+            sr = struct.unpack("<I", wav_bytes[24:28])[0] or sr
+        _t_all = (1.0 / ratio) * tempo
+        _af = "asetrate=%d*%f,aresample=%d,atempo=%.6f" % (sr, ratio, sr, _t_all)
+        if abs(gain) >= 0.05:
+            _af += ",volume=%fdB" % gain
+        _ff = os.path.join(os.getcwd(), "runtime", "ffmpeg.exe")
+        if not os.path.isfile(_ff):
+            _ff = "ffmpeg"
+        import subprocess, tempfile
+        _i = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+        try:
+            _i.write(wav_bytes)
+        finally:
+            _i.close()
+        _in, _out = _i.name, _i.name + ".out.wav"
+        try:
+            subprocess.run([_ff, "-y", "-i", _in, "-af", _af, _out], capture_output=True, timeout=90)
+            if os.path.isfile(_out):
+                with open(_out, "rb") as _f:
+                    data = _f.read()
+                if data and data[0:4] == b"RIFF":
+                    return data
+        finally:
+            for _p in (_in, _out):
+                try:
+                    if os.path.isfile(_p):
+                        os.remove(_p)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    return wav_bytes
 
 
 async def tts_handle(req: dict):
@@ -1615,6 +1679,7 @@ async def tts_handle(req: dict):
             sr, audio_data = next(tts_generator)   # 引擎内部按切分+batch 并行合成, 返回整段
             audio_data = _limit_peak(_boost_head(_lift_weak_head(_trim_lead_silence_arr(_to_float_audio(audio_data), sr), sr), sr))   # 归一化 → 裁纯静音 → 弱起软提升 → 头部增益 → 防削波
             audio_data = pack_audio(BytesIO(), audio_data, sr, media_type).getvalue()
+            audio_data = _apply_emotion_fx(audio_data, req.get("emotion") or "")   # 1.6.20 情绪后处理(单参考角色近似语气)
             if want_mp3:
                 mp3_bytes = _wav_to_mp3(audio_data)
                 if mp3_bytes:

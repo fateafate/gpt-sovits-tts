@@ -348,6 +348,7 @@ export async function gptSovitsSynth(text, lang, { serverUrl, speedFactor = 1, o
       ...(overrides.promptLang ? { prompt_lang: overrides.promptLang } : {}),
       ...(overrides.auxRefAudioPaths && overrides.auxRefAudioPaths.length ? { aux_ref_audio_paths: overrides.auxRefAudioPaths } : {}),
       ...(typeof overrides.emotionMix === "number" ? { emotion_mix: overrides.emotionMix } : {}),
+      ...(overrides.emotion ? { emotion: overrides.emotion } : {}),
       ...(overrides.textSplitMethod ? { text_split_method: overrides.textSplitMethod } : {}),
       ...(typeof overrides.fragmentInterval === "number" ? { fragment_interval: overrides.fragmentInterval } : {})
     } : {})
@@ -420,6 +421,7 @@ export async function gptSovitsSynth(text, lang, { serverUrl, speedFactor = 1, o
       if (overrides.promptLang) serverPayload.prompt_lang = overrides.promptLang;
       if (overrides.auxRefAudioPaths && overrides.auxRefAudioPaths.length) serverPayload.aux_ref_audio_paths = overrides.auxRefAudioPaths;
       if (typeof overrides.emotionMix === "number") serverPayload.emotion_mix = overrides.emotionMix;
+      if (overrides.emotion) serverPayload.emotion = overrides.emotion;
       if (overrides.textSplitMethod) serverPayload.text_split_method = overrides.textSplitMethod;
       if (typeof overrides.fragmentInterval === "number") serverPayload.fragment_interval = overrides.fragmentInterval;
     }

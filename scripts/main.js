@@ -494,6 +494,11 @@ async function speak(text, { lang = null, sender = "", refAudioPath = null, prom
       if (typeof pv.emotionMix === "number") overrides.emotionMix = pv.emotionMix;
     }
   }
+  // 情绪后处理(1.6.20): 只有无语气槽音频(单参考角色)才做 DSP 近似语气 — 有真实情绪槽音频时走 emotion_mix 参考融合, 不重复调制
+  if (pv && !pv.auxRef) {
+    const _emoDet = detectEmotion(finalText, pv);
+    if (_emoDet && _emoDet !== "neutral") { overrides = overrides || {}; overrides.emotion = _emoDet; }
+  }
 
   // ---- 朗读风格提示词(音频栏输入, 如"更严肃认真、中间不要中断"): 应用到合成参数 ----
   try {
@@ -3604,6 +3609,23 @@ function getSpriteRotation(name, emotion) {
   } catch (e) { return 0; }
 }
 
+// 情绪规则判定(1.6.20): 无 LLM 依赖 — 台词关键词/标点 → 情绪key(引擎后处理调制近似语气); 显式选择的语气优先
+function detectEmotion(text, cur) {
+  try {
+    const e = (cur && cur.emotion) || "";
+    if (e && e !== "neutral") return e;
+    const t = String(text || "");
+    if (/(哈哈|嘻嘻|嘿嘿|好耶|太棒|开心|高兴|万岁|太好了|笑)/.test(t)) return "joy";
+    if (/(呜呜|呜咽|哭|伤心|难过|悲伤|泪|好想|舍不得)/.test(t)) return "sad";
+    if (/[！!]/.test(t)) {
+      if (/(怒|气死|可恶|混蛋|住口|闭嘴|滚|杀)/.test(t)) return "angry";
+      if (/(没想到|怎么会|什么|惊)/.test(t)) return "surprised";
+    }
+    if (/(害怕|怕|恐惧|救命|颤)/.test(t)) return "fear";
+    return "neutral";
+  } catch (e) { return "neutral"; }
+}
+
 Hooks.on("chatMessage", (chatLog, message, chatData) => {
     (window.__fvttTTSHooks = window.__fvttTTSHooks || {}).chatMessage = true;
     handleCommand(chatLog, message, chatData);
@@ -3812,6 +3834,7 @@ async function _proxySynthFor(message) {
     if (fl2.promptLang) o.promptLang = fl2.promptLang;
     if (fl2.auxRef) o.auxRefAudioPaths = [fl2.auxRef];
     if (typeof fl2.emotionMix === "number") o.emotionMix = fl2.emotionMix;
+    if (fl2.emotion) o.emotion = fl2.emotion;   // 1.6.20 情绪后处理(作者端判好的情绪 → 代理合成同语气)
     const t0 = Date.now();
     const _pprov = String(fl2.ttsProvider || req.provider || "gpt-sovits");
     let res;
