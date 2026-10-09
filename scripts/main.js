@@ -1111,12 +1111,12 @@ function buildUI() {
     // 🔬 测试按钮: 玩家/GM 各自套件(1.5.0); GM 另有专属综合测试按钮
     const stBtn = bar.querySelector(".fvtt-tts-selftest");
     if (stBtn) {
-      stBtn.addEventListener("click", (ev) => { ev.stopPropagation(); try { (window.__fvttTTSTests && window.__fvttTTSTests.runAuto())(); } catch (e) { console.error(e); } });
+      stBtn.addEventListener("click", (ev) => { ev.stopPropagation(); try { if (window.__fvttTTSTests) window.__fvttTTSTests.runAuto(); } catch (e) { console.error(e); } });
     }
     const gmBtn = bar.querySelector(".fvtt-tts-gmtest");
     if (gmBtn) {
       try { if (game.user && game.user.isGM) { gmBtn.style.display = ""; } } catch (e) { /* noop */ }
-      gmBtn.addEventListener("click", (ev) => { ev.stopPropagation(); try { (window.__fvttTTSTests && window.__fvttTTSTests.runGmSuite())(); } catch (e) { console.error(e); } });
+      gmBtn.addEventListener("click", (ev) => { ev.stopPropagation(); try { if (window.__fvttTTSTests) window.__fvttTTSTests.runGmSuite(); } catch (e) { console.error(e); } });
     }
   }
   // 语种选择(朗读输出语言 = 自动翻译目标): 中/日/英/韩/粤 + 自动
@@ -1552,6 +1552,7 @@ function buildSendPop() {
 /* ---------- LLM 语气判断(可选): 有密钥时 AI 自动判断语气, 无密钥手动选择 ---------- */
 async function judgeEmotionByLLM(text, charName, context) {
   const cfg = getCfg();
+  if (window.__fvttTTSLlmBroken === true) return { ok: false, emotion: "", reason: "llm-broken" };
   if (!cfg.llmEnabled || !cfg.llmKey) return { ok: false, emotion: "", reason: "no-llm" };
   try {
     // 确保角色/情绪槽数据已加载(no-slots 修复: quickChars 未加载/过期时先拉取)
@@ -1576,9 +1577,14 @@ async function judgeEmotionByLLM(text, charName, context) {
         emotions: slots.map(s => ({ key: s.key, label: s.label })),
       }, { timeoutMs: 70000 });
     const j = await r.json().catch(() => ({}));
-    if (!r.ok || !j.ok) return { ok: false, emotion: "", reason: (j && j.message) || ("http " + r.status) };
+    if (!r.ok || !j.ok) {
+      // LLM 服务不可用(502/404/网络) → 本会话禁用后续 LLM 调用(根治每句 502 刷屏); 修好 base/key 后刷新页面恢复
+      if (r.status >= 400) { try { window.__fvttTTSLlmBroken = true; } catch (e) { /* noop */ } }
+      return { ok: false, emotion: "", reason: (j && j.message) || ("http " + r.status) };
+    }
     return { ok: true, emotion: (j && j.emotion) || "" };
   } catch (e) {
+    try { window.__fvttTTSLlmBroken = true; } catch (e2) { /* noop */ }
     return { ok: false, emotion: "", reason: String(e && e.message || e) };
   }
 }
@@ -1634,6 +1640,7 @@ async function fetchModelsFromServer(base, key) {
 /** 预加载 AI: 提前跑一次 LLM 小请求, 让连接/鉴权/模型热起来, 减少后续首次调用延迟(润色/判断会更快) */
 window.preloadAI = async function preloadAI() {
   const cfg = getCfg();
+  if (window.__fvttTTSLlmBroken === true) return { ok: false, message: "llm-broken" };
   if (!cfg.llmEnabled || !cfg.llmKey) return { ok: false, message: "未配置 AI（先填密钥并开启）" };
   try {
     const t0 = performance.now();
@@ -1645,7 +1652,7 @@ window.preloadAI = async function preloadAI() {
         emotions: [{ key: "calm", label: "平静" }, { key: "happy", label: "开心" }],
       }, { timeoutMs: 60000 });
     const j = await r.json().catch(() => ({}));
-    if (!r.ok || !j.ok) return { ok: false, message: (j && j.message) || ("http " + r.status) };
+    if (!r.ok || !j.ok) { if (r.status >= 400) { try { window.__fvttTTSLlmBroken = true; } catch (e) { /* noop */ } } return { ok: false, message: (j && j.message) || ("http " + r.status) }; }
     window.__aiPreloaded = true;   // 共享预热状态(语音设置面板/发送面板都不再重复预热)
     return { ok: true, ms: Math.round(performance.now() - t0), emotion: (j.emotion) || "" };
   } catch (e) {
@@ -1656,6 +1663,7 @@ window.preloadAI = async function preloadAI() {
 /** AI 台词润色(可选, 复刻成品软件"语气更多样"): 按情绪微调台词表达, 不改变原意 */
 async function polishTextByLLM(text, emotion, emotionLabel, context) {
   const cfg = getCfg();
+  if (window.__fvttTTSLlmBroken === true) return { ok: false, text: "" };
   if (!cfg.llmEnabled || !cfg.llmKey || !cfg.llmPolish) return { ok: false, text: "" };
   try {
     const r = await svcRequest(cfg.serverUrl, "POST", "/llm/polish", {
@@ -1668,10 +1676,14 @@ async function polishTextByLLM(text, emotion, emotionLabel, context) {
         emotion_label: String(emotionLabel || emotion || ""),
       }, { timeoutMs: 70000 });
     const j = await r.json().catch(() => ({}));
-    if (!r.ok || !j.ok || !j.text) return { ok: false, text: "" };
+    if (!r.ok || !j.ok || !j.text) {
+      if (r.status >= 400) { try { window.__fvttTTSLlmBroken = true; } catch (e) { /* noop */ } }
+      return { ok: false, text: "" };
+    }
     const out = String(j.text).trim();
     return out ? { ok: true, text: out } : { ok: false, text: "" };
   } catch (e) {
+    try { window.__fvttTTSLlmBroken = true; } catch (e2) { /* noop */ }
     return { ok: false, text: "" };
   }
 }
@@ -1680,6 +1692,7 @@ async function polishTextByLLM(text, emotion, emotionLabel, context) {
  *  关闭时退回分开两次调用(judgeEmotionByLLM + polishTextByLLM). */
 async function judgeAndPolishByLLM(text, charName, wantPolish, context) {
   const cfg = getCfg();
+  if (window.__fvttTTSLlmBroken === true) return { ok: false, emotion: "", reason: "llm-broken" };
   try {
     // 先确保情绪槽数据(与 judgeEmotionByLLM 相同的保护)
     if (!quickChars) { try { await loadQuickChars(); } catch (e) { /* noop */ } }
@@ -1713,9 +1726,12 @@ async function judgeAndPolishByLLM(text, charName, wantPolish, context) {
         if (r.ok && j.ok && j.emotion) {
           return { ok: true, emotion: String(j.emotion), polish: String(j.polish || "").trim() };
         }
-        // 合并调用失败/结果为空 → 回退分开调用(保证情绪判断不丢失)
+        // 合并调用失败: LLM 服务不可用(>=400) → 本会话禁用(根治每句 502 刷屏), 不再回退分开调用
+        if (r.status >= 400) { try { window.__fvttTTSLlmBroken = true; } catch (e) { /* noop */ } return { ok: false, emotion: "", reason: (j && j.message) || ("http " + r.status) }; }
+        // 结果为空/业务失败 → 回退分开调用(保证情绪判断不丢失)
         console.debug("[gpt-sovits-tts] 合并语气判断失败, 回退分开调用:", (j && j.message) || ("http " + r.status));
       } catch (e) {
+        try { window.__fvttTTSLlmBroken = true; } catch (e2) { /* noop */ }
         console.debug("[gpt-sovits-tts] 合并语气判断异常, 回退分开调用:", e && e.message);
       }
     }
