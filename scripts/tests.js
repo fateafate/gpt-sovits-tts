@@ -135,8 +135,8 @@ async function sc04() {
       const f = (m && m.flags && m.flags[MODULE]) || {};
       return (f.audioData || f.audioUrl) ? { data: !!f.audioData, url: String(f.audioUrl || "").slice(0, 80) } : null;
     } catch (e) { return null; }
-  }, 30000);
-  return ev(!!got, { writebackMs: Date.now() - st0, ...(got || { err: "30s 未收到写回(代理不通/合成排队)" }) });
+  }, 60000);   // 60s: 与 GM 套件同跑时引擎排队(长文本合成可能占数十秒), 宽容等待; 单独跑通常 <5s
+  return ev(!!got, { writebackMs: Date.now() - st0, ...(got || { err: "60s 未收到写回(与 GM 套件同跑时引擎排队或代理不通; 建议玩家与 GM 测试分开跑)" }) });
 }
 
 // 05 接收播放(收到写回音频 → 官方通道播放轨迹)
@@ -556,7 +556,7 @@ async function runSuite(suiteName, scenarios) {
       }
     }
   } catch (e) { /* noop */ }
-  notify(`${suiteName === "gm" ? "GM 综合测试" : "玩家全面测试"}完成: ${summary.pass}/${summary.total}${summary.pass === summary.total ? " ✓" : "（失败见控制台/报告）"}`);
+  notify(`${suiteName === "gm" ? "GM 综合测试" : "玩家全面测试"}完成: ${summary.pass}/${summary.total}${(summary.pass + summary.skipped) === summary.total ? " ✓" : "（失败见控制台/报告）"}${summary.skipped ? `（${summary.skipped} 项跳过: ${suiteName === "gm" ? "代理写回由直连+sc13覆盖" : ""}）` : ""}`);
   return report;
   } finally { _suiteRunning = false; }
 }
