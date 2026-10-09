@@ -3378,6 +3378,22 @@ Hooks.once("ready", () => {
       loadVoiceProfile, currentVoice, cacheAudio, _modulePath, loadQuickChars,
     });
   } catch (e) { console.error("[gpt-sovits-tts] tests install failed:", e); }
+  // 🤖 LLM 健康预探测: 配置了 AI 就发一次小请求, 失败(502/404/网络)→本会话禁用全部 LLM 调用
+  // (根治每句 /llm 502 刷屏: GM 端 F12 看到的多条 502 来自"玩家发起→GM 转发→引擎 502" + 并发窗口;
+  //  各端 8s 内先探一次并设标记, 之后 judgeAndPolishByLLM/预加载/选角全部跳过; 修好 base/key 后刷新恢复)
+  setTimeout(() => {
+    try {
+      const c0 = getCfg();
+      if (!c0.llmEnabled || !c0.llmKey) return;
+      if (window.__fvttTTSLlmBroken === true) return;
+      svcRequest(c0.serverUrl, "POST", "/llm", {
+        base: c0.llmBaseUrl || "https://api.openai.com/v1", key: c0.llmKey, model: c0.llmModel || "gpt-4o-mini",
+        text: "ping", emotions: [{ key: "calm", label: "平静" }],
+      }, { timeoutMs: 15000 })
+        .then((r) => { if (r && !r.ok && r.status >= 400) { try { window.__fvttTTSLlmBroken = true; } catch (e) { /* noop */ } } })
+        .catch(() => { try { window.__fvttTTSLlmBroken = true; } catch (e) { /* noop */ } });
+    } catch (e) { /* noop */ }
+  }, 8000);
   // 🔊 Foundry playAudio 广播监听(记录已播 src): 与 audioData DB 兜底去重(双通道合一, 防重复播放);
     // 官方内部通道(fileURL)+DB 内嵌(dataURI) src 不同, 额外登记"官方即时已播"文件 URL 集(10s)供 DB 兜底判定是否跳过
     try {

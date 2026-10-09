@@ -1,4 +1,4 @@
-"""
+﻿"""
 # WebAPI文档 (fvtt_api.py — GPT-SoVITS API for Foundry VTT TTS module)
 
 本文件是 GPT-SoVITS 官方 `api_v2.py` 的改版（MIT License 允许复制修改，见原项目
@@ -2667,7 +2667,7 @@ async def llm_endpoint(request: Request):
         with urllib.request.urlopen(req, timeout=60) as resp:
             data = json.loads(resp.read().decode("utf-8"))
     except Exception as e:
-        return JSONResponse(status_code=502, content={"ok": False, "message": "LLM 请求失败: %s" % e})
+        return JSONResponse(status_code=200, content={"ok": False, "message": "LLM 请求失败(无AI语气, 语音不受影响): %s" % e})
     try:
         msg = (data.get("choices") or [{}])[0].get("message", {}) or {}
         content = str(msg.get("content") or "").strip()
@@ -2705,14 +2705,14 @@ async def llm_models_endpoint(request: Request):
         with urllib.request.urlopen(req, timeout=30) as resp:
             data = json.loads(resp.read().decode("utf-8"))
     except Exception as e:
-        return JSONResponse(status_code=502, content={"ok": False, "message": "获取模型列表失败: %s" % e})
+        return JSONResponse(status_code=200, content={"ok": False, "message": "获取模型列表失败: %s" % e})
     models = []
     for m in data.get("data") or []:
         mid = str(m.get("id") or "").strip()
         if mid and mid not in models:
             models.append(mid)
     if not models:
-        return JSONResponse(status_code=502, content={"ok": False, "message": "该服务未返回可用模型列表"})
+        return JSONResponse(status_code=200, content={"ok": False, "message": "该服务未返回可用模型列表"})
     return {"ok": True, "models": models}
 
 
@@ -2765,7 +2765,7 @@ async def llm_polish_endpoint(request: Request):
         with urllib.request.urlopen(req, timeout=60) as resp:
             data = json.loads(resp.read().decode("utf-8"))
     except Exception as e:
-        return JSONResponse(status_code=502, content={"ok": False, "message": "LLM 请求失败: %s" % e})
+        return JSONResponse(status_code=200, content={"ok": False, "message": "LLM 请求失败(无AI语气, 语音不受影响): %s" % e})
     try:
         msg = (data.get("choices") or [{}])[0].get("message", {}) or {}
         content = str(msg.get("content") or "").strip()
@@ -2774,7 +2774,7 @@ async def llm_polish_endpoint(request: Request):
     except Exception:
         content = ""
     if not content:
-        return JSONResponse(status_code=502, content={"ok": False, "message": "润色结果为空"})
+        return JSONResponse(status_code=200, content={"ok": False, "message": "润色结果为空"})
     return {"ok": True, "text": content[:2000]}
 
 
@@ -3008,7 +3008,7 @@ async def llm_pick_role_endpoint(request: Request):
         with urllib.request.urlopen(req, timeout=60) as resp:
             data = json.loads(resp.read().decode("utf-8"))
     except Exception as e:
-        return JSONResponse(status_code=502, content={"ok": False, "message": "LLM 请求失败: %s" % e})
+        return JSONResponse(status_code=200, content={"ok": False, "message": "LLM 请求失败(无AI语气, 语音不受影响): %s" % e})
     content = ""
     try:
         msg = (data.get("choices") or [{}])[0].get("message", {}) or {}
@@ -3076,7 +3076,7 @@ async def llm_style_endpoint(request: Request):
         with urllib.request.urlopen(req, timeout=60) as resp:
             data = json.loads(resp.read().decode("utf-8"))
     except Exception as e:
-        return JSONResponse(status_code=502, content={"ok": False, "message": "LLM 请求失败: %s" % e})
+        return JSONResponse(status_code=200, content={"ok": False, "message": "LLM 请求失败(无AI语气, 语音不受影响): %s" % e})
     content = ""
     try:
         msg = (data.get("choices") or [{}])[0].get("message", {}) or {}
@@ -3170,7 +3170,7 @@ async def llm_assess_endpoint(request: Request):
         with urllib.request.urlopen(req, timeout=60) as resp:
             data = json.loads(resp.read().decode("utf-8"))
     except Exception as e:
-        return JSONResponse(status_code=502, content={"ok": False, "message": "LLM 请求失败: %s" % e})
+        return JSONResponse(status_code=200, content={"ok": False, "message": "LLM 请求失败(无AI语气, 语音不受影响): %s" % e})
     content = ""
     emo = ""
     polish = ""
