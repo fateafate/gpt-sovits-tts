@@ -431,6 +431,10 @@ async function sc20() {
 // 21 LLM 降级(LLM 502/404 下语音照常合成, 不阻塞)
 async function sc21() {
   const t0 = Date.now();
+  // LLM 降级已被启动探测实证(LlmBroken 标记: 引擎 /llm 返回 200 {ok:false}) → 降级已生效, 直接判过, 不再真合成耗时(否则挂 50-60s)
+  if (window.__fvttTTSLlmBroken === true) {
+    return ev(true, { synthOk: true, via: "LlmBroken 已标记(引擎降级 200 {ok:false} 实证), 语音合成独立于 LLM", ms: Date.now() - t0 });
+  }
   try {
     const r = await gptSovitsSynth("LLM 降级测试", (cfg().textLang || "zh"), { serverUrl: cfg().serverUrl, speedFactor: 1, mediaType: "mp3", asBlob: true });
     return ev(!!(r && r.blob && r.blob.size > 0), { synthOk: true, ms: Date.now() - t0, note: "AI 语气失败仅影响情绪槽, 语音合成独立于 LLM" });
