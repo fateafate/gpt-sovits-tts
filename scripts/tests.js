@@ -327,7 +327,7 @@ async function sc14() {
   const ok = acks.some((a) => a && a.ok !== false && !a.declined);
   return ev(ok, {
     targets: pl, items: roles.length,
-    acks: acks.map((a) => ({ user: a.user, resultCount: (a.result || []).length, roles: ((a.result || []).map((x) => x.role)).join("|"), avgSynthMs: Math.round(((a.result || []).reduce((s, x) => s + (x.synthMs || 0), 0)) / Math.max(1, (a.result || []).length)), err: a.err || "" })),
+    acks: acks.map((a) => ({ user: a.user, resultCount: (a.result || []).length, roles: ((a.result || []).map((x) => x.role)).join("|"), avgSynthMs: Math.round(((a.result || []).reduce((s, x) => s + (x.synthMs || 0), 0)) / Math.max(1, (a.result || []).length)), err: a.err || "", errs: (a.errs || []).slice(0, 4) })),
     note: "多模型同一秒从各玩家电脑同时合成→广播; 引擎为唯一合成源(现实多人说话亦然)",
   });
 }
@@ -347,7 +347,7 @@ async function sc15() {
   if (!acks.length) return recSkip("目标玩家未回执(玩家端需硬刷新到新版+引擎空闲时测): 同角色多语气并发未分发执行");
   const ok = acks.some((a) => a && a.ok !== false && !a.declined);
   return ev(ok, {
-    acks: acks.map((a) => ({ user: a.user, emotions: ((a.result || []).map((x) => x.emotion)).join("|"), ok: a.ok !== false })),
+    acks: acks.map((a) => ({ user: a.user, emotions: ((a.result || []).map((x) => x.emotion)).join("|"), ok: a.ok !== false, errs: (a.errs || []).slice(0, 4) })),
     note: "同一角色两种情绪在两个玩家电脑同时合成(情绪槽 auxRef 不同)",
   });
 }
@@ -367,7 +367,7 @@ async function sc16() {
   const ok = acks.some((a) => a && a.ok !== false && !a.declined);
   return ev(ok, {
     targets: onlinePlayers(), combos: combos.map(([x, y]) => `${x}/${y}`),
-    acks: acks.map((a) => ({ user: a.user, done: (a.result || []).length, ok: a.ok !== false })),
+    acks: acks.map((a) => ({ user: a.user, done: (a.result || []).length, ok: a.ok !== false, errs: (a.errs || []).slice(0, 4) })),
     note: "6 条(3 模型×2 语气)由在线玩家分摊并发执行, GM/服务器端零组织压力",
   });
 }
@@ -384,7 +384,7 @@ async function sc17() {
   const ok = okAcks.length > 0;
   return ev(ok, {
     targets: pl.slice(0, 2), requested: 10,
-    acks: acks.map((a) => ({ user: a.user, count: a.count || 0, done: a.done || 0, avgMs: Math.round(a.avgMs || 0), maxMs: a.maxMs || 0, viaMsg: !!a.viaMsg, ok: a.ok !== false })),
+    acks: acks.map((a) => ({ user: a.user, count: a.count || 0, done: a.done || 0, avgMs: Math.round(a.avgMs || 0), maxMs: a.maxMs || 0, viaMsg: !!a.viaMsg, ok: a.ok !== false, errs: (a.errs || []).slice(0, 4) })),
     note: "连续 10 条在玩家电脑执行(合成请求→播放→官方广播), 服务器/引擎机浏览器零参与",
   });
 }

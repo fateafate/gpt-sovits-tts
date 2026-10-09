@@ -253,12 +253,13 @@ export function installModuleSocket() {
 }
 
 /* ---------- 服务端合成代理(多设备根治): 任意端经 module 事件 → GM 端 → 引擎 ---------- */
-export async function gptSovitsSocketProxy(payload, { engine = "gpt", timeoutMs = 150000 } = {}) {
+export async function gptSovitsSocketProxy(payload, { engine = "gpt", timeoutMs = 150000, binary = false } = {}) {
   // module 事件请求 GM 端执行(玩家端; GM 端自己发起 → 广播不含自己收不到 → 短超时退直连, 本机引擎直接可达)
   // payload 两种形态统一: svcRequest 传 {method,path,json,...} 包装; gptSovitsSynth 传裸合成参数 → 包装成 POST /tts
   try {
     const hasWrap = !!(payload && payload.path);
     const req = hasWrap ? payload : Object.assign({}, { method: "POST", path: "/tts", json: payload });
+    if (binary && !hasWrap) req.binary = true;   // 合成音频二进制经 base64 回传(gm-proxy binary 分支返回 b64)
     const gmSelf = !!(game && game.user && game.user.isGM);
     const r = await moduleEmit("tts-proxy", Object.assign({}, req, { engine, user: (() => { try { return (game.user && game.user.name) || ""; } catch (e) { return ""; } })() }, { timeoutMs: gmSelf ? 3000 : timeoutMs }), { timeoutMs: gmSelf ? 3000 : timeoutMs });
     if (r && typeof r === "object") return r;
@@ -289,19 +290,33 @@ export async function gptSovitsSynth(text, lang, { serverUrl, speedFactor = 1, o
   // 代理不可用(旧版 Foundry/服务未注册/超时)时退回直连(本地设备仍有声)
   let proxyFail = "";
   try {
-    const pr = await gptSovitsSocketProxy(payload, { engine: "gpt", timeoutMs: 150000 });
-    if (pr && pr.ok && pr.b64) {
-      const mime = mediaType === "mp3" ? "audio/mpeg" : "audio/wav";
-      const dataUri = `data:${mime};base64,${pr.b64}`;
+    const pr = await gptSovitsSocketProxy(payload, { engine: "gpt", timeoutMs: 150000, binary: true });
+    if (pr && pr.ok && (pr.b64 || pr.audioUrl)) {
+      // binary 代理(1.6.2): gm-proxy binary 分支回传 base64 → data URI → Blob; audioUrl 兜底(同源 /modules/... 可直接 fetch)
+      if (pr.b64) {
+        const mime = mediaType === "mp3" ? "audio/mpeg" : "audio/wav";
+        const dataUri = `data:${mime};base64,${pr.b64}`;
+        if (asBlob) {
+          try {
+            const r2 = await fetch(dataUri);   // data URI → Blob(浏览器本地, 无网络)
+            const blob = await r2.blob();
+            return { blob, audioUrl: pr.audioUrl || "" };
+          } catch (e) { /* fallthrough → 直接返回 data URI 形式的 URL */ }
+          return { blob: null, audioUrl: pr.audioUrl || "", dataUri };
+        }
+        return { url: pr.audioUrl && !overrides ? pr.audioUrl : dataUri, audioUrl: pr.audioUrl || "", dataUri };
+      }
+      // audioUrl 兜底(旧 GM 端/无 b64 返回): 相对 /modules/... 或 /data/... 拼页面同源(https 玩家可 fetch), 其余原样
+      const au = pr.audioUrl || "";
+      const auAbs = au && !/^https?:\/\//i.test(au) ? ((au.startsWith("/modules/") || au.startsWith("/data/")) ? new URL(au, window.location.origin).href : au) : au;
       if (asBlob) {
         try {
-          const r2 = await fetch(dataUri);   // data URI → Blob(浏览器本地, 无网络)
+          const r2 = await fetch(auAbs, { signal: AbortSignal.timeout(15000) });
           const blob = await r2.blob();
-          return { blob, audioUrl: pr.audioUrl || "" };
-        } catch (e) { /* fallthrough → 直接返回 data URI 形式的 URL */ }
-        return { blob: null, audioUrl: pr.audioUrl || "", dataUri };
+          return { blob, audioUrl: au };
+        } catch (e) { return { blob: null, audioUrl: au, dataUri: "" }; }
       }
-      return { url: pr.audioUrl && !overrides ? pr.audioUrl : dataUri, audioUrl: pr.audioUrl || "", dataUri };
+      return { url: auAbs, audioUrl: au, dataUri: "" };
     } else if (pr && !pr.ok) {
       // 引擎/转发返回失败(400/500/超时): 提取详情供上层报告定位(合成路径失败是核心问题, 不再吞成通用"代理不可用")
       try {
