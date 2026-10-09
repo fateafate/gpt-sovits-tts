@@ -3424,6 +3424,45 @@ Hooks.once("ready", () => {
       Hooks.on("playAudio", _onPlay);
       Hooks.on("playSound", _onPlay);
     } catch (e) { /* noop */ }
+  // 拖放入 chat 拦截(1.6.8): 大文件拖入聊天触发 FVTT 原生上传会卡爆网页(上传中/完成后);
+  // 角色包(.char/.zip)拖入 → 转模块导入(任意大小, 引擎机直连不卡); 其他 ≥20MB → 拦截并提示; 小文件放行(正常上传)
+  try {
+    const _importCharDrop = async (file) => {
+      try {
+        notifyOnce("正在导入角色包…", "info");
+        const ab = await file.arrayBuffer();
+        const bytes = new Uint8Array(ab);
+        let bin = ""; const CH = 0x8000;
+        for (let i = 0; i < bytes.length; i += CH) bin += String.fromCharCode.apply(null, bytes.subarray(i, Math.min(i + CH, bytes.length)));
+        const b64 = btoa(bin);
+        const r = await svcRequest(getCfg().serverUrl, "POST", "/characters/import", null, { b64Body: b64, contentType: file.type || "application/octet-stream", timeoutMs: 600000 });
+        const j = (r.jsonSafe ? r.jsonSafe() : (r.json || {})) || {};
+        if (r.ok && j.ok) { notifyOnce("角色包导入成功: " + (j.name || ""), "info"); try { refreshQuickUI(); updateCharIndicator(); } catch (e) { /* noop */ } }
+        else notifyOnce("导入失败: " + (j.message || String(r.status || "")), "error");
+      } catch (e) { notifyOnce("导入失败: " + String((e && e.message) || e).slice(0, 120), "error"); }
+    };
+    document.addEventListener("drop", (e) => {
+      try {
+        const dt = e && e.dataTransfer;
+        if (!dt || !dt.files || !dt.files.length) return;
+        const tgt = e.target;
+        const inChat = tgt && tgt.closest && (tgt.closest("#chat-log") || tgt.closest(".chat-log") || tgt.closest("#chat-controls") || tgt.closest("#chat-form") || tgt.closest("textarea"));
+        if (!inChat) return;
+        const f = dt.files[0];
+        const sizeMB = (f.size || 0) / 1048576;
+        const ext = String(f.name || "").split(".").pop().toLowerCase();
+        if (ext === "char" || ext === "zip") {
+          e.preventDefault(); e.stopPropagation();
+          _importCharDrop(f);
+          return;
+        }
+        if (sizeMB >= 20) {
+          e.preventDefault(); e.stopPropagation();
+          notifyOnce(`文件过大(${Math.round(sizeMB)}MB): 聊天上传不支持大文件(会卡), 请缩小后重试或放入世界数据目录`, "error");
+        }
+      } catch (e2) { /* noop */ }
+    }, true);
+  } catch (e) { /* noop */ }
   buildUI();
   attachTyping();
   checkStatus();
