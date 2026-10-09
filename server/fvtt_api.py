@@ -2480,7 +2480,7 @@ def _import_ref_audio(data: bytes, ctype: str, role: str = None, slot: str = Non
     return ref_rel, fname, None
 
 
-@app.post("/ref-import")
+@APP.post("/ref-import")
 async def ref_import(request: Request, role: str = None, slot: str = None):
     """导入参考音频(原始字节, 单次; 大音频客户端走分片 → import-finish 分发到此落盘逻辑).
 
