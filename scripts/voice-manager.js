@@ -4,7 +4,7 @@
  * （每槽绑定一段音频，自动转写台词）、复制/导出/删除角色、头像、语速/音量。
  * 实现为自定义浮动面板(不依赖特定 Application 基类, 兼容 Foundry v11-13)。
  */
-import { gptSovitsStatus, svcRequest } from "./tts-engine.js";
+import { gptSovitsStatus, svcRequest, bytesToB64Async } from "./tts-engine.js";
 import { openRunnerAssign } from "./voice-runner.js";
 
 const MODULE = "gpt-sovits-tts";
@@ -201,9 +201,8 @@ export class VoiceManager {
       try {
         const ab = await file.arrayBuffer();
         const bytes = new Uint8Array(ab);
-        let bin = ""; const CH = 0x8000;
-        for (let i = 0; i < bytes.length; i += CH) bin += String.fromCharCode.apply(null, bytes.subarray(i, Math.min(i + CH, bytes.length)));
-        const b64 = btoa(bin);
+        // 分块异步转 base64(大包不冻结 UI / 不内存爆)
+        const b64 = await bytesToB64Async(bytes);
         // 角色包/音频大小不加限制(用户要求): 任意大小直接上传 — 引擎机内存充裕(本地直连无传输上限)。
         // 注意: 远程玩家端经 socket 代理(moduleEmit)上传超大包受 Foundry 消息大小限制, 建议在引擎机/GM 机直连导入。
         const r = await svcRequest(this.base, method, path, null, { b64Body: b64, contentType: file.type || "application/octet-stream", timeoutMs });

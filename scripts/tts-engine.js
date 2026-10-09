@@ -37,6 +37,21 @@ export function hasPlayedSrc(src) {
   } catch (e) { return false; }
 }
 
+/** 分块异步 base64(大文件上传防 UI 冻结/内存峰值): 每块 8MB 转码, 每 32MB 让出一次事件循环。
+ *  同步 btoa 几百 MB 字符串会直接冻结/崩溃浏览器标签(拖入超大角色包/导入大包时)。 */
+export async function bytesToB64Async(bytes) {
+  const CH = 8 * 1024 * 1024;
+  let out = "";
+  for (let i = 0; i < bytes.length; i += CH) {
+    const end = Math.min(i + CH, bytes.length);
+    let bin = "";
+    for (let j = i; j < end; j += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(j, Math.min(j + 0x8000, end)));
+    out += btoa(bin);
+    if (i % (CH * 4) === 0) await new Promise((r) => setTimeout(r, 0));
+  }
+  return out;
+}
+
 export class PlaybackQueue {
   constructor({ onState = null } = {}) {
     this.items = [];

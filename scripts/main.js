@@ -4,7 +4,7 @@
  *       麦克风听写(浏览器 Web Speech / 服务端 /asr) 直接发送或插入输入框
  *       消息重听按钮、状态指示灯、/ttssay 等命令、game.gptSoVitsTTS 宏 API
  */
-import { PlaybackQueue, audioPlay, webSpeechSpeak, gptSovitsSynth, gptSovitsStatus, synthEdge, svcRequest, installModuleSocket, moduleEmit, normPlayKey, hasPlayedSrc, markPlayedSrc } from "./tts-engine.js";
+import { PlaybackQueue, audioPlay, webSpeechSpeak, gptSovitsSynth, gptSovitsStatus, synthEdge, svcRequest, installModuleSocket, moduleEmit, normPlayKey, hasPlayedSrc, markPlayedSrc, bytesToB64Async } from "./tts-engine.js";
 import { installRunnerAssignUI } from "./voice-runner.js";
 import { installGmProxy } from "./gm-proxy.js";
 import { installTTSTests } from "./tests.js";
@@ -3431,10 +3431,7 @@ Hooks.once("ready", () => {
       try {
         notifyOnce("正在导入角色包…", "info");
         const ab = await file.arrayBuffer();
-        const bytes = new Uint8Array(ab);
-        let bin = ""; const CH = 0x8000;
-        for (let i = 0; i < bytes.length; i += CH) bin += String.fromCharCode.apply(null, bytes.subarray(i, Math.min(i + CH, bytes.length)));
-        const b64 = btoa(bin);
+        const b64 = await bytesToB64Async(new Uint8Array(ab));   // 分块异步转码, 超大包不冻结/崩溃浏览器
         const r = await svcRequest(getCfg().serverUrl, "POST", "/characters/import", null, { b64Body: b64, contentType: file.type || "application/octet-stream", timeoutMs: 600000 });
         const j = (r.jsonSafe ? r.jsonSafe() : (r.json || {})) || {};
         if (r.ok && j.ok) { notifyOnce("角色包导入成功: " + (j.name || ""), "info"); try { refreshQuickUI(); updateCharIndicator(); } catch (e) { /* noop */ } }
