@@ -3892,6 +3892,8 @@ Hooks.on("updateChatMessage", (message, changed) => {
     // 仅当无文件路径(纯 dataURI)时才原生 Audio 兜底。
     if (flags.audioData || flags.audioUrl) {
       try { if (pendingTts.has(message.id)) pendingTts.delete(message.id); } catch (e) { /* noop */ }
+      // 立绘跟随朗读: 写回完成(有音频) → 补插立绘(渲染时无音频未插; 同消息只插一次, 幂等)
+      try { if (message && message.element) applyEmotionAvatar(message, message.element); } catch (e) { /* noop */ }
       const reluc = (flags.audioUrl && typeof flags.audioUrl === "string") ? (() => {
         // 官方 Sound 需要可加载 URL: 用本端自己的 origin 解析成绝对 URL(同源必达), 保证 Sound 真能加载播放
         const _rp = _modulePath(flags.audioUrl);
@@ -4059,6 +4061,21 @@ function applyEmotionAvatar(message, html) {
     const fl = message && message.flags ? (message.flags[MODULE] || null) : null;
     const el = html && (typeof html.querySelector === "function") ? html : null;
     if (!el) return;
+    // 立绘跟随朗读(1.6.6): 只有"实际合成/播放了语音"的消息才插立绘 — 纯文本/旁白/动作消息不插。
+    // 判定: 消息 flags 已带音频(写回完成) 或 本端已播过该消息(playedIds / 已播 src)。
+    // 新消息合成前渲染 → 无音频不插; 写回后 updateChatMessage 播放路径补插。
+    const hasAudio = !!(fl && (fl.audioData || fl.audioUrl));
+    const playedHere = (() => {
+      try {
+        if (message && message.id && playedIds.has(message.id)) return true;
+        if (fl && (fl.audioUrl || fl.audioData)) {
+          const k = fl.audioUrl ? normPlayKey(fl.audioUrl) : normPlayKey(fl.audioData);
+          if (k && window.__fvttTTSPlayedSrcs && window.__fvttTTSPlayedSrcs.has(k)) return true;
+        }
+        return false;
+      } catch (e) { return false; }
+    })();
+    if (!hasAudio && !playedHere) return;
     // 消息无角色 flags(AI 选角色失败/旧消息/直接内置框发送) → 用当前绑定角色兜底,
     // 保证"开启插图"一定有图可显(玩家端各自显示自己绑定的角色立绘)
     let role = (fl && fl.role) || "";
