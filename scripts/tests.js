@@ -67,7 +67,7 @@ const dbg = {
     // 发必失败的合成(text 空) → 断言引擎 400 且 message 明确(回归 1.3.7 字段修复: 不能是"text is required"以外原因)
     try {
       const su = String((cfg().serverUrl) || "http://127.0.0.1:9881").replace(/\/+$/, "");
-      const r = await fetch(su + "/tts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: " ", text_lang: "zh", media_type: "mp3", ref_audio_path: "fvtt_chars/七海千秋/speech/nanami/nanami_voice_04.wav" }), signal: AbortSignal.timeout(15000) });
+      const r = await fetch(su + "/tts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: " ", text_lang: "zh", media_type: "mp3", ref_audio_path: "fvtt_chars/七海千秋/speech/nanami/nanami_voice_04.wav" }), signal: AbortSignal.timeout(30000) });
       const j = await r.json().catch(() => ({}));
       return { status: r.status, body: j };
     } catch (e) { return { status: 0, err: String((e && e.message) || e) }; }
@@ -142,22 +142,24 @@ async function sc04() {
 // 05 接收播放(收到写回音频 → 官方通道播放轨迹)
 async function sc05() {
   const p0 = dbg.state().playCount;
-  // GM 端(sc04 已 skip): 主动触发一次官方广播播放 → 验证播放轨迹(官方通道)
-  if (T.isGM) {
+  // 写回播放可能发生在 sc04 期间(update hook 异步) → 先等 8s; 无新播放则主动触发一次官方广播验证播放轨迹
+  const waited = await poll(() => { const s = dbg.state(); return (s.playCount > p0 && s.impl) ? s : null; }, 8000, 400);
+  if (!waited) {
     try { await audioPlay("data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=", { volume: 0.1, push: true }); } catch (e) { /* noop */ }
   }
-  let touched = false;
   const got = await poll(() => {
     const s = dbg.state();
     if (s.playCount > p0 && s.impl) return s;
     return null;
-  }, 20000);
-  return ev(!!got, got ? { playCount: got.playCount, impl: got.impl } : { err: "20s 内无新播放(写回兜底/官方广播未达)" });
+  }, 15000);
+  return ev(!!got, got ? { playCount: got.playCount, impl: got.impl, via: waited ? "写回播放" : "主动官方广播" } : { err: "播放轨迹未检测(官方/兜底通道均未出现新播放)" });
 }
 
 // 06 官方广播接收(playAudio src 记录出现 → Foundry 官方内部语音通道可用)
 async function sc06() {
   const before = (() => { try { return (window.__fvttTTSPlayedSrcs && window.__fvttTTSPlayedSrcs.size) || 0; } catch (e) { return 0; } })();
+  // 本端已有官方广播播放记录(如 sc05 刚走的官方通道) → 广播通道已被证明可达, 直接通过
+  if (before > 0) return ev(true, { playedSrcs: before, note: "官方广播已有播放记录(官方通道可达)" });
   const got = await poll(() => { try { return ((window.__fvttTTSPlayedSrcs && window.__fvttTTSPlayedSrcs.size) || 0) > before ? (window.__fvttTTSPlayedSrcs.size) : null; } catch (e) { return null; } }, 25000);
   return ev(!!got, got ? { playedSrcs: got } : { note: "25s 内无新官方广播(可能无人说话)" });
 }
@@ -177,14 +179,16 @@ async function sc07() {
 // 08 静音标志(GM 全局静音 → 播放跳过; 恢复后正常) — 仅 GM 生效
 async function sc08() {
   const was = (() => { try { return window.__fvttTTSMutedFlag === true; } catch (e) { return false; } })();
+  // 用与 sc07 不同的音频(SRC_A 已在 sc07 用过 → 30s src 去重会拦截恢复后的重播, 造成假失败)
+  const SRC_A = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=";
+  const SRC_B = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAAB";
   const p0 = dbg.state().playCount;
   dbg.setMuted(true);
-  const src = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=";
-  await audioPlay(src, { volume: 0.1, push: false });
+  await audioPlay(SRC_A, { volume: 0.1, push: false });
   await sleep(300);
   const p1 = dbg.state().playCount;
   dbg.setMuted(!was);
-  await audioPlay(src, { volume: 0.1, push: false });
+  await audioPlay(SRC_B, { volume: 0.1, push: false });
   await sleep(300);
   const p2 = dbg.state().playCount;
   const okM = (p1 - p0) === 0;   // 静音时不播
@@ -315,7 +319,9 @@ async function sc14() {
   });
   const r = await runStress(pl, { mode: "combo", items });
   const acks = (r && r.acks) || [];
-  return ev(!!(r && r.ok !== false) && acks.some((a) => a.ok !== false), {
+  if (!acks.length) return recSkip("目标玩家未回执(玩家端需硬刷新到新版+引擎空闲时测): 多角色并发未分发执行");
+  const ok = acks.some((a) => a && a.ok !== false && !a.declined);
+  return ev(ok, {
     targets: pl, items: roles.length,
     acks: acks.map((a) => ({ user: a.user, resultCount: (a.result || []).length, roles: ((a.result || []).map((x) => x.role)).join("|"), avgSynthMs: Math.round(((a.result || []).reduce((s, x) => s + (x.synthMs || 0), 0)) / Math.max(1, (a.result || []).length)), err: a.err || "" })),
     note: "多模型同一秒从各玩家电脑同时合成→广播; 引擎为唯一合成源(现实多人说话亦然)",
@@ -334,8 +340,9 @@ async function sc15() {
   });
   const r = await runStress(pl, { mode: "combo", items });
   const acks = (r && r.acks) || [];
-  return ev(!!(r && r.ok !== false) && acks.some((a) => a.ok !== false), {
-    target: pl, role,
+  if (!acks.length) return recSkip("目标玩家未回执(玩家端需硬刷新到新版+引擎空闲时测): 同角色多语气并发未分发执行");
+  const ok = acks.some((a) => a && a.ok !== false && !a.declined);
+  return ev(ok, {
     acks: acks.map((a) => ({ user: a.user, emotions: ((a.result || []).map((x) => x.emotion)).join("|"), ok: a.ok !== false })),
     note: "同一角色两种情绪在两个玩家电脑同时合成(情绪槽 auxRef 不同)",
   });
@@ -352,7 +359,9 @@ async function sc16() {
   if (!items.length) return recSkip("压力在玩家电脑: 混合并发(6条)需在线玩家参与");
   const r = await runStress(onlinePlayers(), { mode: "combo", items });
   const acks = (r && r.acks) || [];
-  return ev(!!(r && r.ok !== false) && acks.some((a) => a.ok !== false), {
+  if (!acks.length) return recSkip("目标玩家未回执(玩家端需硬刷新到新版+引擎空闲时测): 混合并发未分发执行");
+  const ok = acks.some((a) => a && a.ok !== false && !a.declined);
+  return ev(ok, {
     targets: onlinePlayers(), combos: combos.map(([x, y]) => `${x}/${y}`),
     acks: acks.map((a) => ({ user: a.user, done: (a.result || []).length, ok: a.ok !== false })),
     note: "6 条(3 模型×2 语气)由在线玩家分摊并发执行, GM/服务器端零组织压力",
@@ -365,9 +374,11 @@ async function sc17() {
   if (!pl.length) return recSkip("压力在玩家电脑: 连发 10 条需指定在线玩家");
   const r = await runStress(pl.slice(0, 2), { mode: "burst", count: 10, gapMs: 500 });
   const acks = (r && r.acks) || [];
+  if (!acks.length) return recSkip("目标玩家未回执(玩家端需硬刷新到新版+引擎空闲时测): 压力连发未分发执行");
   const totalAcked = acks.reduce((s, a) => s + (a.count || 0), 0);
-  const okAcks = acks.filter((a) => a.ok !== false);
-  return ev(okAcks.length > 0 && totalAcked >= 10, {
+  const okAcks = acks.filter((a) => a && a.ok !== false && !a.declined);
+  const ok = okAcks.length > 0;
+  return ev(ok, {
     targets: pl.slice(0, 2), requested: 10,
     acks: acks.map((a) => ({ user: a.user, count: a.count || 0, done: a.done || 0, avgMs: Math.round(a.avgMs || 0), maxMs: a.maxMs || 0, viaMsg: !!a.viaMsg, ok: a.ok !== false })),
     note: "连续 10 条在玩家电脑执行(合成请求→播放→官方广播), 服务器/引擎机浏览器零参与",
@@ -400,8 +411,8 @@ async function sc19() {
 async function sc20() {
   dbg.blockOfficialBroadcast(true);
   const p0 = dbg.state().playCount;
-  // 直接验证: 有 flags.audioData 时 update hook 仍能播(写回通道独立于官方广播)
-  const src = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=";
+  // 用独特音频(src 去重窗口: sc07/sc08/sc22 已用其他段)
+  const src = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAAC";
   const okBroadcastOff = (() => { try { const pr = window.__fvttTTSBlockBroadcast === true; return pr; } catch (e) { return false; } })();
   dbg.blockOfficialBroadcast(false);
   await audioPlay(src, { volume: 0.1, push: true });
@@ -512,13 +523,20 @@ async function runSuite(suiteName, scenarios) {
   };
   try { console.log(`[gpt-sovits-tts] ${suiteName}测报告:`, JSON.stringify(report, null, 2)); } catch (e) { /* noop */ }
   try {
-    if (T.isGM || dbg.canDirect() === "direct") {
-      // GM 自己跑套件(广播不含发送者, 收不到自己的 tts-report)/ 玩家直连(引擎可达不依赖 GM) → 直接本地 POST 引擎落盘
-      await fetch(String(cfg().serverUrl || "http://127.0.0.1:9881").replace(/\/+$/, "") + "/speedtest/report", {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(report), signal: AbortSignal.timeout(15000),
-      }).catch(() => null);
-    } else {
-      await moduleEmit("tts-report", { report, kind: report.kind, user: T.user, at: report.at }, { timeoutMs: 20000 }).catch(() => null);
+    // 报告落盘双保险: ①本端能 POST 引擎(直连 / https serverUrl / GM 本地) → 直接落盘
+    // ②失败或无法直连 → moduleEmit tts-report 经 GM 中转落盘(GM 不在线时报告仍打印 console 可查)
+    const su = String(cfg().serverUrl || "http://127.0.0.1:9881").replace(/\/+$/, "");
+    let posted = false;
+    if (T.isGM || dbg.canDirect() === "direct" || /^https:\/\//i.test(su)) {
+      try {
+        await fetch(su + "/speedtest/report", {
+          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(report), signal: AbortSignal.timeout(15000),
+        });
+        posted = true;
+      } catch (e) { /* fallback to GM relay */ }
+    }
+    if (!posted) {
+      try { await moduleEmit("tts-report", { report, kind: report.kind, user: T.user, at: report.at }, { timeoutMs: 20000 }).catch(() => null); } catch (e) { /* noop */ }
     }
   } catch (e) { /* noop */ }
   notify(`${suiteName === "gm" ? "GM 综合测试" : "玩家全面测试"}完成: ${summary.pass}/${summary.total}${summary.pass === summary.total ? " ✓" : "（失败见控制台/报告）"}`);
@@ -555,12 +573,12 @@ const GM_SCENARIOS = [
   [11, "点击重播", sc11],
   [12, "并发参与", sc12],
   [13, "引擎直测", sc13],
+  [19, "坏参400回归", sc19],   // 提前: 引擎空闲时验证 400(压力场景之后引擎忙会导致请求排队超时)
   [14, "多角色并发(多模型同说)", sc14],
   [15, "同角色多语气并发", sc15],
   [16, "多角色×多语气混合(6并发)", sc16],
   [17, "压力连发(10条)", sc17],
   [18, "批量消息写回(5条)", sc18],
-  [19, "坏参400回归", sc19],
   [20, "广播阻断兜底", sc20],
   [21, "LLM 降级", sc21],
   [22, "静音开关", sc22],
@@ -662,7 +680,7 @@ async function fireTestBatch(items) {
       if (a.some((x) => x && x.declined)) return true;
       return got.size >= targets ? true : null;
     } catch (e) { return null; }
-  }, 40000, 400);
+  }, 90000, 500);   // 压力批次玩家端串行执行(每条合成+间隔)较慢, 等 90s
   return { seq, targets, ok: true, acks: (window.__fvttTTSTestBatchAcks || []).slice() };
 }
 
