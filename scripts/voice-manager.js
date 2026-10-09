@@ -834,6 +834,23 @@ function safeAssignments() {
         const files = Array.from(ev.target.files || []);
         if (!files.length) return;
         const f0 = files[0];
+        // 智能识别(1.6.17): 用户把 .char/.zip 角色包选进了"参考音频" → 转角色包导入(参考音频只收音频文件)
+        const _ext0 = String(f0.name || "").split(".").pop().toLowerCase();
+        if (_ext0 === "char" || _ext0 === "zip") {
+          this._setBusy(true, t("vm.importingChar", "导入角色包…"));
+          try {
+            const _progC = window.__fvttTTSSetImportProgress || null;
+            const _progHideC = window.__fvttTTSHideImportProgress || null;
+            const r = await importCharPackChunked(this.base, f0, { onProgress: (p) => { try { if (_progC) _progC("导入角色包", p); } catch (e) { /* noop */ } } });
+            if (_progHideC) try { _progHideC(); } catch (e) { /* noop */ }
+            if (!r.ok) throw new Error(r.message || "import failed");
+            await this.refresh();
+            ui.notifications.info(t("vm.importedChar", "角色包导入成功") + "：" + (r.name || ""));
+            this.view = "main"; this.render();
+          } catch (err) { ui.notifications.error(t("vm.importCharFail", "导入角色包失败") + ": " + String(((err && err.message) || err) || "未知错误").slice(0, 120)); }
+          finally { this._setBusy(false); }
+          return;
+        }
         this._setBusy(true, t("vm.importing", "上传主参考音频…"));
         try {
           // 参考音频上传(≤12MB 单次; 大音频自动分片 10MB/片 — 不再单次大 body 丢 FVTT 连接)
