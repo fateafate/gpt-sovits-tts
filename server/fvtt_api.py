@@ -2249,7 +2249,7 @@ def _import_char_zip(data: bytes):
     return name, None
 
 
-@app.post("/characters/import")
+@APP.post("/characters/import")
 async def characters_import(request: Request):
     """上传 .char(zip) -> 解压到 fvtt_chars/<name> -> 语气映射 -> 切换激活(单次, 小包)."""
     data = await request.body()
@@ -2267,7 +2267,7 @@ async def characters_import(request: Request):
 _IMPORT_SESSIONS = {}
 
 
-@app.post("/characters/import-session")
+@APP.post("/characters/import-session")
 async def import_session(request: Request):
     body = await request.json()
     size = int(body.get("size") or 0)
@@ -2281,7 +2281,7 @@ async def import_session(request: Request):
     return {"ok": True, "session": sid}
 
 
-@app.post("/characters/import-chunk")
+@APP.post("/characters/import-chunk")
 async def import_chunk(request: Request, session: str = ""):
     s = _IMPORT_SESSIONS.get(session)
     if not s:
@@ -2297,7 +2297,7 @@ async def import_chunk(request: Request, session: str = ""):
     return {"ok": True, "received": s["received"], "total": s["total"]}
 
 
-@app.post("/characters/import-finish")
+@APP.post("/characters/import-finish")
 async def import_finish(request: Request, session: str = ""):
     s = _IMPORT_SESSIONS.pop(session, None)
     if not s:
@@ -2320,7 +2320,7 @@ async def import_finish(request: Request, session: str = ""):
     return {"ok": True, "name": name, "message": "角色包导入成功"}
 
 
-@app.post("/characters/import-abort")
+@APP.post("/characters/import-abort")
 async def import_abort(request: Request, session: str = ""):
     s = _IMPORT_SESSIONS.pop(session, None)
     if s:
