@@ -3429,14 +3429,15 @@ Hooks.once("ready", () => {
   try {
     const _importCharDrop = async (file) => {
       try {
-        notifyOnce("正在导入角色包…", "info");
+        showImportProgress("正在导入角色包", 0.01);
         // 分片导入(≤12MB 单次, 大包分片 10MB/片 — 不再单次发送几百MB body, 不丢 FVTT 连接)
         const r = await importCharPackChunked(getCfg().serverUrl, file, {
-          onProgress: (p) => { try { const _pct = Math.round(p * 100); if (_pct % 20 === 0) notifyOnce("正在导入角色包… " + _pct + "%", "info"); } catch (e) { /* noop */ } },
+          onProgress: (p) => { try { showImportProgress("正在导入角色包", p); } catch (e) { /* noop */ } },
         });
+        hideImportProgress();
         if (r.ok) { notifyOnce("角色包导入成功: " + (r.name || ""), "info"); try { refreshQuickUI(); updateCharIndicator(); } catch (e) { /* noop */ } }
         else notifyOnce("导入失败: " + (r.message || ""), "error");
-      } catch (e) { notifyOnce("导入失败: " + String((e && e.message) || e).slice(0, 120), "error"); }
+      } catch (e) { hideImportProgress(); notifyOnce("导入失败: " + String((e && e.message) || e).slice(0, 120), "error"); }
     };
     const _dropFile = (e) => {
       try {
@@ -3898,6 +3899,41 @@ Hooks.on("renderSettingsConfig", (app, html) => {
 // v13 起 renderChatMessage 废弃, 改用 renderChatMessageHTML(传 HTMLElement); v11/12 用旧 hook
 // 注意: game.version 在 v13 是字符串("13.351"), 不能 typeof number 判断
 const _fv = typeof game.version === "number" ? game.version : (parseInt(String(game.version || "0"), 10) || 0);
+// 导入进度条(1.6.16): 全局悬浮进度条 — 进度 + 百分比 + 预计剩余时间(线性外推 + EMA 平滑, 防抖动)
+let _impProg = null, _impProgStart = 0, _impProgEma = -1;
+function _ensureImportBar() {
+  if (_impProg && document.body.contains(_impProg)) return _impProg;
+  const box = document.createElement("div");
+  box.style.cssText = "position:fixed;right:16px;bottom:56px;z-index:99999;width:270px;background:rgba(20,20,24,.93);border:1px solid rgba(255,255,255,.16);border-radius:8px;padding:8px 10px;font:12px/1.4 system-ui,sans-serif;color:#eee;box-shadow:0 2px 10px rgba(0,0,0,.45);display:none;";
+  box.innerHTML = '<div style="display:flex;justify-content:space-between;margin-bottom:5px;"><span class="lbl">导入中…</span><span class="pct">0%</span></div><div style="height:8px;border-radius:4px;background:rgba(255,255,255,.15);overflow:hidden;"><div class="bar" style="height:100%;width:0%;background:#7aa2f7;border-radius:4px;transition:width .18s;"></div></div><div class="eta" style="margin-top:4px;color:#9aa;font-size:11px;">预计剩余: --</div>';
+  document.body.appendChild(box);
+  _impProg = box;
+  return box;
+}
+function showImportProgress(label, p) {
+  try {
+    const box = _ensureImportBar();
+    box.style.display = "block";
+    const now = Date.now();
+    if (p <= 0.01) { _impProgStart = now; _impProgEma = -1; }
+    const pct = Math.max(0, Math.min(1, p));
+    box.querySelector(".lbl").textContent = label || "导入中…";
+    box.querySelector(".pct").textContent = Math.round(pct * 100) + "%";
+    box.querySelector(".bar").style.width = (pct * 100) + "%";
+    const el = now - _impProgStart;
+    if (el > 800 && pct > 0.02) {
+      const est = el * (1 - pct) / pct;
+      _impProgEma = _impProgEma < 0 ? est : _impProgEma * 0.7 + est * 0.3;
+      const sec = Math.max(0, Math.round(_impProgEma / 1000));
+      box.querySelector(".eta").textContent = "预计剩余: " + (sec >= 60 ? Math.floor(sec / 60) + " 分 " + (sec % 60) + " 秒" : sec + " 秒");
+    }
+  } catch (e) { /* noop */ }
+}
+function hideImportProgress() {
+  try { if (_impProg) _impProg.style.display = "none"; } catch (e) { /* noop */ }
+}
+try { window.__fvttTTSSetImportProgress = showImportProgress; window.__fvttTTSHideImportProgress = hideImportProgress; } catch (e) { /* noop */ }
+
 // 聊天附件角色包检测(1.6.15): 消息 content 带 .char 附件链接(FVTT"选择文档"上传的角色包) → fetch 后分片自动导入。
 // create/update/render 全路径调用(防"选择文档上传"走 create 不被 update 检测到)。同附件只导一次。
 function _detectCharAttachment(message) {

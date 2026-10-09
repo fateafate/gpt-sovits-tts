@@ -837,7 +837,10 @@ function safeAssignments() {
         this._setBusy(true, t("vm.importing", "上传主参考音频…"));
         try {
           // 参考音频上传(≤12MB 单次; 大音频自动分片 10MB/片 — 不再单次大 body 丢 FVTT 连接)
-          const r = await importCharPackChunked(this.base, f0, { target: "/ref-import", onProgress: (p) => { try { const _pct = Math.round(p * 100); if (_pct % 20 === 0) this._setBusy(true, t("vm.importing", "上传主参考音频…") + " " + _pct + "%"); } catch (e) { /* noop */ } } });
+          const _prog1 = window.__fvttTTSSetImportProgress || null;
+          const _progHide1 = window.__fvttTTSHideImportProgress || null;
+          const r = await importCharPackChunked(this.base, f0, { target: "/ref-import", onProgress: (p) => { try { if (_prog1) _prog1("上传主参考音频", p); else { const _pct = Math.round(p * 100); if (_pct % 20 === 0) this._setBusy(true, t("vm.importing", "上传主参考音频…") + " " + _pct + "%"); } } catch (e) { /* noop */ } } });
+          if (_progHide1) try { _progHide1(); } catch (e) { /* noop */ }
           if (!r.ok) throw new Error(r.message || "upload failed");
           mainRefPath = r.ref_audio_path;
           this._pendingExtra = files.slice(1);
@@ -854,7 +857,10 @@ function safeAssignments() {
         this._setBusy(true, t("vm.importingChar", "导入角色包…"));
         try {
           // 分片导入(≤12MB 单次, 大包分片 10MB/片 — 消除单次几百MB body → 不再丢 FVTT 连接)
-          const r = await importCharPackChunked(this.base, f, { onProgress: (p) => { try { const _pct = Math.round(p * 100); if (_pct % 20 === 0) this._setBusy(true, t("vm.importingChar", "导入角色包…") + " " + _pct + "%"); } catch (e) { /* noop */ } } });
+          const _prog2 = window.__fvttTTSSetImportProgress || null;
+          const _progHide2 = window.__fvttTTSHideImportProgress || null;
+          const r = await importCharPackChunked(this.base, f, { onProgress: (p) => { try { if (_prog2) _prog2("导入角色包", p); else { const _pct = Math.round(p * 100); if (_pct % 20 === 0) this._setBusy(true, t("vm.importingChar", "导入角色包…") + " " + _pct + "%"); } } catch (e) { /* noop */ } } });
+          if (_progHide2) try { _progHide2(); } catch (e) { /* noop */ }
           if (!r.ok) throw new Error(r.message || "import failed");
           const j = { name: r.name };
           const prof = loadVoiceProfile();
