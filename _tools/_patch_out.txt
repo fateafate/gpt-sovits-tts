@@ -1,4 +1,0 @@
-﻿PATCHED: H:\mod2\Data\modules\gpt-sovits-tts\engine\fvtt_chars\丛雨\character.yaml
-keys: ['character_setting', 'color', 'emotion_tags', 'emotions', 'gpt_model_path', 'name', 'prompt_lang', 'prompt_text', 'refer_audio_path', 'sovits_model_path', 'sprite_prefix', 'sprite_scale', 'sprites']
-sprites: 40
-emotion_tags lines: 40
