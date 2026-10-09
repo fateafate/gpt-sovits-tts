@@ -3609,6 +3609,20 @@ function getSpriteRotation(name, emotion) {
   } catch (e) { return 0; }
 }
 
+// 情绪→立绘分组(1.6.21): 无情绪标签的立绘集按情绪分桶 — 不同语气固定取不同组立绘(视觉可区分), 同情绪内仍轮换
+// 6 组按立绘数量均分: 0=neutral/calm 1=joy 2=sad 3=angry 4=surprised 5=fear
+function spriteBucketForEmotion(sprites, emotion) {
+  try {
+    const n = Array.isArray(sprites) ? sprites.length : 0;
+    if (n <= 1) return 0;
+    const emo = String(emotion || "").toLowerCase();
+    const gmap = { joy: 1, happy: 1, sad: 2, angry: 3, surprised: 4, fear: 5 };
+    const g = gmap[emo] !== undefined ? gmap[emo] : 0;
+    const per = Math.max(1, Math.floor(n / 6));
+    return Math.min(g * per, n - 1);
+  } catch (e) { return 0; }
+}
+
 // 情绪规则判定(1.6.20): 无 LLM 依赖 — 台词关键词/标点 → 情绪key(引擎后处理调制近似语气); 显式选择的语气优先
 function detectEmotion(text, cur) {
   try {
@@ -3637,13 +3651,15 @@ Hooks.on("chatMessage", (chatLog, message, chatData) => {
         role: prof0.current || "",
         emotion: (cur && cur.emotion) || "",
         ttsProvider: String((cur && cur.ttsProvider) || ""),
-        // 立绘路径随消息同步(跨端一致, 不依赖各端本地角色缓存): 角色立绘集轮换(每次说话换一张, 近似 AI 自选) > 语气槽立绘
+        // 立绘路径随消息同步(跨端一致): 情绪分组(不同语气不同立绘) + 组内轮换(同语气连说换不同张) > 语气槽立绘 — 1.6.21
         avatar: (() => { try {
           const prof0n = (prof0 && prof0.current) || "";
           const cD = (quickChars && quickChars.chars || []).find(x => x.name === prof0n);
           if (cD && Array.isArray(cD.sprites) && cD.sprites.length >= 1) {
-            const rot = getSpriteRotation(prof0n, (cur && cur.emotion) || "");
-            return cD.sprites[rot % cD.sprites.length];
+            const _emoS = String((cur && cur.emotion) || detectEmotion(String(message.content || chatData.content || ""), null) || "");
+            const _base = spriteBucketForEmotion(cD.sprites, _emoS);
+            const _rot = getSpriteRotation(prof0n + "|" + _emoS, _emoS);
+            return cD.sprites[(_base + _rot) % cD.sprites.length];
           }
           return (cD && cD.avatar) || (cur && cur.avatar) || "";
         } catch (e) { return ""; } })(),
