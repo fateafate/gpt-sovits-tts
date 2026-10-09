@@ -3636,7 +3636,7 @@ function aiJudgeEmotionNow(text, role) {
       const qcC = (quickChars && quickChars.chars || []).find(x => x.name === (role || prof.current || ""));
       let emos = ((qcC && qcC.emotions) || []).map(e => ({ key: e.key, label: e.label }));
       if (!emos.length) emos = [{key:"neutral",label:"平静"},{key:"joy",label:"喜悦"},{key:"sad",label:"悲伤"},{key:"angry",label:"愤怒"},{key:"surprised",label:"惊讶"},{key:"fear",label:"恐惧"}];
-      const r = await svcRequest(cfg.serverUrl, "POST", "/llm/emotion", {
+      const r = await svcRequest(cfg.serverUrl, "POST", "/llm", {
         base: cfg.llmBaseUrl || "https://api.openai.com/v1", key: cfg.llmKey, model: cfg.llmModel || "gpt-4o-mini",
         text: String(text || "").slice(0, 1200), role: role || prof.current || "", setting: (qcC && qcC.setting) || "", emotions: emos,
       }, { timeoutMs: 6000 });
