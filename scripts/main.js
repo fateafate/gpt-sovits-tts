@@ -1429,7 +1429,10 @@ function buildSendPop() {
         if (!r || !r.ok) {
           // LLM 预热失败(API 未配/不通/502) → 不阻塞预合成: LLM 只是语气判断辅助,
           // 降级按默认/手动语气预合成(合成走 GM 代理→引擎, 与 LLM 无关; 根治"非本地玩家预加载失败 http0")
-          try { console.warn("[gpt-sovits-tts] AI 预热失败(降级, 按当前语气预合成): " + ((r && r.message) || "unknown")); } catch (e) { /* noop */ }
+          if (window.__fvttTTSAiWarned !== true) {
+            try { console.warn("[gpt-sovits-tts] AI 预热失败(降级, 按当前语气预合成): " + ((r && r.message) || "unknown")); } catch (e) { /* noop */ }
+            window.__fvttTTSAiWarned = true;   // 1.6.23: 只提示一次, 不再每次打字刷控制台
+          }
           window.__aiPreloaded = false;
         }
       }
