@@ -768,7 +768,7 @@ export function installTTSTests(deps) {
     runStress,
     onlinePlayers,
     debug: dbg,
-    version: "1.5.1",
+    version: "1.5.2",
   };
   try { window.__fvttTTSTests = api; } catch (e) { /* noop */ }
   return api;
