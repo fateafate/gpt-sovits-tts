@@ -24,6 +24,8 @@ node_modules/
 
 # ===== 本地测试残留 =====
 _tools/cmp/
+_tools/b*.json
+_tools/engine_selftest.ps1
 
 # ===== 内部开发文档(不入库) =====
 企划*.md
