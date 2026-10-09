@@ -204,10 +204,8 @@ export class VoiceManager {
         let bin = ""; const CH = 0x8000;
         for (let i = 0; i < bytes.length; i += CH) bin += String.fromCharCode.apply(null, bytes.subarray(i, Math.min(i + CH, bytes.length)));
         const b64 = btoa(bin);
-        if (b64.length > 64 * 1024 * 1024) {
-          // 角色包过大(>48MB): 明确报错, 不再静默 fallthrough 发空/"null" body(否则引擎 400 "不是有效的 .char 压缩包"误导)
-          throw new Error("角色包过大(>48MB), 请缩小后导入");
-        }
+        // 角色包/音频大小不加限制(用户要求): 任意大小直接上传 — 引擎机内存充裕(本地直连无传输上限)。
+        // 注意: 远程玩家端经 socket 代理(moduleEmit)上传超大包受 Foundry 消息大小限制, 建议在引擎机/GM 机直连导入。
         const r = await svcRequest(this.base, method, path, null, { b64Body: b64, contentType: file.type || "application/octet-stream", timeoutMs });
         return { ok: r.ok, status: r.status || 0, json: () => Promise.resolve(r.jsonSafe ? r.jsonSafe() : (r.json || {})), jsonSafe: () => r.jsonSafe ? r.jsonSafe() : (r.json || {}), text: () => Promise.resolve(JSON.stringify((r.jsonSafe ? r.jsonSafe() : (r.json || {})) || {})), headers: { get: () => null } };
       } catch (e) {
