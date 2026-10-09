@@ -110,6 +110,7 @@ async function sc03() {
 
 // 04 代理合成写回(玩家真实发声链路: 发请求消息 → GM 代合成写回 → 本端收到 audioData/audioUrl)
 async function sc04() {
+  if (T.isGM) return recSkip("代理合成写回是玩家链路(GM 代合成), GM 端由直连合成+sc13 引擎直测覆盖");
   const st0 = Date.now();
   let msgId = "";
   try {
@@ -141,13 +142,17 @@ async function sc04() {
 // 05 接收播放(收到写回音频 → 官方通道播放轨迹)
 async function sc05() {
   const p0 = dbg.state().playCount;
+  // GM 端(sc04 已 skip): 主动触发一次官方广播播放 → 验证播放轨迹(官方通道)
+  if (T.isGM) {
+    try { await audioPlay("data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=", { volume: 0.1, push: true }); } catch (e) { /* noop */ }
+  }
   let touched = false;
   const got = await poll(() => {
     const s = dbg.state();
     if (s.playCount > p0 && s.impl) return s;
     return null;
-  }, 30000);
-  return ev(!!got, got ? { playCount: got.playCount, impl: got.impl } : { err: "30s 内无新播放(写回兜底/官方广播未达)" });
+  }, 20000);
+  return ev(!!got, got ? { playCount: got.playCount, impl: got.impl } : { err: "20s 内无新播放(写回兜底/官方广播未达)" });
 }
 
 // 06 官方广播接收(playAudio src 记录出现 → Foundry 官方内部语音通道可用)
@@ -240,6 +245,7 @@ async function sc11() {
 
 // 12 并发参与(等 GM 综合测试的 test-batch → 玩家真实朗读指定角色/语气 → 回执)
 async function sc12() {
+  if (T.isGM) return ev(true, { note: "GM 端是批次发起方, 不参与自身批次(玩家端参与并回执)" });
   const t0 = Date.now();
   const got = await poll(() => (window.__fvttTTSTestBatchDone ? window.__fvttTTSTestBatchDone : null), 25000, 500);
   return ev(true, got ? { batch: got, ms: Date.now() - t0 } : { note: "25s 内无 GM 批次(独立自测, 由 GM 综合测试驱动)" });
@@ -480,7 +486,12 @@ async function sc26() {
 /* =====================================================================
  * 套件执行
  * ===================================================================*/
+let _suiteRunning = false;
 async function runSuite(suiteName, scenarios) {
+  // 防并发交错: 🔬(runAuto) 与 🧪(runGmSuite) 双按钮同时点 → 只跑第一个, 避免场景记录累计成 50
+  if (_suiteRunning) { warn("测试正在运行中，请等本次跑完"); return null; }
+  _suiteRunning = true;
+  try {
   begin(suiteName);
   // GM 套件依赖角色/情绪槽数据(多角色/多语气并发) → 先确保 quickChars 加载
   try { if (D.loadQuickChars) { await D.loadQuickChars().catch(() => null); } } catch (e) { /* noop */ }
@@ -501,10 +512,18 @@ async function runSuite(suiteName, scenarios) {
   };
   try { console.log(`[gpt-sovits-tts] ${suiteName}测报告:`, JSON.stringify(report, null, 2)); } catch (e) { /* noop */ }
   try {
-    await moduleEmit("tts-report", { report, kind: report.kind, user: T.user, at: report.at }, { timeoutMs: 20000 }).catch(() => null);
+    if (T.isGM || dbg.canDirect() === "direct") {
+      // GM 自己跑套件(广播不含发送者, 收不到自己的 tts-report)/ 玩家直连(引擎可达不依赖 GM) → 直接本地 POST 引擎落盘
+      await fetch(String(cfg().serverUrl || "http://127.0.0.1:9881").replace(/\/+$/, "") + "/speedtest/report", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(report), signal: AbortSignal.timeout(15000),
+      }).catch(() => null);
+    } else {
+      await moduleEmit("tts-report", { report, kind: report.kind, user: T.user, at: report.at }, { timeoutMs: 20000 }).catch(() => null);
+    }
   } catch (e) { /* noop */ }
   notify(`${suiteName === "gm" ? "GM 综合测试" : "玩家全面测试"}完成: ${summary.pass}/${summary.total}${summary.pass === summary.total ? " ✓" : "（失败见控制台/报告）"}`);
   return report;
+  } finally { _suiteRunning = false; }
 }
 
 const PLAYER_SCENARIOS = [
