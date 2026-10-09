@@ -3900,7 +3900,7 @@ Hooks.on("renderSettingsConfig", (app, html) => {
 // 注意: game.version 在 v13 是字符串("13.351"), 不能 typeof number 判断
 const _fv = typeof game.version === "number" ? game.version : (parseInt(String(game.version || "0"), 10) || 0);
 // 导入进度条(1.6.16): 全局悬浮进度条 — 进度 + 百分比 + 预计剩余时间(线性外推 + EMA 平滑, 防抖动)
-let _impProg = null, _impProgStart = 0, _impProgEma = -1;
+let _impProg = null, _impProgStart = 0, _impProgEma = -1, _impFirst = true;
 function _ensureImportBar() {
   if (_impProg && document.body.contains(_impProg)) return _impProg;
   const box = document.createElement("div");
@@ -3915,22 +3915,27 @@ function showImportProgress(label, p) {
     const box = _ensureImportBar();
     box.style.display = "block";
     const now = Date.now();
-    if (p <= 0.01) { _impProgStart = now; _impProgEma = -1; }
+    // 每次导入(隐藏后重新显示)都重新计时 — 否则 _impProgStart 残留 0(模块加载时刻) → "现在-0"溢出成天文数字
+    if (_impFirst) { _impProgStart = now; _impProgEma = -1; _impFirst = false; }
     const pct = Math.max(0, Math.min(1, p));
     box.querySelector(".lbl").textContent = label || "导入中…";
     box.querySelector(".pct").textContent = Math.round(pct * 100) + "%";
     box.querySelector(".bar").style.width = (pct * 100) + "%";
     const el = now - _impProgStart;
-    if (el > 800 && pct > 0.02) {
+    if (el > 1000 && pct > 0.03) {
       const est = el * (1 - pct) / pct;
       _impProgEma = _impProgEma < 0 ? est : _impProgEma * 0.7 + est * 0.3;
-      const sec = Math.max(0, Math.round(_impProgEma / 1000));
-      box.querySelector(".eta").textContent = "预计剩余: " + (sec >= 60 ? Math.floor(sec / 60) + " 分 " + (sec % 60) + " 秒" : sec + " 秒");
+      let sec = Math.max(0, Math.round(_impProgEma / 1000));
+      if (sec > 6 * 3600) box.querySelector(".eta").textContent = "预计剩余: 尚久(可能卡在传输)";
+      else box.querySelector(".eta").textContent = "预计剩余: " + (sec >= 60 ? Math.floor(sec / 60) + " 分 " + (sec % 60) + " 秒" : sec + " 秒");
+    } else {
+      box.querySelector(".eta").textContent = "预计剩余: --";
     }
   } catch (e) { /* noop */ }
 }
 function hideImportProgress() {
   try { if (_impProg) _impProg.style.display = "none"; } catch (e) { /* noop */ }
+  _impFirst = true;   // 下次导入重新计时
 }
 try { window.__fvttTTSSetImportProgress = showImportProgress; window.__fvttTTSHideImportProgress = hideImportProgress; } catch (e) { /* noop */ }
 
