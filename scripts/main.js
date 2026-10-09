@@ -1470,7 +1470,7 @@ function buildSendPop() {
       const curP = (profP.chars && profP.chars[roleP]) || {};
       if (typeof curP.emotionMix === "number") overridesP.emotionMix = curP.emotionMix;
       else if (aiEmoP) overridesP.emotionMix = 0.75;   // AI 判断语气 → 与发送时情绪占比一致
-      const { blob, audioUrl } = await gptSovitsSynth(stripP, cfgP2.textLang || "auto", { serverUrl: cfgP2.serverUrl, speedFactor: cfgP2.speedFactor || 1, overrides: Object.keys(overridesP).length ? overridesP : null, mediaType: "mp3", asBlob: true, skipDirect: window.__fvttTTSCanDirect !== true });
+      const { blob, audioUrl } = await gptSovitsSynth(stripP, cfgP2.textLang || "auto", { serverUrl: cfgP2.serverUrl, speedFactor: cfgP2.speedFactor || 1, overrides: Object.keys(overridesP).length ? overridesP : null, mediaType: "mp3", asBlob: true, role: roleP, skipDirect: window.__fvttTTSCanDirect !== true });
       const objUrl = URL.createObjectURL(blob);
       const b64 = await blobToBase64(blob);
       if (preloadAudio && preloadAudio.url) { try { URL.revokeObjectURL(preloadAudio.url); } catch (e) { /* noop */ } }

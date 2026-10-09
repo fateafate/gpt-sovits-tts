@@ -2089,6 +2089,7 @@ def _write_chars_snapshot(chars):
                 "name": c.get("name", ""),
                 "avatar": c.get("avatar", ""),
                 "sprites": c.get("sprites") or [],
+                "emotion_tags": str(c.get("emotion_tags") or ""),   # 1.6.28 快照带立绘情绪标注(客户端 snapshot 路径选立绘也用得上)
                 "provider": c.get("provider", "gpt-sovits"),
                 "prompt_lang": c.get("prompt_lang", ""),
                 "setting": c.get("setting", ""),
