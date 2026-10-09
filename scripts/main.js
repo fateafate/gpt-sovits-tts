@@ -3469,33 +3469,11 @@ Hooks.once("ready", () => {
     window.addEventListener("drop", _dropFile, true);    // window 捕获(最外层, 先于 Foundry 任何 drop 处理, 防吞事件)
     window.addEventListener("drop", _dropFile, false);   // 冒泡兜底(捕获被 Foundry 吞时仍可触发)
   } catch (e) { /* noop */ }
-  // 聊天框"导入角色包"按钮(1.6.14): 拖放/选择文档被 Foundry 抢先时仍有可靠入口 — 点击 → 文件选择器(.char) → 分片导入
+  // 1.6.22: 移除聊天框"导入角色包"📦按钮(用户要求) — 导入走拖放/附件检测/语音管理器; 保留 window 引用供附件检测复用, 并清理旧版可能已插入的按钮
   try {
-    try { window.__fvttTTSImportCharDrop = _importCharDrop; } catch (e) { /* noop */ }   // 供附件检测/create 路径复用
-    const _addImportBtn = () => {
-      try {
-        const cf = document.querySelector("#chat-form") || document.querySelector(".chat-form") || document.querySelector(".chat-sidebar form") || document.querySelector("#chat-controls") || null;
-        if (!cf || cf.querySelector(".fvtt-tts-import-char-btn")) return;
-        const btn = document.createElement("button");
-        btn.type = "button";
-        btn.className = "fvtt-tts-import-char-btn";
-        btn.title = "导入角色包(.char)";
-        btn.style.cssText = "flex:0 0 auto;min-width:0;padding:2px 6px;margin:0 2px;line-height:1.2;background:transparent;border:none;color:#b88;cursor:pointer;font-size:13px;";
-        btn.innerHTML = "📦";
-        const fi = document.createElement("input");
-        fi.type = "file";
-        fi.accept = ".char,application/zip,application/octet-stream";
-        fi.style.display = "none";
-        fi.addEventListener("change", (ev) => { const f = ev.target.files && ev.target.files[0]; if (f) _importCharDrop(f); ev.target.value = ""; });
-        btn.addEventListener("click", () => fi.click());
-        btn.appendChild(fi);
-        cf.appendChild(btn);
-      } catch (e) { /* noop */ }
-    };
-    _addImportBtn();
-    setTimeout(_addImportBtn, 1500);
-    setTimeout(_addImportBtn, 4000);
+    try { window.__fvttTTSImportCharDrop = _importCharDrop; } catch (e) { /* noop */ }
   } catch (e) { /* noop */ }
+  try { document.querySelectorAll(".fvtt-tts-import-char-btn").forEach(b => { try { b.remove(); } catch (e) { /* noop */ } }); } catch (e) { /* noop */ }
   buildUI();
   attachTyping();
   checkStatus();
