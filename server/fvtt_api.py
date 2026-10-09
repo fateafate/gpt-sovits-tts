@@ -2850,6 +2850,8 @@ async def llm_endpoint(request: Request):
     model = str(body.get("model") or "").strip() or "gpt-4o-mini"
     text = str(body.get("text") or "")[:2000]
     context = str(body.get("context") or "").strip()[:2000]
+    setting = str(body.get("setting") or "").strip()[:800]   # 角色提示词(性格/声线/语气偏好)
+    role = str(body.get("role") or "").strip()[:60]
     emotions = body.get("emotions") or []
     if not key:
         return JSONResponse(status_code=400, content={"ok": False, "message": "api key 未配置, 请在模块设置里填写后使用"})
@@ -2860,9 +2862,13 @@ async def llm_endpoint(request: Request):
         emo_map = {"calm": "平静", "happy": "开心", "relaxed": "放松", "angry": "生气", "sad": "悲伤",
                    "surprised": "惊讶", "shy": "害羞", "serious": "严肃", "gentle": "温柔", "sleepy": "困倦"}
     option_lines = "\n".join("- %s (%s)" % (k, v) for k, v in emo_map.items())
+    _role_line = ""
+    if role or setting:
+        _role_line = "你是 %s 的声音语气分析助手。角色提示词: %s\n" % (role or "该角色", setting or "无")
     sys_prompt = (
-        "你是语气分析助手。根据说话内容(及其所在对话上下文)判断说话者的语气, 从下面选项里选最贴切的一个。"
-        "只输出那个选项的英文 key 本身, 不要任何其他字符。判断时优先依据台词本身, 上下文只作辅助理解语境。\n选项:\n%s" % option_lines
+        _role_line +
+        "根据说话内容(及其所在对话上下文)判断说话者的语气, 从下面选项里选最贴切的一个。"
+        "只输出那个选项的英文 key 本身, 不要任何其他字符。判断时优先依据台词本身与角色设定, 上下文只作辅助理解语境。\n选项:\n%s" % option_lines
     )
     user_content = text[:1500]
     if context:
@@ -3340,6 +3346,8 @@ async def llm_assess_endpoint(request: Request):
     model = str(body.get("model") or "").strip() or "gpt-4o-mini"
     text = str(body.get("text") or "")[:2000]
     context = str(body.get("context") or "").strip()[:2000]
+    setting = str(body.get("setting") or "").strip()[:800]   # 角色提示词(性格/声线/语气偏好)
+    role = str(body.get("role") or "").strip()[:60]
     emotions = body.get("emotions") or []
     want_polish = bool(body.get("polish"))
     if not key:

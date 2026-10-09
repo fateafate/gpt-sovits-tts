@@ -494,9 +494,11 @@ async function speak(text, { lang = null, sender = "", refAudioPath = null, prom
       if (typeof pv.emotionMix === "number") overrides.emotionMix = pv.emotionMix;
     }
   }
-  // 情绪后处理(1.6.20): 只有无语气槽音频(单参考角色)才做 DSP 近似语气 — 有真实情绪槽音频时走 emotion_mix 参考融合, 不重复调制
+  // 情绪(1.6.24): LLM 根据台词+角色提示词判情绪(优先, 声音调制+立绘分组) > 显式选择 > 规则判定; 失败降级不阻塞
   if (pv && !pv.auxRef) {
-    const _emoDet = detectEmotion(finalText, pv);
+    let _emoDet = null;
+    try { const _aiE = await aiJudgeEmotionNow(finalText, prof0.current || ""); if (_aiE) _emoDet = _aiE; } catch (e) { /* noop */ }
+    if (!_emoDet) _emoDet = detectEmotion(finalText, pv);
     if (_emoDet && _emoDet !== "neutral") { overrides = overrides || {}; overrides.emotion = _emoDet; }
   }
 
@@ -3621,6 +3623,32 @@ function detectEmotion(text, cur) {
   } catch (e) { return "neutral"; }
 }
 
+// AI 语气判定(1.6.24): LLM 根据台词+角色提示词判情绪(驱动声音调制+立绘分组); 未配/失败/超时降级规则; 同批说话复用一次调用
+let _aiEmoPro = null;
+function aiJudgeEmotionNow(text, role) {
+  const _key = String(text || "") + "|" + String(role || "");
+  if (_aiEmoPro && _aiEmoPro.key === _key) return _aiEmoPro.p;
+  const _p = (async () => {
+    try {
+      const cfg = getCfg();
+      if (!cfg.llmEnabled || !cfg.llmKey) return null;
+      const prof = loadVoiceProfile();
+      const qcC = (quickChars && quickChars.chars || []).find(x => x.name === (role || prof.current || ""));
+      let emos = ((qcC && qcC.emotions) || []).map(e => ({ key: e.key, label: e.label }));
+      if (!emos.length) emos = [{key:"neutral",label:"平静"},{key:"joy",label:"喜悦"},{key:"sad",label:"悲伤"},{key:"angry",label:"愤怒"},{key:"surprised",label:"惊讶"},{key:"fear",label:"恐惧"}];
+      const r = await svcRequest(cfg.serverUrl, "POST", "/llm/emotion", {
+        base: cfg.llmBaseUrl || "https://api.openai.com/v1", key: cfg.llmKey, model: cfg.llmModel || "gpt-4o-mini",
+        text: String(text || "").slice(0, 1200), role: role || prof.current || "", setting: (qcC && qcC.setting) || "", emotions: emos,
+      }, { timeoutMs: 6000 });
+      const j = r.jsonSafe ? r.jsonSafe() : (r.json || {});
+      if (j && j.ok && j.emotion) return String(j.emotion);
+    } catch (e) { /* noop */ }
+    return null;
+  })();
+  _aiEmoPro = { key: _key, p: _p };
+  return _p;
+}
+
 Hooks.on("chatMessage", (chatLog, message, chatData) => {
     (window.__fvttTTSHooks = window.__fvttTTSHooks || {}).chatMessage = true;
     handleCommand(chatLog, message, chatData);
@@ -4028,6 +4056,28 @@ if (_fv >= 13) {
 // 聊天文档同步是数据库级(可靠) → 其他客户端(pl)收到 update 立即播放 — socket 广播不通/延迟时不再等 15s 兜底
 // 新消息(create)也检测附件角色包 — "选择文档"上传的消息走 create 不触发 update, 1.6.15 全路径覆盖
 Hooks.on("createChatMessage", (message) => { try { _detectCharAttachment(message); } catch (e) { /* noop */ } });
+// AI 选立绘(1.6.24): 异步 LLM 按台词+角色提示词判情绪 → 按情绪分组重算立绘写回消息(跨端一致) + 本端即时重插;
+// LLM 慢/失败则保留发送时的规则立绘(不阻塞聊天)
+Hooks.on("createChatMessage", (message) => {
+  try {
+    const _fl = (message && message.flags && message.flags[MODULE]) || {};
+    const _roleN = _fl.role || "";
+    if (!_roleN || !message || !message.content) return;
+    (async () => {
+      try {
+        const _e = await aiJudgeEmotionNow(String(message.content), _roleN);
+        if (!_e) return;
+        const cD = (quickChars && quickChars.chars || []).find(x => x.name === _roleN);
+        if (!cD || !Array.isArray(cD.sprites) || !cD.sprites.length) return;
+        const _base = spriteBucketForEmotion(cD.sprites, _e);
+        const _rot = getSpriteRotation(_roleN + "|" + _e + "|ai", _e);
+        const _av = cD.sprites[(_base + _rot) % cD.sprites.length];
+        await message.update({ flags: { [MODULE]: { ..._fl, emotion: _e, avatar: _av } } }).catch(() => {});
+        try { if (message.element) applyEmotionAvatar(message, message.element); } catch (e2) { /* noop */ }
+      } catch (e) { /* noop */ }
+    })();
+  } catch (e) { /* noop */ }
+});
 Hooks.on("updateChatMessage", (message, changed) => {
   try {
     (window.__fvttTTSHooks = window.__fvttTTSHooks || {}).updateChat = true;
