@@ -284,7 +284,7 @@ let zhDict = null;
 async function ensureZhDict() {
   if (zhDict) return zhDict;
   try {
-    const resp = await fetch(`modules/${MODULE}/languages/cn.json`);
+    const resp = await fetch(`modules/${MODULE}/languages/cn.json`, { signal: AbortSignal.timeout(5000) });
     const json = await resp.json();
     zhDict = json && typeof json === "object" ? json : {};
   } catch (e) { zhDict = {}; }
@@ -779,6 +779,9 @@ function runnerChoices() {
 async function announceTtsService() {
   try {
     const cfg = getCfg();
+    // 代理模式(https 远程/跨网/9881 不可达→CanDirect=false): 本端不探测/不广播, 服务声明只由引擎可达端(CanDirect=true)发 —
+    // 否则玩家端周期性对不可达 serverUrl 发挂起探测, 占用浏览器连接池拖慢页面加载(HTTP/1.1 每域 6 连接被占)
+    if (window.__fvttTTSCanDirect === false) return;
     let url = (cfg.serverUrl && cfg.serverUrl !== "auto") ? cfg.serverUrl : null;
     if (!url) {
       // auto: 本机可能跑着 9881 服务(默认主持人场景) → 探测本机; https 页面直连 http 必被拦, 直接跳过声明
@@ -3387,8 +3390,8 @@ Hooks.once("ready", () => {
       svcRequest(c0.serverUrl, "POST", "/llm", {
         base: c0.llmBaseUrl || "https://api.openai.com/v1", key: c0.llmKey, model: c0.llmModel || "gpt-4o-mini",
         text: "ping", emotions: [{ key: "calm", label: "平静" }],
-      }, { timeoutMs: 15000 })
-        .then((r) => { if (r && !r.ok && r.status >= 400) { try { window.__fvttTTSLlmBroken = true; } catch (e) { /* noop */ } } })
+      }, { timeoutMs: 5000 })
+        .then((r) => { if (r && !r.ok) { try { window.__fvttTTSLlmBroken = true; } catch (e) { /* noop */ } } })
         .catch(() => { try { window.__fvttTTSLlmBroken = true; } catch (e) { /* noop */ } });
     } catch (e) { /* noop */ }
   }, 3000);

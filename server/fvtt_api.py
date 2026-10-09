@@ -1,4 +1,4 @@
-﻿"""
+"""
 # WebAPI文档 (fvtt_api.py — GPT-SoVITS API for Foundry VTT TTS module)
 
 本文件是 GPT-SoVITS 官方 `api_v2.py` 的改版（MIT License 允许复制修改，见原项目
@@ -1621,6 +1621,13 @@ async def tts_handle(req: dict):
                     return _respond_with_file(mp3_bytes, "audio/mpeg", req)
             return _respond_with_file(audio_data, f"audio/{media_type}", req)
     except Exception as e:
+        # 失败落盘(400 详情): 排查并发/多角色窗口下玩家端合成失败 — 引擎侧确认收到请求及具体原因
+        try:
+            with open(os.path.join(os.path.dirname(__file__), "tts-requests.log"), "a", encoding="utf-8") as _lf:
+                _lf.write("[%s] [tts-FAIL] http400 role=%r ref=%r aux=%s err=%r\n" % (
+                    time.strftime("%H:%M:%S"), req.get("role"), req.get("ref_audio_path"), str(req.get("aux_ref_audio_paths") or [])[:140], str(e)[:300]))
+        except Exception:
+            pass
         return JSONResponse(status_code=400, content={"message": "tts failed", "Exception": str(e)})
 
 

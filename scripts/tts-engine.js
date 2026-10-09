@@ -287,6 +287,7 @@ export async function gptSovitsSynth(text, lang, { serverUrl, speedFactor = 1, o
   };
   // 服务端合成代理优先(socket 回传 base64): 任意端(远程 GM/玩家)都走服务器本机 9881, 无 Mixed Content/证书/拓扑差异;
   // 代理不可用(旧版 Foundry/服务未注册/超时)时退回直连(本地设备仍有声)
+  let proxyFail = "";
   try {
     const pr = await gptSovitsSocketProxy(payload, { engine: "gpt", timeoutMs: 150000 });
     if (pr && pr.ok && pr.b64) {
@@ -301,11 +302,16 @@ export async function gptSovitsSynth(text, lang, { serverUrl, speedFactor = 1, o
         return { blob: null, audioUrl: pr.audioUrl || "", dataUri };
       }
       return { url: pr.audioUrl && !overrides ? pr.audioUrl : dataUri, audioUrl: pr.audioUrl || "", dataUri };
+    } else if (pr && !pr.ok) {
+      // 引擎/转发返回失败(400/500/超时): 提取详情供上层报告定位(合成路径失败是核心问题, 不再吞成通用"代理不可用")
+      try {
+        proxyFail = String((pr.text || (pr.json && (pr.json.message || pr.json.Exception || pr.json.detail)) || "")).slice(0, 300) || ("status=" + String(pr.status || ""));
+      } catch (e) { /* noop */ }
     }
-  } catch (e) { /* 代理失败 → 直连 */ }
+  } catch (e) { /* 代理失败 → 直连 */ proxyFail = String((e && e.message) || e).slice(0, 300); }
   // 代理模式玩家(skipDirect=true): 代理失败直接报清晰错误, 不直连 — 直连必失败(https Mixed-Content / 本机无引擎 fetch status 0 → "http0")
   if (skipDirect) {
-    const pErr = new Error("代理合成不可用(主机 TTS 代理未响应), 请确认主机在线后重试");
+    const pErr = new Error("代理合成不可用(" + (proxyFail || "主机 TTS 代理未响应") + "), 请确认主机在线后重试");
     pErr.proxyUnavailable = true;
     throw pErr;
   }
@@ -410,7 +416,7 @@ export async function synthEdge(text, lang, { serverUrl, speedFactor = 1, voice 
 export async function gptSovitsStatus(serverUrl) {
   const base = String(serverUrl || "http://127.0.0.1:9880").replace(/\/+$/, "");
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 8000);
+  const timer = setTimeout(() => ctrl.abort(), 5000);
   try {
     const resp = await fetch(base + "/status", { signal: ctrl.signal });
     if (!resp.ok) return { ok: false };
