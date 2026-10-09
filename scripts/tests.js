@@ -303,7 +303,10 @@ async function sc14() {
   }).slice(0, 3);
   const pl = onlinePlayers();
   if (!pl.length) return recSkip("压力在玩家电脑: 多角色并发需在线玩家(每个玩家一个角色, 同秒发声)");
-  const items = roles.map((role, i) => ({ user: pl[i % pl.length], role, emotion: "", text: `并发测试:${role}` }));
+  const items = roles.map((role, i) => {
+    const cc = charCtx(role, "");
+    return { user: pl[i % pl.length], role, emotion: "", text: `并发测试:${role}`, ref: cc.ref || "", promptText: cc.promptText || "", promptLang: cc.promptLang || "" };
+  });
   const r = await runStress(pl, { mode: "combo", items });
   const acks = (r && r.acks) || [];
   return ev(!!(r && r.ok !== false) && acks.some((a) => a.ok !== false), {
@@ -319,7 +322,10 @@ async function sc15() {
   const emos = ["angry", "happy"];
   const pl = onlinePlayers();
   if (!pl.length) return recSkip("压力在玩家电脑: 多语气并发需在线玩家参与");
-  const items = emos.map((em, i) => ({ user: pl[i % pl.length], role, emotion: em, text: `语气测试:${em}` }));
+  const items = emos.map((em, i) => {
+    const cc = charCtx(role, em);
+    return { user: pl[i % pl.length], role, emotion: em, text: `语气测试:${em}`, ref: cc.ref || "", promptText: cc.promptText || "", promptLang: cc.promptLang || "", auxRef: cc.auxRef || "", emotionMix: cc.emotionMix };
+  });
   const r = await runStress(pl, { mode: "combo", items });
   const acks = (r && r.acks) || [];
   return ev(!!(r && r.ok !== false) && acks.some((a) => a.ok !== false), {
@@ -559,13 +565,19 @@ function onlinePlayers() {
   } catch (e) { return []; }
 }
 
-// 角色/语气组合分发到在线玩家(循环分配, 保证"多个一起"真实多端并发)
+// 角色/语气组合分发到在线玩家(循环分配, 保证"多个一起"真实多端并发);
+// 条目自带角色上下文(GM 从 quickChars 取好下发) → 玩家端不依赖本地 quickChars 也能正确合成
 function comboItems(combos) {
   const pl = onlinePlayers();
   const out = [];
   if (!pl.length) return out;
   combos.forEach(([role, em], i) => {
-    out.push({ user: pl[i % pl.length], role, emotion: em || "", text: `并发测试 ${role || "角色"}/${em || "默认"}` });
+    const cc = charCtx(role, em || "");
+    out.push({
+      user: pl[i % pl.length], role, emotion: em || "", text: `并发测试 ${role || "角色"}/${em || "默认"}`,
+      ref: cc.ref || "", promptText: cc.promptText || "", promptLang: cc.promptLang || "",
+      auxRef: cc.auxRef || "", emotionMix: cc.emotionMix,
+    });
   });
   return out;
 }
@@ -613,13 +625,14 @@ async function gmStress(id, title, cfg2, expectMin) {
 }
 
 async function fireTestBatch(items) {
-  // items: [{user, role, emotion, text, stress}] — GM 端发起, 各玩家收到后在自己电脑执行并回执
+  // items: [{user, role, emotion, text, stress, ref/promptText/...}] — GM 端发起, 各玩家收到后在自己电脑执行并回执
   const seq = ++_batchAc.seq;
   _batchAc.acks = [];
   window.__fvttTTSTestBatchDone = null;
   window.__fvttTTSTestBatchAcks = [];
   try {
-    await moduleEmit("test-batch", { __type: "test-batch", seq, items, from: T.user }, { timeoutMs: 60000 }).catch(() => null);
+    // 裸 emit(fire-and-forget): 服务器把 module 事件中继给其他客户端; 无需 rid 响应 → 不阻塞等待
+    game.socket.emit("module." + MODULE, { __type: "test-batch", seq, items, from: T.user });
   } catch (e) { /* noop */ }
   // 等待回执: 每个目标玩家(去重)应回 1 条汇总(或拒绝)
   const targets = new Set((items || []).map((i) => i && i.user).filter(Boolean)).size;
@@ -630,7 +643,7 @@ async function fireTestBatch(items) {
       if (a.some((x) => x && x.declined)) return true;
       return got.size >= targets ? true : null;
     } catch (e) { return null; }
-  }, 45000, 500);
+  }, 40000, 400);
   return { seq, targets, ok: true, acks: (window.__fvttTTSTestBatchAcks || []).slice() };
 }
 
@@ -681,18 +694,19 @@ async function handleTestBatch(data) {
           if (viaMsg) {
             const cc = charCtx(it.role || "", it.emotion || "");
             const flags = { synthRequest: { text: String(it.text || `压力${i + 1}`), lang: "zh", role: String(it.role || ""), provider: "gpt-sovits" }, role: String(it.role || "") };
-            if (cc.ref) flags.ref = cc.ref;
-            if (cc.promptText) flags.promptText = cc.promptText;
-            if (cc.promptLang) flags.promptLang = cc.promptLang;
+            if (it.ref || cc.ref) flags.ref = it.ref || cc.ref;
+            if (it.promptText || cc.promptText) flags.promptText = it.promptText || cc.promptText;
+            if (it.promptLang || cc.promptLang) flags.promptLang = it.promptLang || cc.promptLang;
             const m = await ChatMessage.create({ content: String(it.text || `压力${i + 1}`), speaker: { alias: T.user || "玩家" }, flags: { [MODULE]: flags } });
             if (m && m.id) doneN++;
           } else {
             const cc = charCtx(it.role || "", it.emotion || "");
             const ov = {};
-            if (cc.ref) ov.refAudioPath = cc.ref;
-            if (cc.promptText) ov.promptText = cc.promptText;
-            if (cc.promptLang) ov.promptLang = cc.promptLang;
-            if (cc.auxRef) ov.auxRefAudioPaths = [cc.auxRef];
+            if (it.ref || cc.ref) ov.refAudioPath = it.ref || cc.ref;
+            if (it.promptText || cc.promptText) ov.promptText = it.promptText || cc.promptText;
+            if (it.promptLang || cc.promptLang) ov.promptLang = it.promptLang || cc.promptLang;
+            if (it.auxRef || cc.auxRef) ov.auxRefAudioPaths = [it.auxRef || cc.auxRef];
+            if (typeof it.emotionMix === "number" || typeof cc.emotionMix === "number") ov.emotionMix = typeof it.emotionMix === "number" ? it.emotionMix : cc.emotionMix;
             const r = await gptSovitsSynth(String(it.text || "压力测试"), "zh", { serverUrl: cfg().serverUrl, speedFactor: 1, overrides: Object.keys(ov).length ? ov : null, mediaType: "mp3", asBlob: true, role: String(it.role || ""), skipDirect: dbg.canDirect() !== "direct" });
             if (r && r.blob && r.blob.size > 0) {
               doneN++;
