@@ -2273,11 +2273,13 @@ async def import_session(request: Request):
     size = int(body.get("size") or 0)
     if size <= 0 or size > 8 * 1024 * 1024 * 1024:
         return JSONResponse(status_code=400, content={"ok": False, "message": "size 无效(0~8GB)"})
+    target = str(body.get("target") or "/characters/import")
+    ctype = str(body.get("contentType") or "application/octet-stream")
     sid = uuid.uuid4().hex[:16]
     tmp = os.path.join(os.getcwd(), "fvtt_chars", ".tmp_imports")
     os.makedirs(tmp, exist_ok=True)
     path = os.path.join(tmp, "%s.zip" % sid)
-    _IMPORT_SESSIONS[sid] = {"path": path, "total": size, "received": 0, "ts": time.time()}
+    _IMPORT_SESSIONS[sid] = {"path": path, "total": size, "received": 0, "ts": time.time(), "target": target, "ctype": ctype}
     return {"ok": True, "session": sid}
 
 
@@ -2314,6 +2316,12 @@ async def import_finish(request: Request, session: str = ""):
             os.remove(s["path"])
         except Exception:
             pass
+    # 按目标分发: 参考音频 → 落盘 imports/; 角色包 → zip 导入
+    if s.get("target") == "/ref-import":
+        ref_rel, fname, err = _import_ref_audio(data, s.get("ctype") or "application/octet-stream")
+        if err:
+            return JSONResponse(status_code=400, content={"ok": False, "message": err})
+        return {"ok": True, "name": fname, "ref_audio_path": ref_rel, "message": "参考音频导入成功"}
     name, err = _import_char_zip(data)
     if err:
         return JSONResponse(status_code=400, content={"ok": False, "message": err})
@@ -2419,17 +2427,8 @@ def _copytree(src, dst):
     _sh.copytree(src, dst, dirs_exist_ok=True)
 
 
-@APP.post("/ref-import")
-async def ref_import(request: Request, role: str = None, slot: str = None):
-    """导入参考音频(原始字节).
-
-    role+slot 提供: 落盘到角色 speech/ 目录并自动绑定到该语气槽(返回角色目录内相对路径);
-    否则: 存到通用 fvtt_chars/imports/.
-    """
-    data = await request.body()
-    if not data:
-        return JSONResponse(status_code=400, content={"ok": False, "message": "empty body"})
-    ctype = (request.headers.get("content-type") or "").split(";")[0].strip().lower()
+def _import_ref_audio(data: bytes, ctype: str, role: str = None, slot: str = None):
+    """共用: 参考音频落盘; 返回 (ref_rel, fname, err)。"""
     ext_map = {
         "audio/wav": "wav", "audio/x-wav": "wav", "audio/wave": "wav",
         "audio/mpeg": "mp3", "audio/mp3": "mp3",
@@ -2439,18 +2438,16 @@ async def ref_import(request: Request, role: str = None, slot: str = None):
         "audio/mp4": "m4a", "audio/x-m4a": "m4a",
         "audio/webm": "webm",
     }
-    ext = ext_map.get(ctype, "")
+    ext = ext_map.get(ctype.split(";")[0].strip().lower(), "")
     if not ext:
-        return JSONResponse(status_code=400, content={"ok": False, "message": "不支持的音频格式: %s" % ctype})
-    if len(data) > 200 * 1024 * 1024:
-        return JSONResponse(status_code=400, content={"ok": False, "message": "音频文件过大(>200MB)"})
+        return None, None, "不支持的音频格式: %s" % ctype
     ts = time.strftime("%Y%m%d_%H%M%S")
     try:
         if role:
             role = os.path.basename(str(role))
             d = os.path.join(_CHARS_ROOT, role)
             if not os.path.isdir(d):
-                return JSONResponse(status_code=400, content={"ok": False, "message": "角色 %s 不存在" % role})
+                return None, None, "角色 %s 不存在" % role
             speech_dir = os.path.join(d, "speech")
             os.makedirs(speech_dir, exist_ok=True)
             fname = "%s_%s.%s" % (slot if slot in EMOTION_SLOT_KEYS else "ref", ts, ext)
@@ -2464,7 +2461,6 @@ async def ref_import(request: Request, role: str = None, slot: str = None):
             ref_rel = "fvtt_chars/imports/" + fname
         with open(path, "wb") as f:
             f.write(data)
-        # 带 slot: 绑定到角色元数据(提示文本稍后由 /characters/update 或客户端转写后填写)
         if role and slot and slot in EMOTION_SLOT_KEYS:
             cfg = read_char_yaml(role)
             if cfg:
@@ -2480,7 +2476,28 @@ async def ref_import(request: Request, role: str = None, slot: str = None):
                 cfg["emotions"] = by_key
                 save_char_yaml(role, cfg)
     except Exception as e:
-        return JSONResponse(status_code=400, content={"ok": False, "message": "保存失败: %s" % e})
+        return None, None, "保存失败: %s" % e
+    return ref_rel, fname, None
+
+
+@app.post("/ref-import")
+async def ref_import(request: Request, role: str = None, slot: str = None):
+    """导入参考音频(原始字节, 单次; 大音频客户端走分片 → import-finish 分发到此落盘逻辑).
+
+    role+slot 提供: 落盘到角色 speech/ 目录并自动绑定到该语气槽(返回角色目录内相对路径);
+    否则: 存到通用 fvtt_chars/imports/.
+    """
+    data = await request.body()
+    if not data:
+        return JSONResponse(status_code=400, content={"ok": False, "message": "empty body"})
+    if data.strip() in (b"null", b"", b"{}"):
+        return JSONResponse(status_code=400, content={"ok": False, "message": "未收到文件内容(音频读取失败), 请重新选择"})
+    ctype = (request.headers.get("content-type") or "").split(";")[0].strip().lower()
+    if len(data) > 200 * 1024 * 1024:
+        return JSONResponse(status_code=400, content={"ok": False, "message": "音频文件过大(>200MB)"})
+    ref_rel, fname, err = _import_ref_audio(data, ctype, role, slot)
+    if err:
+        return JSONResponse(status_code=400, content={"ok": False, "message": err})
     return {"ok": True, "name": fname, "ref_audio_path": ref_rel, "size": len(data), "content_type": ctype, "role": role, "slot": slot}
 
 

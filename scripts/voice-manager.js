@@ -836,10 +836,10 @@ function safeAssignments() {
         const f0 = files[0];
         this._setBusy(true, t("vm.importing", "上传主参考音频…"));
         try {
-          const r = await this._svcFile("POST", "/ref-import", f0);
-          const j = await r.json();
-          if (!r.ok || !j || !j.ok) throw new Error((j && j.message) || "upload failed: " + String(r.status || ""));
-          mainRefPath = j.ref_audio_path;
+          // 参考音频上传(≤12MB 单次; 大音频自动分片 10MB/片 — 不再单次大 body 丢 FVTT 连接)
+          const r = await importCharPackChunked(this.base, f0, { target: "/ref-import", onProgress: (p) => { try { const _pct = Math.round(p * 100); if (_pct % 20 === 0) this._setBusy(true, t("vm.importing", "上传主参考音频…") + " " + _pct + "%"); } catch (e) { /* noop */ } } });
+          if (!r.ok) throw new Error(r.message || "upload failed");
+          mainRefPath = r.ref_audio_path;
           this._pendingExtra = files.slice(1);
           const n = this._pendingExtra.length;
           body.querySelector(".vm-new-refname").textContent = j.ref_audio_path + (n ? `（另 ${n} 段将自动绑定到语气槽）` : "");

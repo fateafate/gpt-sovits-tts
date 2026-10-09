@@ -3460,8 +3460,8 @@ Hooks.once("ready", () => {
         }
       } catch (e2) { /* noop */ }
     };
-    document.addEventListener("drop", _dropFile, true);   // 捕获阶段(先于 Foundry 元素级处理)
-    document.addEventListener("drop", _dropFile, false);  // 冒泡兜底(Foundry 若在捕获阶段吞掉事件时仍可触发)
+    window.addEventListener("drop", _dropFile, true);    // window 捕获(最外层, 先于 Foundry 任何 drop 处理, 防吞事件)
+    window.addEventListener("drop", _dropFile, false);   // 冒泡兜底(捕获被 Foundry 吞时仍可触发)
   } catch (e) { /* noop */ }
   buildUI();
   attachTyping();

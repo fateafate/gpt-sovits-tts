@@ -55,19 +55,20 @@ export async function bytesToB64Async(bytes) {
 /** 角色包导入(自动分片, 1.6.12): ≤12MB 单次原路径; 大包分片(每片 10MB, 边转边发不保留全量 b64,
  *  引擎边收边落盘, 消除单次几百 MB body 与内存峰值 → 不再丢 FVTT 连接)。
  *  返回 {ok, name, message}; onProgress(0~1) 可选。 */
-export async function importCharPackChunked(base, file, { onProgress } = {}) {
+export async function importCharPackChunked(base, file, { target = "/characters/import", onProgress } = {}) {
   const CH = 10 * 1024 * 1024;
   const ab = await file.arrayBuffer();
   const bytes = new Uint8Array(ab);
   const total = bytes.length;
+  const ctype = file.type || "application/octet-stream";
   if (total <= 12 * 1024 * 1024) {
     const b64 = await bytesToB64Async(bytes);
     if (onProgress) { try { onProgress(1); } catch (e) { /* noop */ } }
-    const r = await svcRequest(base, "POST", "/characters/import", null, { b64Body: b64, contentType: "application/octet-stream", timeoutMs: 300000 });
+    const r = await svcRequest(base, "POST", target, null, { b64Body: b64, contentType: ctype, timeoutMs: 300000 });
     const j = (r.jsonSafe ? r.jsonSafe() : (r.json || {})) || {};
-    return { ok: !!(r.ok && j.ok), name: j.name || "", message: j.message || "" };
+    return { ok: !!(r.ok && j.ok), status: r.status || 0, ...j };
   }
-  const st = await svcRequest(base, "POST", "/characters/import-session", { size: total, name: file.name || "import.zip" }, { timeoutMs: 60000 });
+  const st = await svcRequest(base, "POST", "/characters/import-session", { size: total, name: file.name || "import.zip", target, contentType: ctype }, { timeoutMs: 60000 });
   const sj = (st.jsonSafe ? st.jsonSafe() : (st.json || {})) || {};
   if (!st.ok || !sj.ok || !sj.session) return { ok: false, name: "", message: "无法创建上传会话: " + (sj.message || String(st.status || "")) };
   const sid = sj.session;
@@ -92,7 +93,7 @@ export async function importCharPackChunked(base, file, { onProgress } = {}) {
   const fj = (fr.jsonSafe ? fr.jsonSafe() : (fr.json || {})) || {};
   if (!fr.ok || !fj.ok) return { ok: false, name: "", message: "合并导入失败: " + (fj.message || String(fr.status || "")) };
   if (onProgress) { try { onProgress(1); } catch (e) { /* noop */ } }
-  return { ok: true, name: fj.name || "", message: fj.message || "" };
+  return { ok: true, status: fr.status || 0, ...fj };
 }
 
 export class PlaybackQueue {
