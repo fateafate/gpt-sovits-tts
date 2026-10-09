@@ -46,7 +46,7 @@ async function gmTtsProxy(d) {
       jbody = JSON.stringify(j);
     } catch (e) { jbody = "{}"; }
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), Math.min(Number(d.timeoutMs) || 30000, 120000));
+    const timer = setTimeout(() => ctrl.abort(), Math.min(Number(d.timeoutMs) || 120000, 120000));
     try {
       const resp = await fetch(_base() + path, {
         method,

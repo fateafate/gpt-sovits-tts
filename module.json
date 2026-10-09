@@ -2,7 +2,7 @@
   "id": "gpt-sovits-tts",
   "title": "GPT-SoVITS 语音朗读 + 听写 (FVTT TTS Voice)",
   "description": "打字自动语音朗读：聊天发送/打字停顿即用 GPT-SoVITS 本地合成角色语音朗读；内置浏览器系统语音与本地听写(语音转文字)、麦克风听写直发聊天。借鉴了不二咲爱笑大佬制作的Shinsekai，在这里感激不二咲爱笑大佬，制作人跑团恶魔，QQ群：775375241",
-  "version": "1.5.7",
+  "version": "1.5.8",
   "authors": [
     {
       "name": "gpt-sovits-tts",

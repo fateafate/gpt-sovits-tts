@@ -260,7 +260,7 @@ export async function gptSovitsSocketProxy(payload, { engine = "gpt", timeoutMs 
     const hasWrap = !!(payload && payload.path);
     const req = hasWrap ? payload : Object.assign({}, { method: "POST", path: "/tts", json: payload });
     const gmSelf = !!(game && game.user && game.user.isGM);
-    const r = await moduleEmit("tts-proxy", Object.assign({}, req, { engine, user: (() => { try { return (game.user && game.user.name) || ""; } catch (e) { return ""; } })() }), { timeoutMs: gmSelf ? 3000 : timeoutMs });
+    const r = await moduleEmit("tts-proxy", Object.assign({}, req, { engine, user: (() => { try { return (game.user && game.user.name) || ""; } catch (e) { return ""; } })() }, { timeoutMs: gmSelf ? 3000 : timeoutMs }), { timeoutMs: gmSelf ? 3000 : timeoutMs });
     if (r && typeof r === "object") return r;
   } catch (e) { /* fallthrough → 直连 */ }
   return null;

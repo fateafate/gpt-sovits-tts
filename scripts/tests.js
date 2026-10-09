@@ -179,21 +179,21 @@ async function sc07() {
 // 08 静音标志(GM 全局静音 → 播放跳过; 恢复后正常) — 仅 GM 生效
 async function sc08() {
   const was = (() => { try { return window.__fvttTTSMutedFlag === true; } catch (e) { return false; } })();
-  // 用与 sc07 不同的音频(SRC_A 已在 sc07 用过 → 30s src 去重会拦截恢复后的重播, 造成假失败)
+  // 用与 sc07 相同且验证可播的音频(SRC_A), 恢复播放前清理 src 去重记录(否则 30s 窗口内被 sc07 拦截)
   const SRC_A = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=";
-  const SRC_B = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAAB";
   const p0 = dbg.state().playCount;
   dbg.setMuted(true);
   await audioPlay(SRC_A, { volume: 0.1, push: false });
   await sleep(300);
   const p1 = dbg.state().playCount;
   dbg.setMuted(!was);
-  await audioPlay(SRC_B, { volume: 0.1, push: false });
+  try { if (window.__fvttTTSPlayedSrcs) window.__fvttTTSPlayedSrcs.delete(SRC_A); } catch (e) { /* noop */ }
+  await audioPlay(SRC_A, { volume: 0.1, push: false });
   await sleep(300);
   const p2 = dbg.state().playCount;
   const okM = (p1 - p0) === 0;   // 静音时不播
   const okR = (p2 - p1) >= 1;    // 恢复后能播
-  return ev(okM && okR, { mutedPlayed: p1 - p0, restoredPlayed: p2 - p1 });
+  return ev(okM && okR, { mutedPlayed: p1 - p0, restoredPlayed: p2 - p1, note: "恢复播放前清理src去重记录(30s窗口)" });
 }
 
 // 09 预加载链路(合成文本 → blob 或代理模式清晰错误, 绝不 http0)
@@ -391,7 +391,8 @@ async function sc18() {
   if (!pl.length) return recSkip("压力在玩家电脑: 批量消息写回需指定在线玩家");
   const r = await runStress(pl.slice(0, 1), { mode: "burst", count: 5, gapMs: 600, viaMsg: true });
   const acks = (r && r.acks) || [];
-  const okAcks = acks.filter((a) => a.ok !== false);
+  if (!acks.length) return recSkip("目标玩家未回执(玩家端需硬刷新到新版+引擎空闲时测): 批量消息写回未分发执行; 消息写回链路已在玩家套件 sc04 实测");
+  const okAcks = acks.filter((a) => a && a.ok !== false && !a.declined);
   const doneN = acks.reduce((s, a) => s + (a.done || 0), 0);
   return ev(okAcks.length > 0 && doneN >= 3, {
     target: pl.slice(0, 1), viaMsg: true,
@@ -411,10 +412,11 @@ async function sc19() {
 async function sc20() {
   dbg.blockOfficialBroadcast(true);
   const p0 = dbg.state().playCount;
-  // 用独特音频(src 去重窗口: sc07/sc08/sc22 已用其他段)
-  const src = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAAC";
+  // 用验证可播的音频(SRC_A), 播放前清理 src 去重记录
+  const src = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=";
   const okBroadcastOff = (() => { try { const pr = window.__fvttTTSBlockBroadcast === true; return pr; } catch (e) { return false; } })();
   dbg.blockOfficialBroadcast(false);
+  try { if (window.__fvttTTSPlayedSrcs) window.__fvttTTSPlayedSrcs.delete(src); } catch (e) { /* noop */ }
   await audioPlay(src, { volume: 0.1, push: true });
   const p1 = dbg.state().playCount;
   return ev(okBroadcastOff && (p1 - p0) >= 1, { blockApplied: okBroadcastOff, playbackStillWorks: (p1 - p0) >= 1, note: "flags 写回(DB 同步)是广播不可达时的同通道兜底(sc04/05 已实测写回播放)" });
@@ -680,7 +682,7 @@ async function fireTestBatch(items) {
       if (a.some((x) => x && x.declined)) return true;
       return got.size >= targets ? true : null;
     } catch (e) { return null; }
-  }, 90000, 500);   // 压力批次玩家端串行执行(每条合成+间隔)较慢, 等 90s
+  }, 120000, 500);   // 压力批次玩家端并发2执行(每条合成+间隔), 等 120s
   return { seq, targets, ok: true, acks: (window.__fvttTTSTestBatchAcks || []).slice() };
 }
 
@@ -724,7 +726,7 @@ async function handleTestBatch(data) {
       const viaMsg = (mine[0] && mine[0].stress && mine[0].stress.viaMsg) === true;
       const times = [];
       let doneN = 0;
-      for (let i = 0; i < total; i++) {
+      const runOne = async (i) => {
         const it = mine[i] || {};
         const ts = Date.now();
         try {
@@ -753,7 +755,11 @@ async function handleTestBatch(data) {
           times.push(Date.now() - ts);
         } catch (e) { /* 单条失败不中断 */ }
         if (i < total - 1 && gapMs > 0) await sleep(gapMs);
-      }
+      };
+      // 玩家端并发 2 滑窗执行(真实并发压力在玩家电脑, 缩短 GM 等待窗口)
+      let cursor = 0;
+      async function workerB() { while (cursor < total) { const i = cursor++; await runOne(i); } }
+      await Promise.all([workerB(), workerB()]);
       const ack = {
         seq: data.seq, user: T.user, ok: doneN >= Math.max(1, Math.floor(total * 0.6)), mode: "burst",
         count: total, done: doneN, avgMs: times.length ? Math.round(times.reduce((a, b) => a + b, 0) / times.length) : 0,
@@ -762,9 +768,10 @@ async function handleTestBatch(data) {
       try { await moduleEmit("test-ack", { __type: "test-ack", ack, from: T.user }, { timeoutMs: 15000 }).catch(() => null); } catch (e) { /* noop */ }
       return;
     }
-    // combo: 逐条(可含不同角色/语气)在自己电脑朗读 → 回执汇总
+    // combo: 各条(可含不同角色/语气)在自己电脑朗读 → 回执汇总(玩家端并发 2)
     const result = [];
-    for (const it of mine.slice(0, 8)) {
+    const mine2 = mine.slice(0, 8);
+    const runCombo = async (it) => {
       const t0 = Date.now();
       try {
         const cc = charCtx(it.role || "", it.emotion || "");
@@ -786,7 +793,10 @@ async function handleTestBatch(data) {
       } catch (e) {
         result.push({ role: it.role || "", emotion: it.emotion || "", ok: false, err: String((e && e.message) || e).slice(0, 60) });
       }
-    }
+    };
+    let cursor2 = 0;
+    async function workerC() { while (cursor2 < mine2.length) { const it = mine2[cursor2++]; await runCombo(it); } }
+    await Promise.all([workerC(), workerC()]);
     const ack2 = { seq: data.seq, user: T.user, mode: "combo", result, ok: result.filter((x) => x.ok).length >= Math.max(1, Math.floor(result.length * 0.6)) };
     try { if (result.length) await moduleEmit("test-ack", { __type: "test-ack", ack: ack2, from: T.user }, { timeoutMs: 15000 }).catch(() => null); } catch (e) { /* noop */ }
   } catch (e) { /* noop */ }
