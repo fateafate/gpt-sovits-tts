@@ -1,0 +1,111 @@
+﻿    return result;
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Display a chat message with the result of a rest.
+   *
+   * @param {RestConfiguration} config  Rest configuration.
+   * @param {RestResult} result         Result of the rest operation.
+   * @returns {Promise<ChatMessage>}    Chat message that was created.
+   * @protected
+   */
+  async _displayRestResultMessage(config, result) {
+    let { dhd, dhp } = result;
+    if ( config.type === "short" ) dhd *= -1;
+    const diceRestored = dhd !== 0;
+    const healthRestored = dhp !== 0;
+    const longRest = config.type === "long";
+    const length = longRest ? "Long" : "Short";
+    const typeConfig = CONFIG.DND5E.restTypes[config.type] ?? {};
+
+    // Determine the chat message to display
+    let message;
+    if ( diceRestored && healthRestored ) message = `DND5E.REST.${length}.Result.Full`;
+    else if ( longRest && !diceRestored && healthRestored ) message = "DND5E.REST.Long.Result.HitPoints";
+    else if ( longRest && diceRestored && !healthRestored ) message = "DND5E.REST.Long.Result.HitDice";
+    else message = `DND5E.REST.${length}.Result.Short`;
+
+    // Create a chat message
+    const pr = new Intl.PluralRules(game.i18n.lang);
+    let chatData = {
+      content: game.i18n.format(message, {
+        name: this.name,
+        dice: game.i18n.format(`DND5E.HITDICE.Counted.${pr.select(dhd)}`, { number: formatNumber(dhd) }),
+        health: game.i18n.format(`DND5E.HITPOINTS.Counted.${pr.select(dhp)}`, { number: formatNumber(dhp) })
+      }),
+      flavor: this.createRestFlavor(config, result),
+      type: "rest",
+      rolls: result.rolls,
+      speaker: ChatMessage.getSpeaker({ actor: this, alias: this.name }),
+      system: {
+        activations: ActivationsField.getActivations(this, typeConfig?.activationPeriods ?? []),
+        deltas: ActorDeltasField.getDeltas(result.clone, {
+          actor: result.updateData, delete: result.deleteItems, item: result.updateItems
+        }),
+        request: config.request,
+        type: result.type
+      }
+    };
+    if ( config.request ) foundry.utils.setProperty(chatData, "flags.dnd5e.requestResult", {
+      actorUuid: this.uuid, requestId: config.request.id
+    });
+    ChatMessage.applyRollMode(chatData, game.settings.get("core", "rollMode"));
+    return ChatMessage.create(chatData);
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Generate rest flavor text based on the provided configuration.
+   * @param {RestConfiguration} config  Rest configuration.
+   * @param {RestResult} [result]       Result of the rest operation.
+   * @returns {string}
+   */
+  createRestFlavor(config, result) {
+    const typeConfig = CONFIG.DND5E.restTypes[config.type] ?? {};
+    const duration = convertTime(config.duration, "minute");
+    const parts = [formatTime(duration.value, duration.unit)];
+    if ( result?.newDay ?? config.newDay ) parts.push(game.i18n.localize("DND5E.REST.NewDay.Label").toLowerCase());
+    return `${typeConfig.label} (${game.i18n.getListFormatter({ type: "unit" }).format(parts)})`;
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Automatically spend hit dice to recover hit points up to a certain threshold.
+   * @param {object} [options]
+   * @param {number} [options.threshold=3]  A number of missing hit points which would trigger an automatic HD roll.
+   * @returns {Promise<number>}             Number of hit dice spent.
+   */
+  async autoSpendHitDice({ threshold=3 }={}) {
+    if ( !this.system.attributes.hp ) return;
+    const hp = this.system.attributes.hp;
+    const max = Math.max(0, hp.effectiveMax);
+    let diceRolled = 0;
+    while ( (this.system.attributes.hp.value + threshold) <= max ) {
+      const r = await this.rollHitDie();
+      if ( r === null ) break;
+      diceRolled += 1;
+    }
+    return diceRolled;
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Recovers class hit dice during a long rest.
+   *
+   * @param {RestConfiguration} [config]
+   * @param {number} [config.maxHitDice]  Maximum number of hit dice to recover.
+   * @param {number} [config.fraction]    Fraction of max hit dice to recover. Used for NPC recovery and for PCs if
+   *                                      `maxHitDice` isn't specified.
+   * @param {RestResult} [result={}]      Rest result being constructed.
+   * @protected
+   */
+  _getRestHitDiceRecovery({ maxHitDice, fraction, ...config }={}, result={}) {
+    const restConfig = CONFIG.DND5E.restTypes[config.type];
+    if ( !this.system.attributes.hd || !restConfig?.recoverHitDice ) return;
+    fraction ??= game.settings.get("dnd5e", "rulesVersion") === "modern" ? 1 : 0.5;
+

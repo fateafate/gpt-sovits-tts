@@ -867,6 +867,8 @@ function evaluateMessage(message) {
   const style = message.style ?? message.type;
   if (style === CHAT_STYLES.SYSTEM) return null;
   if (style === CHAT_STYLES.OOC && cfg.skipOoc) return null;
+  // 1.6.39 跳过模组机制消息: D&D 短休/长休(type=rest, 无掷骰时rolls为空, skipRolls拦不住) — 不再读"谁执行了短休"
+  if (style === "rest" || /(短休|长休|short rest|long rest)/i.test(rawContent)) return null;
   // v12+ 悄悄话: 不再用 CONST.CHAT_MESSAGE_STYLES.WHISPER(已废弃), 直接看 message.whisper 收件人数组
   const isWhisper = (Array.isArray(message.whisper) && message.whisper.length > 0) || style === "whisper";
   if (isWhisper && cfg.skipWhispers) return null;
