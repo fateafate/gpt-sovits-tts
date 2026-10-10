@@ -3755,8 +3755,8 @@ Hooks.on("chatMessage", (chatLog, message, chatData) => {
           // 1.6.36 手动选立绘也记录判定(测试报告不丢: 手动覆盖, 未测自动切换)
           if (_selSp && window.__fvttTTSSpriteDiag) {
             try {
-              (window.__fvttTTSSpriteDiagList = window.__fvttTTSSpriteDiagList || []).push({ ts: Date.now(), text: String(message.content || "").slice(0, 30), emo: "手动", etLines: 0, cands: 0, av: _selSp, manual: true });
-              console.warn("[gpt-sovits-tts][立绘判定] 文本=" + String(message.content || "").slice(0, 24) + " | 手动选立绘=" + _selSp + "（覆盖自动切换）");
+              (window.__fvttTTSSpriteDiagList = window.__fvttTTSSpriteDiagList || []).push({ ts: Date.now(), role: prof0n, text: String(message.content || "").slice(0, 30), emo: "手动", etLines: 0, cands: 0, av: _selSp, manual: true });
+              console.warn("[gpt-sovits-tts][立绘判定] 角色=" + prof0n + " 文本=" + String(message.content || "").slice(0, 24) + " | 手动选立绘=" + _selSp + "（覆盖自动切换）");
             } catch (e) { /* noop */ }
           }
           if (_selSp) return _selSp;
@@ -3770,9 +3770,9 @@ Hooks.on("chatMessage", (chatLog, message, chatData) => {
             if (window.__fvttTTSSpriteDiag) {
               try {
                 // 1.6.35: 判定结果收集进全局列表 → 立绘测试按钮生成报告发服务器(作者直接读文件)
-                const _diagRow = { ts: Date.now(), text: String(message.content || "").slice(0, 30), emo: _emoS, etLines: String(cD.emotion_tags || "").split(/\n+/).length, cands: _emoList.length, av: _av };
+                const _diagRow = { ts: Date.now(), role: prof0n, text: String(message.content || "").slice(0, 30), emo: _emoS, etLines: String(cD.emotion_tags || "").split(/\n+/).length, cands: _emoList.length, av: _av };
                 (window.__fvttTTSSpriteDiagList = window.__fvttTTSSpriteDiagList || []).push(_diagRow);
-                console.warn("[gpt-sovits-tts][立绘判定] 文本=" + _diagRow.text + " | 情绪=" + _emoS + " | 标注行数=" + _diagRow.etLines + " | 候选数=" + _diagRow.cands + " | 选中=" + _av);
+                console.warn("[gpt-sovits-tts][立绘判定] 角色=" + prof0n + " 文本=" + _diagRow.text + " | 情绪=" + _emoS + " | 标注行数=" + _diagRow.etLines + " | 候选数=" + _diagRow.cands + " | 选中=" + _av);
               } catch (e) { /* noop */ }
             }
             return _av;
