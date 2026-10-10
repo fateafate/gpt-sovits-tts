@@ -557,17 +557,30 @@ export async function svcRequest(base, method, path, bodyJSON, { timeoutMs = 300
     } else if (method !== "GET" && bodyJSON !== undefined) {
       reqBody = JSON.stringify(bodyJSON);
     }
-    const r = await fetch(b + path, { method: String(method || "GET").toUpperCase(), headers: hdrs, body: reqBody, signal: AbortSignal.timeout(timeoutMs) });
-    if (binary) {
-      const blob = await r.blob();
-      return { ok: r.ok, status: r.status, _json: null, blob, audioUrl: String(r.headers.get("X-Fvtt-Audio-Url") || r.headers.get("X-Audio-Url") || "").trim(), cache: "miss", direct: true, json: () => Promise.resolve(null), jsonSafe: () => null, text: () => Promise.resolve("") };
+    // 1.6.44 瞬时连接失败重试(ERR_CONNECTION_CLOSED/网络抖动): 最多3次, 间隔0.8s/2s, 3次仍败才 console 诊断
+    let lastErr = null;
+    for (let _try = 0; _try < 3; _try++) {
+      if (_try > 0) { try { await new Promise(r => setTimeout(r, _try === 1 ? 800 : 2000)); } catch (e) { /* noop */ } }
+      try {
+        const r = await fetch(b + path, { method: String(method || "GET").toUpperCase(), headers: hdrs, body: reqBody, signal: AbortSignal.timeout(timeoutMs) });
+        if (binary) {
+          const blob = await r.blob();
+          return { ok: r.ok, status: r.status, _json: null, blob, audioUrl: String(r.headers.get("X-Fvtt-Audio-Url") || r.headers.get("X-Audio-Url") || "").trim(), cache: "miss", direct: true, json: () => Promise.resolve(null), jsonSafe: () => null, text: () => Promise.resolve("") };
+        }
+        const txt = await r.text();
+        let json = null;
+        try { json = JSON.parse(txt); } catch (e) { /* noop */ }
+        const _audioUrl = String(r.headers.get("X-Fvtt-Audio-Url") || r.headers.get("X-Audio-Url") || "").trim();
+        const _cache = String(r.headers.get("X-Fvtt-Cache") || "miss").trim();
+        return { ok: r.ok, status: r.status, _json: json, audioUrl: _audioUrl, cache: _cache, direct: true, json: () => Promise.resolve(json), jsonSafe: () => json, text: () => Promise.resolve(txt) };
+      } catch (e) {
+        lastErr = e;
+        if (_try === 2) {
+          try { console.warn("[gpt-sovits-tts] 直连TTS失败(重试3次仍败): " + (b + path) + " err=" + String((e && e.message) || e).slice(0, 120)); } catch (e2) { /* noop */ }
+        }
+      }
     }
-    const txt = await r.text();
-    let json = null;
-    try { json = JSON.parse(txt); } catch (e) { /* noop */ }
-    const _audioUrl = String(r.headers.get("X-Fvtt-Audio-Url") || r.headers.get("X-Audio-Url") || "").trim();
-    const _cache = String(r.headers.get("X-Fvtt-Cache") || "miss").trim();
-    return { ok: r.ok, status: r.status, _json: json, audioUrl: _audioUrl, cache: _cache, direct: true, json: () => Promise.resolve(json), jsonSafe: () => json, text: () => Promise.resolve(txt) };
+    throw lastErr;
   } catch (e) {
     return { ok: false, status: 0, error: e, direct: true, json: () => Promise.resolve(null), jsonSafe: () => null, text: () => Promise.resolve("") };
   }
