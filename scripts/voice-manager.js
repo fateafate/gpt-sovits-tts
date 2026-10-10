@@ -275,10 +275,7 @@ export class VoiceManager {
       <div class="fvtt-tts-vm-body"></div>
       <footer class="fvtt-tts-vm-foot">
         <button type="button" class="fvtt-tts-vm-back" style="display:none">${t("vm.back", "返回")}</button>
-        <button type="button" class="fvtt-tts-vm-selftest" title="${t("vm.selfTestTitle", "一键跑全部测试并生成报告文件，供作者排查问题")}">🧪 ${t("vm.selfTest", "自检")}</button>
-        <button type="button" class="fvtt-tts-vm-stress" title="${t("vm.stressTestTitle", "高压测试: 并发/长文本/广播风暴等压力场景")}">⚡ ${t("vm.stressTest", "高压")}</button>
-        <button type="button" class="fvtt-tts-vm-speed" title="${t("vm.speedTestTitle", "批量速度测试: 分批次测合成/传输/加载速度, 并压满显卡验证峰值性能")}">🚄 ${t("vm.speedTest", "速度")}</button>
-        <button type="button" class="fvtt-tts-vm-selftestP" title="${t("vm.selfTestPTitle", "玩家自测: 验证本机能否收到并官方播放 GM 语音(玩家端优先)")}">🔬 ${t("vm.selfTestP", "玩家自测")}</button>
+        <button type="button" class="fvtt-tts-vm-usage" title="最新使用测试: 引擎连通→合成播放→立绘切换→风格判定, 一条龙出报告(替代旧自检/高压/速度/玩家自测)">🧪 使用测试</button>
         <span class="fvtt-tts-vm-spacer" style="flex:1"></span>
         <button type="button" class="fvtt-tts-vm-test">${t("vm.test", "试听")}</button>
         <button type="button" class="fvtt-tts-vm-save">${t("vm.save", "保存")}</button>
@@ -286,11 +283,56 @@ export class VoiceManager {
         <button type="button" class="fvtt-tts-vm-runassign" title="${t("vm.runAssignTitle", "给每个账号指定语音由谁的电脑生成(仅主持人)")}">👥 ${t("vm.runAssign", "语音生成者分配")}</button>` : ""}
       </footer>`;
     this.el.querySelector(".fvtt-tts-vm-close").addEventListener("click", () => this.close());
-    this.el.querySelector(".fvtt-tts-vm-selftest").addEventListener("click", () => {
+    this.el.querySelector(".fvtt-tts-vm-usage").addEventListener("click", async () => {
       try {
-        const fn = game.gptSoVitsTTS && game.gptSoVitsTTS.runSelfTest;
-        if (fn) fn();
-        else if (ui && ui.notifications) ui.notifications.info("模块未就绪，稍后再试");
+        const cn = (loadVoiceProfile().current) || "";
+        if (!cn) { ui.notifications.warn("请先选择角色再测"); return; }
+        ui.notifications.info("使用测试开始：引擎连通 → 合成播放 → 立绘切换 → 风格判定");
+        const rows = [];
+        // 1.6.49 使用测试 ①引擎连通
+        try {
+          const rs = await this._svc("GET", "/status");
+          const sj = rs && rs.jsonSafe ? rs.jsonSafe() : null;
+          rows.push("引擎连通: " + (sj && sj.ok ? ("✓ " + String((sj.character && sj.character.name) || "")) : "✗ " + String((sj && sj.message) || "no-ok")));
+        } catch (e) { rows.push("引擎连通: ✗ " + String((e && e.message) || e).slice(0, 60)); }
+        // ②合成+播放(当前角色)
+        try {
+          const api = game.gptSoVitsTTS;
+          if (api && typeof api.speak === "function") { await api.speak("语音合成与播放测试。"); rows.push("合成播放: ✓"); }
+          else rows.push("合成播放: 跳过(模块API未就绪)");
+        } catch (e) { rows.push("合成播放: ✗ " + String((e && e.message) || e).slice(0, 60)); }
+        // ③立绘切换(5条情绪消息, 带spriteTest标记) — 复用立绘测试判定链路
+        window.__fvttTTSSpriteDiag = true;
+        window.__fvttTTSSpriteDiagList = [];
+        const tests = [
+          { t: "哈哈，太棒了！", e: "joy" },
+          { t: "你这个混蛋！", e: "angry" },
+          { t: "呜呜，好难过……", e: "sad" },
+          { t: "什么？！怎么会这样！", e: "surprised" },
+          { t: "好可怕，救命！", e: "fear" },
+        ];
+        for (let i = 0; i < tests.length; i++) {
+          try { await ChatMessage.create({ content: tests[i].t, speaker: { alias: cn }, flags: { "gpt-sovits-tts": { spriteTest: true } } }); } catch (e) { /* noop */ }
+          if (i < tests.length - 1) await new Promise(r => setTimeout(r, 2000));
+        }
+        let waitN = 0;
+        while (waitN < 30 && ((window.__fvttTTSSpriteDiagList || []).length < 5)) { await new Promise(r => setTimeout(r, 200)); waitN++; }
+        const diag = (window.__fvttTTSSpriteDiagList || []).filter(x => x && x.text).slice(-8);
+        rows.push("立绘切换: " + (diag.length >= 5 ? "✓ 5/5判定" : ("✗ 只收到" + diag.length + "/5条")) + (diag.length ? " | 例: " + diag[0].text + "→" + diag[0].emo + "(" + diag[0].av + ")" : ""));
+        // ④朗读风格(当前角色提示词 → 是否已配/将作为AI判语气参考)
+        try {
+          const stP = (typeof getStylePrompt === "function" ? (getStylePrompt(cn) || "") : "");
+          rows.push("朗读风格: " + (stP ? ("✓ 已配: " + String(stP).slice(0, 30) + "（将作为AI判语气的参考，无LLM时按风格词映射情绪）") : "未配（到角色填朗读提示词，会作为AI判语气参考）"));
+        } catch (e) { rows.push("朗读风格: 读取失败"); }
+        window.__fvttTTSSpriteDiag = false;
+        window.__fvttTTSSpriteDiagList = [];
+        // 报告 → 服务器 tts-reports.log
+        let verTxt = "?";
+        try { verTxt = game.modules.get("gpt-sovits-tts") ? game.modules.get("gpt-sovits-tts").version : "?"; } catch (e) { /* noop */ }
+        const reportTxt = "[使用测试报告] " + new Date().toLocaleString("zh-CN") + " | 角色=" + cn + " | 版本=" + verTxt + "\n" + rows.join("\n");
+        console.warn("[gpt-sovits-tts][使用测试]\n" + reportTxt);
+        try { await this._svc("POST", "/diag", { type: "sprite-test-report", report: reportTxt }); } catch (e) { /* noop */ }
+        ui.notifications.info("使用测试完成：报告已发送服务器");
       } catch (e) { /* noop */ }
     });
     const runBtn = this.el.querySelector(".fvtt-tts-vm-runassign");
@@ -322,27 +364,6 @@ export class VoiceManager {
         try { preBtn.disabled = false; preBtn.textContent = "🚀 " + t("vm.preloadAll", "预加载全部角色"); } catch (e2) { /* noop */ }
         ui.notifications.error(t("vm.preloadFail", "预加载失败") + ": " + String(e && e.message || e));
       }
-    });
-    this.el.querySelector(".fvtt-tts-vm-stress").addEventListener("click", () => {
-      try {
-        const fn = game.gptSoVitsTTS && game.gptSoVitsTTS.runStressTest;
-        if (fn) fn();
-        else if (ui && ui.notifications) ui.notifications.info("模块未就绪，稍后再试");
-      } catch (e) { /* noop */ }
-    });
-    this.el.querySelector(".fvtt-tts-vm-speed").addEventListener("click", () => {
-      try {
-        const fn = game.gptSoVitsTTS && game.gptSoVitsTTS.runSpeedTest;
-        if (fn) { ui.notifications.info("🚄 批量速度测试开始（含压满显卡/分批传输，约 1 分钟）"); fn(); }
-        else if (ui && ui.notifications) ui.notifications.info("模块未就绪，稍后再试");
-      } catch (e) { /* noop */ }
-    });
-    this.el.querySelector(".fvtt-tts-vm-selftestP").addEventListener("click", () => {
-      try {
-        const fn = game.gptSoVitsTTS && game.gptSoVitsTTS.runPlayerSelfTest;
-        if (fn) { ui.notifications.info("🔬 玩家自测开始（播放测试音验证，几秒后出结果）"); fn(); }
-        else if (ui && ui.notifications) ui.notifications.info("模块未就绪，稍后再试");
-      } catch (e) { /* noop */ }
     });
     this.el.addEventListener("keydown", (ev) => { if (ev.key === "Escape") this.close(); });
     makeDraggable(this.el, this.el.querySelector(".fvtt-tts-vm-head"), { persistKey: "fvtt-tts-vm-pos" });
