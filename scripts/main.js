@@ -902,6 +902,7 @@ async function maybeSpeak(message) {
   try {
     fl = message.flags && message.flags[MODULE];
     if (fl) {
+      if (fl.spriteTest) return;   // 🎭 立绘测试消息(1.6.38): 不朗读(仅测立绘切换)
       if (fl.speedTest) return;   // 🚄 速度测试消息: 不朗读(仅测传输)
       if (fl.speedTestAck) return;   // 🚄 速度测试回执消息: 不朗读
       if (fl.speedTestPing || fl.speedTestPingAck) return;   // 🫀 心跳消息: 不朗读(防 🫀 被当语音合成)
