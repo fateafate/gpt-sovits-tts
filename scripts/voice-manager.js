@@ -489,7 +489,9 @@ export class VoiceManager {
       const selM = ((p && p.selSprite) || "");
       const spriteBaseM = (location.origin || "") + "/modules/gpt-sovits-tts/engine/audio_export/";
       html += `<section class="fvtt-tts-vm-sec">
-        <div class="fvtt-tts-vm-title2">${t("vm.spriteLib", "立绘库")} <span class="fvtt-tts-vm-sprite-hint">${t("vm.spriteLibHint", "蓝色=纯立绘(不绑语音)，单选；语音跟语气/情绪，立绘跟这里。再点同张取消(恢复自动)")}</span></div>
+        <div class="fvtt-tts-vm-title2">${t("vm.spriteLib", "立绘库")} <span class="fvtt-tts-vm-sprite-hint">${t("vm.spriteLibHint", "蓝色=纯立绘(不绑语音)，单选；语音跟语气/情绪，立绘跟这里。再点同张取消(恢复自动)")}</span>
+          <button type="button" class="fvtt-tts-vm-btn vm-sprite-test" title="${t("vm.spriteTestTip", "依次发送5条不同情绪测试消息，看立绘是否随情绪切换")}">🎭 ${t("vm.spriteTest", "立绘测试")}</button>
+        </div>
         <div class="fvtt-tts-vm-sprites">
           ${spritesMain.map((s, i) => {
             const on = selM === s ? " fvtt-tts-vm-sprite-on" : "";
@@ -607,6 +609,29 @@ export class VoiceManager {
           ui.notifications.info(nv ? (t("vm.spritePicked", "已选立绘：") + s) : t("vm.spriteAuto", "已取消，说话立绘按语气自动"));
         } catch (e) { /* noop */ }
       });
+    });
+    // 立绘测试(1.6.32): 依次发 5 条不同情绪测试消息(纯文本, 不朗读), 直接看聊天立绘是否随情绪切换
+    const sprTest = body.querySelector(".vm-sprite-test");
+    if (sprTest) sprTest.addEventListener("click", async () => {
+      try {
+        const cn = (loadVoiceProfile().current) || "";
+        if (!cn) { ui.notifications.warn(t("vm.spriteTestNoChar", "请先选择角色再测")); return; }
+        const tests = [
+          { t: "哈哈，太棒了！", e: "joy" },
+          { t: "你这个混蛋！", e: "angry" },
+          { t: "呜呜，好难过……", e: "sad" },
+          { t: "什么？！怎么会这样！", e: "surprised" },
+          { t: "好可怕，救命！", e: "fear" },
+        ];
+        ui.notifications.info(t("vm.spriteTestStart", "立绘测试开始：依次发送5条不同情绪消息（2秒间隔）"));
+        for (let i = 0; i < tests.length; i++) {
+          try {
+            await ChatMessage.create({ content: tests[i].t, speaker: { alias: cn } });
+          } catch (e) { /* noop */ }
+          if (i < tests.length - 1) await new Promise(r => setTimeout(r, 2000));
+        }
+        ui.notifications.info(t("vm.spriteTestDone", "立绘测试完成：看聊天里立绘是否随情绪切换（开心/愤怒/悲伤/惊讶/害怕）"));
+      } catch (e) { /* noop */ }
     });
     // 读取语音分配表(带类型防御: 设置曾被错误存成字符串时按空表处理, 防止坏值传播)
 function safeAssignments() {
