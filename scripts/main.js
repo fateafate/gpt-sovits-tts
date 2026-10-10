@@ -46,6 +46,7 @@ const SETTINGS = [
   ["maxLength",     { type: Number,  scope: "client", default: 200,              name: "settings.maxLength.name",      hint: "settings.maxLength.hint" }],
   ["textLang",      { type: String,  scope: "client", default: "auto",           choices: { auto: "settings.textLang.auto", zh: "zh", ja: "ja", en: "en", ko: "ko", yue: "yue" }, name: "settings.textLang.name", hint: "settings.textLang.hint" }],
   ["speedFactor",   { type: Number,  scope: "client", default: 1.0,              range: { min: 0.5, max: 2.0, step: 0.05 }, name: "settings.speedFactor.name", hint: "settings.speedFactor.hint" }],
+  ["styleStrength", { type: Number,  scope: "client", default: 50,               range: { min: 0, max: 100, step: 5 },    name: "settings.styleStrength.name", hint: "settings.styleStrength.hint" }],
   ["volume",        { type: Number,  scope: "client", default: 1.0,              range: { min: 0, max: 1, step: 0.05 }, name: "settings.volume.name", hint: "settings.volume.hint" }],
   ["queueMode",     { type: String,  scope: "client", default: "queue",          choices: { queue: "settings.queueMode.queue", interrupt: "settings.queueMode.interrupt" }, name: "settings.queueMode.name", hint: "settings.queueMode.hint" }],
   ["typingDebounce",{ type: Number,  scope: "client", default: 1200,             name: "settings.typingDebounce.name", hint: "settings.typingDebounce.hint" }],
@@ -104,6 +105,36 @@ function llmModelChoices() {
   return out;
 }
 
+// 朗读提示词强度(1.6.53): 角色档案优先, 全局设置兜底; 0~100
+function styleStrengthOf(role) {
+  try {
+    const vpS = loadVoiceProfile();
+    const cs = (vpS && vpS.chars && vpS.chars[role || ""]) || null;
+    if (cs && typeof cs.styleStrength === "number") return Math.max(0, Math.min(100, cs.styleStrength));
+  } catch (e) { /* noop */ }
+  try { const v = getCfg().styleStrength; if (typeof v === "number") return Math.max(0, Math.min(100, v)); } catch (e) { /* noop */ }
+  return 50;
+}
+// 1.6.53 角色立绘编号表(Shinsekai式): emotion_tags 行 → [{index,label}], 行号/标注编号=立绘索引(1-based), 交给 AI 按语气情绪选
+function buildSpriteList(c) {
+  try {
+    const tags = String((c && c.emotion_tags) || "").trim();
+    const sprites = (c && Array.isArray(c.sprites)) ? c.sprites : [];
+    if (!tags || !sprites.length) return [];
+    const out = [];
+    const lines = tags.split(/\r?\n/).filter(l => l.trim());
+    for (let i = 0; i < lines.length && out.length < 40; i++) {
+      const line = lines[i].trim();
+      let idx = i + 1;
+      const m = line.match(/(?:立绘|sprite)\s*(\d+)/i);
+      if (m) idx = parseInt(m[1], 10);
+      if (idx < 1 || idx > sprites.length) continue;   // 编号越界跳过(防错位)
+      const label = line.replace(/^(?:立绘|sprite)\s*\d+\s*[:：]\s*/i, "").trim() || "";
+      out.push({ index: idx, label });
+    }
+    return out;
+  } catch (e) { return []; }
+}
 // 朗读风格提示词 → 合成参数(无 LLM 兜底): 严肃→慢 / 激动→快 / 不中断→整段连贯合成
 function styleKeywordParams(style, textLen) {
   const s = String(style || "");
@@ -516,10 +547,11 @@ async function speak(text, { lang = null, sender = "", refAudioPath = null, prom
     const stylePrompt = getStylePrompt(prof0.current || "") || String((pv && pv.stylePrompt) || profC.stylePrompt || "").trim();
     if (stylePrompt) {
       overrides = overrides || {};
+      const _stP = styleStrengthOf(prof0.current || "") / 100;   // 1.6.53 提示词强度 0~1
       const kw = styleKeywordParams(stylePrompt, finalText.length);
-      if (kw.speed) spd = kw.speed;
-      if (kw.split) overrides.textSplitMethod = kw.split;
-      if (kw.frag) overrides.fragmentInterval = kw.frag;
+      if (kw.speed) spd = 1.0 + (kw.speed - 1.0) * _stP;   // 强度 0 → 语速不变; 100 → 完全按提示词语速
+      if (kw.split && _stP >= 0.25) overrides.textSplitMethod = kw.split;   // 强度过低不切分
+      if (kw.frag) overrides.fragmentInterval = kw.frag * _stP;
       // 已配置 LLM 且关键词未明确切分意图 → 让 LLM 更精确地把风格翻译成参数(失败回落关键词)
       if (cfg.llmEnabled && cfg.llmKey && !kw.fast) {
         const styleKey = `role=${prof0.current || ""}|style=${stylePrompt}`;
@@ -537,7 +569,7 @@ async function speak(text, { lang = null, sender = "", refAudioPath = null, prom
           } catch (e) { /* 回落关键词结果 */ }
         }
         if (llmStyleHit) {
-          if (typeof llmStyleHit.speed_factor === "number") spd = llmStyleHit.speed_factor;
+          if (typeof llmStyleHit.speed_factor === "number") spd = 1.0 + (llmStyleHit.speed_factor - 1.0) * _stP;   // 1.6.53 LLM 翻译的语速同样按强度插值
           if (llmStyleHit.split && llmStyleHit.split !== "cut5") {
             overrides.textSplitMethod = (llmStyleHit.split === "cut0" && finalText.length > 60) ? "cut2" : llmStyleHit.split;   // 长文本防崩
           }
@@ -958,6 +990,18 @@ async function maybeSpeak(message) {
                 const _nfP = { ...(message.flags[MODULE]) };
                 _nfP.polishText = res.polish;
                 safeMsgWrite(message, { flags: { [MODULE]: _nfP } });
+              }
+            } catch (e) { /* noop */ }
+          }
+          // 1.6.53 AI 选立绘(Shinsekai式): 使用者手动选立绘(selSprite)永远优先, AI 不覆盖
+          if (res.ok && res.sprite && !(flA && flA.selSprite)) {
+            try {
+              const _cc2 = (quickChars && quickChars.chars || []).find(x => x.name === roleN);
+              const _sp2 = (_cc2 && _cc2.sprites && _cc2.sprites[res.sprite - 1]) || "";
+              if (_sp2 && message && message.flags && message.flags[MODULE]) {
+                const _nfS = { ...(message.flags[MODULE]) };
+                _nfS.aiSprite = _sp2;
+                safeMsgWrite(message, { flags: { [MODULE]: _nfS } });
               }
             } catch (e) { /* noop */ }
           }
@@ -1401,7 +1445,7 @@ function buildSendPop() {
         <label class="fvtt-tts-sendpop-tuneline"><span>${_L("ui.speed", "语速")}</span><input type="range" class="fvtt-tts-sendpop-speed" min="0.5" max="1.5" step="0.05" value="1"></label>
         <label class="fvtt-tts-sendpop-tuneline"><span title="${_L("ui.emotionMixTip", "0% 纯默认主参考；100% 情绪音频作唯一参考；中间主参考+情绪融合")}">${_L("ui.emotionMix", "情绪占比")} <b class="fvtt-tts-sendpop-mixval">50%</b></span><input type="range" class="fvtt-tts-sendpop-mix" min="0" max="100" step="5" value="50"></label>
         <label class="fvtt-tts-sendpop-tuneline"><span title="${_L("ui.emotionModTip", "用语速等参数调制情感：0% 不调制；100% 完全按情绪语速(开心快/悲伤慢)")}">${_L("ui.emotionMod", "情感参数调制")} <b class="fvtt-tts-sendpop-modval">50%</b></span><input type="range" class="fvtt-tts-sendpop-mod" min="0" max="100" step="5" value="50"></label>
-<label class="fvtt-tts-sendpop-tuneline"><span title="${_L("ui.styleTip", "朗读提示词：如“更严肃认真、中间不要中断”。会翻译成语速/停顿等合成参数，角色独立记得。")}">${_L("ui.stylePrompt", "朗读提示词")}</span><input type="text" class="fvtt-tts-sendpop-style" placeholder="${_L("ui.stylePh", "如：更严肃认真，中间不要中断")}" maxlength="120"></label>
+<label class="fvtt-tts-sendpop-tuneline"><span title="${_L("ui.styleTip", "朗读提示词：如“更严肃认真、中间不要中断”。会翻译成语速/停顿等合成参数，角色独立记得。")}">${_L("ui.stylePrompt", "朗读提示词")}</span><input type="text" class="fvtt-tts-sendpop-style" placeholder="${_L("ui.stylePh", "如：更严肃认真，中间不要中断")}" maxlength="120"><span title="${_L("ui.styleStrTip", "提示词强度：0%=不改变语速/停顿，100%=完全按提示词")}">${_L("ui.styleStr", "强度")}</span> <input type="range" class="fvtt-tts-sendpop-stylestr" min="0" max="100" step="5" value="50"><b class="fvtt-tts-sendpop-stylestrval">50%</b></label>
       </div>
       <div class="fvtt-tts-sendpop-actions">
         <button type="button" class="fvtt-tts-sendpop-preload">🚀 ${_L("ui.sendPopPreload", "AI 预加载")}</button>
@@ -1579,6 +1623,24 @@ function buildSendPop() {
       c.stylePrompt = String(styleIn.value || "").slice(0, 120);   // 双写兼容
       try { saveVoiceProfile(prof); } catch (e) { /* noop */ }
     });
+    // 1.6.53 提示词强度滑块 → 每角色独立记住
+    const styleStrIn = pop.querySelector(".fvtt-tts-sendpop-stylestr");
+    const styleStrVal = pop.querySelector(".fvtt-tts-sendpop-stylestrval");
+    if (styleStrIn && styleStrVal) {
+      const _ss = styleStrengthOf(profS.current || "");
+      styleStrIn.value = String(_ss);
+      styleStrVal.textContent = _ss + "%";
+      styleStrIn.addEventListener("input", () => {
+        const cn = (loadVoiceProfile().current) || "";
+        styleStrVal.textContent = styleStrIn.value + "%";
+        if (!cn) return;
+        const prof = loadVoiceProfile();
+        prof.chars = prof.chars || {};
+        const c = prof.chars[cn] || (prof.chars[cn] = { name: cn });
+        c.styleStrength = parseInt(styleStrIn.value, 10) || 50;
+        try { saveVoiceProfile(prof); } catch (e) { /* noop */ }
+      });
+    }
   }
   // 语气网格点击 → 只应用语气(不发送不关闭, 选完自行决定发送方式)
   pop.querySelector(".fvtt-tts-sendpop-emogrid").addEventListener("click", async (ev) => {
@@ -1781,6 +1843,7 @@ async function judgeAndPolishByLLM(text, charName, wantPolish, context) {
             emotions: emotionsList,
             role: charName || "",
             setting: (c && c.setting) || "",
+            sprites: buildSpriteList(c),   // 1.6.53 立绘编号表给AI: AI 按语气情绪选立绘(手动选立绘仍优先)
             style: (typeof getStylePrompt === "function" ? (getStylePrompt(charName || "") || "") : ""),   // 1.6.52 朗读提示词交给AI: 判语气+润色都参考它(Shinsekai式)
             polish: !!wantPolish,
           }, { timeoutMs: 70000 });
@@ -4535,7 +4598,7 @@ function applyEmotionAvatar(message, html) {
     }
     const c = (role && quickChars && quickChars.chars || []).find(x => x.name === role);
     const slot = (fl && fl.emotion) ? findEmotionSlot(fl.emotion, role) : null;   // key/label 均可匹配 → 立绘随语气
-    let av = (fl && (fl.selSprite || fl.slotAvatar || fl.avatar)) || (slot && slot.avatar) || (c && c.avatar) || "";   // 1.6.34 手动选立绘 > 消息自带(跨端) > 语气槽立绘
+    let av = (fl && (fl.selSprite || fl.aiSprite || fl.slotAvatar || fl.avatar)) || (slot && slot.avatar) || (c && c.avatar) || "";   // 手动选立绘 > AI 选立绘(1.6.53) > 消息自带(跨端) > 语气槽立绘
     if (!av && c) {
       // 兜底: 取该角色第一张有图的语气槽立绘
       try {

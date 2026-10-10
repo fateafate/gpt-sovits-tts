@@ -552,6 +552,7 @@ export class VoiceManager {
       </label>
       <label class="fvtt-tts-vm-row"><span title="${t("vm.styleTip", "朗读提示词：如“更严肃认真、中间不要中断”。会翻译成语速/停顿等合成参数，角色独立记得。")}">${t("vm.stylePrompt", "朗读提示词")}</span>
         <input class="fvtt-tts-vm-style" type="text" maxlength="120" value="${esc(getStylePrompt(this.editName || (this.charsData && this.charsData.active) || "") || ((p && p.stylePrompt) || ""))}" placeholder="${t("vm.stylePh", "如：更严肃认真，中间不要中断")}">
+        <span>${t("vm.styleStr", "强度")}</span> <input class="fvtt-tts-vm-stylestr" type="range" min="0" max="100" step="5" value="50"><span class="fvtt-tts-vm-val" data-for="stylestr">50%</span>
       </label></section>`;
 
     const st = this.status;
@@ -609,6 +610,31 @@ export class VoiceManager {
           prof.chars = prof.chars || {};
           const c = prof.chars[cn] || (prof.chars[cn] = { name: cn });
           c.stylePrompt = String(styleInp.value || "").slice(0, 120);
+          saveVoiceProfile(prof);
+        } catch (e) { /* noop */ }
+      });
+    }
+    // 1.6.53 提示词强度滑块 → 当前角色独立记住
+    const styleStrInp = body.querySelector(".fvtt-tts-vm-stylestr");
+    const styleStrValE = body.querySelector(".fvtt-tts-vm-val[data-for='stylestr']");
+    if (styleStrInp) {
+      try {
+        const cn0 = (loadVoiceProfile().current) || "";
+        const vp0 = loadVoiceProfile();
+        const c0 = (vp0.chars && vp0.chars[cn0]) || null;
+        const ss0 = (c0 && typeof c0.styleStrength === "number") ? c0.styleStrength : 50;
+        styleStrInp.value = String(ss0);
+        if (styleStrValE) styleStrValE.textContent = ss0 + "%";
+      } catch (e) { /* noop */ }
+      styleStrInp.addEventListener("input", () => {
+        try {
+          const cn = (loadVoiceProfile().current) || "";
+          if (styleStrValE) styleStrValE.textContent = styleStrInp.value + "%";
+          if (!cn) return;
+          const prof = loadVoiceProfile();
+          prof.chars = prof.chars || {};
+          const c = prof.chars[cn] || (prof.chars[cn] = { name: cn });
+          c.styleStrength = parseInt(styleStrInp.value, 10) || 50;
           saveVoiceProfile(prof);
         } catch (e) { /* noop */ }
       });

@@ -3374,6 +3374,7 @@ async def llm_assess_endpoint(request: Request):
     role = str(body.get("role") or "").strip()[:60]
     emotions = body.get("emotions") or []
     want_polish = bool(body.get("polish"))
+    sprites = body.get("sprites") or []   # 1.6.53 可用立绘编号表(Shinsekai式: AI 按语气情绪选立绘); [{index:int, label:str}]
     if not key:
         return JSONResponse(status_code=400, content={"ok": False, "message": "api key 未配置, 请在模块设置里填写后使用"})
     if not text:
@@ -3391,9 +3392,25 @@ async def llm_assess_endpoint(request: Request):
     style_lines = ""
     if style:
         style_lines = "朗读提示词(判断语气与润色时优先贴合该风格): %s\n" % style
+    sprite_lines = ""
+    sprite_map = {}
+    if isinstance(sprites, list) and sprites:
+        valid = []
+        for it in sprites[:40]:
+            try:
+                idx = int(it.get("index", 0) or 0)
+                lbl = str(it.get("label", "") or "").strip()[:60]
+                if idx > 0:
+                    valid.append((idx, lbl))
+            except Exception:
+                continue
+        if valid:
+            sprite_lines = "该角色可用立绘编号表(编号: 情绪/表情标注), 按台词语气情绪选最合适的一张:\n%s\n" % "\n".join("  %d: %s" % (i, l or "(未标注)") for i, l in valid[:40])
+            sprite_map = {i: l for i, l in valid}
     option_lines = "\n".join("- %s (%s)" % (k, v) for k, v in emo_map.items())
     sys_prompt = (
-        "你是语气分析+台词润色助手(%s)。任务：根据台词内容、角色性格及其所在对话上下文，判断说话者语气，并%s。\n"
+        "你是语气分析+台词润色+立绘选择助手(%s)。任务：根据台词内容、角色性格及其所在对话上下文，判断说话者语气，并%s，同时为这句话选择最合适的立绘。\n"
+        "%s"
         "%s"
         "%s"
         "该角色可用语气选项:\n%s\n"
@@ -3401,7 +3418,8 @@ async def llm_assess_endpoint(request: Request):
         "1) emotion 必须是上面选项里的英文 key 之一（优先贴合该角色性格与台词语气）；\n"
         "2) polish 保持原意、不改事实内容，通过语气词/口语化/感叹让表达更自然更有情绪表现力，简体中文；\n"
         "3) 判断语气时优先依据台词本身与角色性格，上下文(最近对话)只作辅助理解语境；\n"
-        "4) 只输出一个 JSON 对象，格式: {\"emotion\": \"key\", \"polish\": \"润色后的台词\"}，不要任何解释、不要 markdown。" % (role_name or "声音助手", "按该语气把台词润色得更自然" if want_polish else "不润色, polish 填空字符串", role_lines, style_lines, option_lines)
+        "4) sprite 为整数编号，必须是立绘编号表里的编号之一，按这句台词的语气情绪选择最合适的那张；表为空或拿不准时填 0（0=不换立绘）；\n"
+        "5) 只输出一个 JSON 对象，格式: {\"emotion\": \"key\", \"polish\": \"润色后的台词\", \"sprite\": 编号}，不要任何解释、不要 markdown。" % (role_name or "声音助手", "按该语气把台词润色得更自然" if want_polish else "不润色, polish 填空字符串", role_lines, style_lines, sprite_lines, option_lines)
     )
     user_content = text[:1200]
     if context:
@@ -3430,6 +3448,7 @@ async def llm_assess_endpoint(request: Request):
     content = ""
     emo = ""
     polish = ""
+    sprite = 0
     try:
         msg = (data.get("choices") or [{}])[0].get("message", {}) or {}
         content = str(msg.get("content") or "").strip()
@@ -3447,6 +3466,12 @@ async def llm_assess_endpoint(request: Request):
             if isinstance(parsed, dict):
                 emo = str(parsed.get("emotion") or "").strip().lower()
                 polish = str(parsed.get("polish") or "").strip()
+                try:
+                    _sp = int(parsed.get("sprite") or 0)
+                    if _sp in sprite_map:
+                        sprite = _sp
+                except Exception:
+                    sprite = 0
         except Exception:
             parsed = None
     if not emo:
@@ -3462,7 +3487,7 @@ async def llm_assess_endpoint(request: Request):
         t = re.sub(r"^\s*(emotion|polish)\s*[:：]", "", t, flags=re.IGNORECASE).strip()
         if len(t) > 1:
             polish = t[:2000]
-    return {"ok": True, "emotion": emo, "polish": polish[:2000] if polish else "", "raw": content[:80]}
+    return {"ok": True, "emotion": emo, "polish": polish[:2000] if polish else "", "sprite": sprite, "raw": content[:80]}
 
 
 if __name__ == "__main__":

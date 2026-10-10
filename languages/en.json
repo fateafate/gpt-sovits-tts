@@ -53,6 +53,7 @@
       "auto": "Auto", "zh": "Chinese", "ja": "Japanese", "en": "English", "ko": "Korean", "yue": "Cantonese"
     },
     "speedFactor": { "name": "Speech Speed", "hint": "0.5 - 2.0, 1.0 is normal." },
+    "styleStrength": { "name": "Reading Prompt Strength", "hint": "0%: prompt does not change speed/pause; 100%: fully applies. Also adjustable per character." },
     "volume": { "name": "Volume", "hint": "0 - 1." },
     "queueMode": {
       "name": "Playback Mode",
