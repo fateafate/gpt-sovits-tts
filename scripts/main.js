@@ -3839,18 +3839,19 @@ Hooks.on("createChatMessage", (message, options, userId) => { (window.__fvttTTSH
       }
     }
   } catch (e) { /* noop */ }
-  // 🎭 立绘测试消息/诊断开启: createChatMessage 阶段补算立绘判定(1.6.40)
-  //    chatMessage hook 对 ChatMessage.create 不触发(测试按钮消息没走发送框, fl.avatar 没写, 报告也空),
-  //    这里补算并写回 flags, 渲染层才有 fl.avatar、报告才有判定行
+  // 🎭 立绘判定补算: createChatMessage 阶段(1.6.40+1.6.45)
+  //    chatMessage hook 对 ChatMessage.create 不触发(模块发送框/立绘测试消息都没走聊天框提交, fl.avatar 不会写),
+  //    1.6.45 起所有"通过本模块发送框发出"(fromModSend)的消息都在这补算立绘并写回 flags,
+  //    渲染层才有 fl.avatar(话语不同→不同情绪→不同立绘)。角色取 fl.role(消息携带), 不用本机当前角色(否则GM端会算错角色立绘)
   try {
     const flV = message && message.flags && message.flags[MODULE];
-    if (flV && (flV.spriteTest || window.__fvttTTSSpriteDiag)) {
+    if (flV && (flV.fromModSend || flV.spriteTest || window.__fvttTTSSpriteDiag)) {
       const profV = loadVoiceProfile();
       const curV = currentVoice();
-      const profVn = (profV && profV.current) || "";
+      const profVn = flV.role || ((profV && profV.current) || "");
       const _selSpV = (profV && profV.chars && profV.chars[profVn] && profV.chars[profVn].selSprite) || "";
       const cDV = (quickChars && quickChars.chars || []).find(x => x.name === profVn);
-      const _emoSV = String(detectEmotion(String(message.content || ""), curV || null) || "neutral");
+      const _emoSV = String(detectEmotion(String(message.content || ""), flV.emotion ? null : curV) || "neutral");
       const _emoListV = _selSpV ? [_selSpV] : spriteBucketForEmotion((cDV && cDV.sprites) || [], _emoSV, (cDV && cDV.emotion_tags) || "");
       const _rotV = getSpriteRotation(profVn + "|" + _emoSV, _emoSV);
       // 1.6.41 spriteBucketForEmotion 返回的是索引数组, 必须再经 sprites[索引] 取真实立绘路径(否则渲染 404 audio_export/<数字>)
