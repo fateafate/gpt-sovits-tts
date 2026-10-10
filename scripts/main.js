@@ -3846,7 +3846,13 @@ Hooks.on("createChatMessage", (message, options, userId) => { (window.__fvttTTSH
       const _emoSV = String(detectEmotion(String(message.content || ""), curV || null) || "neutral");
       const _emoListV = _selSpV ? [_selSpV] : spriteBucketForEmotion((cDV && cDV.sprites) || [], _emoSV, (cDV && cDV.emotion_tags) || "");
       const _rotV = getSpriteRotation(profVn + "|" + _emoSV, _emoSV);
-      const _avV = (_emoListV && _emoListV.length) ? _emoListV[_rotV % _emoListV.length] : "";
+      // 1.6.41 spriteBucketForEmotion 返回的是索引数组, 必须再经 sprites[索引] 取真实立绘路径(否则渲染 404 audio_export/<数字>)
+      let _avV = "";
+      if (_selSpV) { _avV = _selSpV; }
+      else if (cDV && cDV.sprites && _emoListV && _emoListV.length) {
+        const _idxV = _emoListV[_rotV % _emoListV.length];
+        _avV = cDV.sprites[_idxV] || "";
+      }
       if (window.__fvttTTSSpriteDiag) {
         try {
           (window.__fvttTTSSpriteDiagList = window.__fvttTTSSpriteDiagList || []).push({ ts: Date.now(), role: profVn, text: String(message.content || "").slice(0, 30), emo: _selSpV ? "手动" : _emoSV, etLines: (cDV ? String(cDV.emotion_tags || "").split(/\n+/).length : 0), cands: _emoListV.length, av: _avV, manual: !!_selSpV });
