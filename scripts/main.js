@@ -3633,13 +3633,15 @@ function spriteBucketForEmotion(sprites, emotion, emotionTags) {
     const emo = String(emotion || "").toLowerCase();
     const et = String(emotionTags || "");
     if (et.trim()) {
-      const lines = et.split(/\n+/).map(l => l.trim()).filter(l => /立绘\s*\d+/.test(l));
+      const lines = et.split(/\n+/).map(l => l.trim()).filter(l => /(立绘|sprite|spr)\s*\d+/i.test(l));
       const hits = [];
       const etw = emoTagWords(emo);
       lines.forEach(ln => {
-        const m = ln.match(/立绘\s*(\d+)/);
+        // 1.6.46 辅助/承接标注行(接立绘N/配合立绘N一起用)不作为独立候选 — 否则 fear 落到"接立绘31"这类图, 看着像随机
+        if (/接立绘|接sprite|配合|一起用|连着|承接/.test(ln)) return;
+        const m = ln.match(/(立绘|sprite|spr)\s*(\d+)/i);   // 1.6.46 兼容"立绘 N"与"sprite NN"(七海千秋 21 行是 sprite 格式, 此前全失效落分段兜底)
         if (!m) return;
-        const idx = (parseInt(m[1], 10) || 1) - 1;
+        const idx = (parseInt(m[2], 10) || 1) - 1;
         if (idx < 0 || idx >= n) return;
         if (etw.some(w => ln.toLowerCase().includes(w))) hits.push(idx);
       });
@@ -3673,15 +3675,15 @@ function spriteBucketForEmotion(sprites, emotion, emotionTags) {
   } catch (e) { return [0]; }
 }
 
-// 情绪 → emotion_tags 中文关键词(1.6.27, 对标 Shinsekai 标注文本)
+// 情绪 → emotion_tags 中文关键词(1.6.27, 对标 Shinsekai 标注文本; 1.6.46 按七海/丛雨标注词补全, 减少落分段兜底)
 function emoTagWords(emo) {
   const em = String(emo || "").toLowerCase();
-  if (em === "joy" || em === "happy") return ["开心", "高兴", "大笑", "眯眼笑", "笑", "有兴趣", "兴奋", "元气"];
-  if (em === "sad") return ["难过", "伤心", "哭", "泪", "悲", "沮丧", "没干劲", "失落"];
-  if (em === "angry") return ["生气", "怒", "训斥", "厌恶", "恶心", "敌意", "防守", "生闷气", "骂"];
-  if (em === "surprised") return ["震惊", "惊讶", "惊", "愣"];
-  if (em === "fear") return ["害怕", "恐惧", "怕", "惊吓", "颤抖"];
-  if (em === "calm") return ["平静", "温柔", "娴静", "说话", "闭眼", "吐槽", "看着你", "想事情", "反问", "调侃"];
+  if (em === "joy" || em === "happy") return ["开心", "高兴", "大笑", "眯眼笑", "笑", "有兴趣", "兴奋", "元气", "微笑", "温柔", "激动", "喘气", "害羞", "脸红"];
+  if (em === "sad") return ["难过", "伤心", "哭", "泪", "悲", "沮丧", "没干劲", "失落", "不满", "自闭", "担忧"];
+  if (em === "angry") return ["生气", "怒", "训斥", "厌恶", "恶心", "敌意", "防守", "生闷气", "骂", "警告", "阻止", "制止", "埋怨", "嘟嘴", "冷漠", "鼓起脸颊"];
+  if (em === "surprised") return ["震惊", "惊讶", "惊", "愣", "疑惑", "好奇", "歪头"];
+  if (em === "fear") return ["害怕", "恐惧", "怕", "惊吓", "颤抖", "冷汗", "毛骨悚然", "发抖", "不安", "担心"];
+  if (em === "calm") return ["平静", "温柔", "娴静", "说话", "闭眼", "吐槽", "看着你", "想事情", "反问", "调侃", "指点", "引导", "陈述", "解释", "指向", "果断", "仔细", "眺望", "沉思", "中性"];
   return ["平静", "说话", "看着你", "闭眼", "中性"];
 }
 
