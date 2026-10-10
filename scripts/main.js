@@ -3752,6 +3752,13 @@ Hooks.on("chatMessage", (chatLog, message, chatData) => {
           const prof0n = (prof0 && prof0.current) || "";
           // 1.6.29 手动选立绘(立绘库)最高优先: 语音跟语气槽/情绪, 立绘跟这里
           const _selSp = (prof0 && prof0.chars && prof0.chars[prof0n] && prof0.chars[prof0n].selSprite) || "";
+          // 1.6.36 手动选立绘也记录判定(测试报告不丢: 手动覆盖, 未测自动切换)
+          if (_selSp && window.__fvttTTSSpriteDiag) {
+            try {
+              (window.__fvttTTSSpriteDiagList = window.__fvttTTSSpriteDiagList || []).push({ ts: Date.now(), text: String(message.content || "").slice(0, 30), emo: "手动", etLines: 0, cands: 0, av: _selSp, manual: true });
+              console.warn("[gpt-sovits-tts][立绘判定] 文本=" + String(message.content || "").slice(0, 24) + " | 手动选立绘=" + _selSp + "（覆盖自动切换）");
+            } catch (e) { /* noop */ }
+          }
           if (_selSp) return _selSp;
           const cD = (quickChars && quickChars.chars || []).find(x => x.name === prof0n);
           if (cD && Array.isArray(cD.sprites) && cD.sprites.length >= 1) {

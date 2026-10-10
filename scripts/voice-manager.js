@@ -639,11 +639,16 @@ export class VoiceManager {
           const rows = (window.__fvttTTSSpriteDiagList || []).filter(x => x && x.text).slice(-8);
           const expectMap = { "哈哈，太棒了！": "joy", "你这个混蛋！": "angry", "呜呜，好难过……": "sad", "什么？！怎么会这样！": "surprised", "好可怕，救命！": "fear" };
           const lines = rows.map((r0) => {
+            if (r0.manual) return "  " + r0.text + " | 手动选立绘=" + r0.av + "（手动覆盖，未测自动切换）";
             const exp = expectMap[r0.text] || "?";
             const okMark = (exp === r0.emo) ? "✓匹配" : (r0.emo === "neutral" ? "✗未判出(neutral)" : "✗不一致");
             return "  " + r0.text + " 预期=" + exp + " 判定=" + r0.emo + " " + okMark + " | 标注行数=" + r0.etLines + " 候选数=" + r0.cands + " | 选中=" + r0.av;
           });
           const profR = loadVoiceProfile();
+          // 1.6.36 手动选了立绘 → 提前提示: 测的是手动覆盖; 想测自动切换需先在立绘库再点那张取消
+          if (profR.chars && profR.chars[cn] && profR.chars[cn].selSprite) {
+            ui.notifications.info(t("vm.spriteTestManualHint", "已手动选立绘(固定)。想测自动切换请先在立绘库再点那张取消，再点立绘测试"));
+          }
           let verTxt = "?";
           try { verTxt = game.modules.get("gpt-sovits-tts") ? game.modules.get("gpt-sovits-tts").version : "?"; } catch (e) { /* noop */ }
           const reportTxt = "[立绘测试报告] " + new Date().toLocaleString("zh-CN") + " | 角色=" + cn + " | 版本=" + verTxt
