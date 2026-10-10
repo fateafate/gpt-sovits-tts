@@ -1039,9 +1039,9 @@ async function maybeSpeak(message) {
             }
           } catch (e) { /* noop */ }
         }
-        // 1.6.55 统一探针(规则降级路径也采集: 无AI时报告同样显示规则判定结果与强度)
+        // 1.6.55 统一探针(规则降级路径也采集: 无AI时报告同样显示规则判定结果与强度); 1.6.57 带消息id(测试按消息精确匹配, 不再错拿别的句)
         if (window.__fvttTTSAiLineDiag) {
-          try { (window.__fvttTTSAiLineDiagList = window.__fvttTTSAiLineDiagList || []).push({ ts: Date.now(), text: String(decision.text || "").slice(0, 30), emo: String(_emo || ""), src: (cfg.llmEnabled && cfg.llmKey && window.__fvttTTSLlmBroken !== true) ? "AI" : "规则/风格", strength: styleStrengthOf(roleN), manual: !!(flA && flA.selSprite) }); } catch (e) { /* noop */ }
+          try { (window.__fvttTTSAiLineDiagList = window.__fvttTTSAiLineDiagList || []).push({ mid: (message && message.id) || "", ts: Date.now(), text: String(decision.text || "").slice(0, 30), emo: String(_emo || ""), src: (cfg.llmEnabled && cfg.llmKey && window.__fvttTTSLlmBroken !== true) ? "AI" : "规则/风格", strength: styleStrengthOf(roleN), manual: !!(flA && flA.selSprite) }); } catch (e) { /* noop */ }
         }
       }
     } else if (flA && flA.emotion) {
@@ -3858,7 +3858,7 @@ window.runAIPromptTest = async function runAIPromptTest() {
   const cfg = getCfg();
   const style = (typeof getStylePrompt === "function" ? (getStylePrompt(cn) || "") : "") || "";
   const llmOk = !!(cfg.llmEnabled && cfg.llmKey) && window.__fvttTTSLlmBroken !== true;
-  rows.push("角色=" + cn + " | 朗读提示词=" + (style || "(未填, 用示例词)") + " | AI=" + (llmOk ? "可用" : "不可用(将走规则降级)") + " | 版本=" + verTxt + (verTxt === "1.6.56" ? "" : " ⚠ 若≠1.6.56 请强刷 Foundry(GM设置→模块或Ctrl+F5)"));
+  rows.push("角色=" + cn + " | 朗读提示词=" + (style || "(未填, 用示例词)") + " | AI=" + (llmOk ? "可用" : "不可用(将走规则降级)") + " | 版本=" + verTxt + (verTxt === "1.6.57" ? " (JS=1.6.57✓)" : " ⚠ 清单缓存显示" + verTxt + "≠1.6.57, 请强刷(Ctrl+F5)后重测"));
 
   // ① 提示词强度插值表(0/25/50/100%)
   const _kw0 = styleKeywordParams(style || "严肃认真", 20);
@@ -3906,9 +3906,9 @@ window.runAIPromptTest = async function runAIPromptTest() {
       let msg = null;
       try { msg = await ChatMessage.create({ content: sc.text, speaker: { alias: sc.role }, flags: { [MOD]: flT } }); }
       catch (e) { rows.push("[" + sc.label + "] 发送失败: " + String((e && e.message) || e).slice(0, 60)); continue; }
-      const _before = (window.__fvttTTSAiLineDiagList || []).slice();
+      // 1.6.57 按消息id等本句判定探针(最长35s; 不再错拿别的句)
       let waited = 0;
-      while (waited < 125 && (window.__fvttTTSAiLineDiagList || []).length <= _before.length) { await new Promise(r => setTimeout(r, 200)); waited++; }
+      while (waited < 175 && !(window.__fvttTTSAiLineDiagList || []).some(p => p && p.mid === msg.id)) { await new Promise(r => setTimeout(r, 200)); waited++; }
       let aud = "";
       waited = 0;
       while (waited < 100) {
@@ -3919,10 +3919,11 @@ window.runAIPromptTest = async function runAIPromptTest() {
         } catch (e) { /* noop */ }
         await new Promise(r => setTimeout(r, 200)); waited++;
       }
-      const _probe = (window.__fvttTTSAiLineDiagList || []).slice(-1)[0] || {};
+      const _probe = (window.__fvttTTSAiLineDiagList || []).find(p => p && p.mid === msg.id) || {};
       const _fNow = (() => { try { const m3 = game.messages.get(msg.id); return (m3 && m3.flags && m3.flags[MOD]) || {}; } catch (e) { return {}; } })();
       const _avNow = _fNow.avatar || _fNow.selSprite || _fNow.aiSprite || "";
-      rows.push("[" + sc.label + " " + sc.role + "/" + sc.lang + "/强度" + sc.strength + "%] 「" + sc.text.slice(0, 16) + "…」 → 判定=" + (_probe.src || "—") + " 情绪=" + (_probe.emo || "无(neutral)") + " | 润色=" + ((_fNow.polishText || _probe.polish) ? "✓" : "—") + " | 立绘=" + (_avNow ? ("#→" + String(_avNow).slice(-22)) : (sc.manual ? "未覆盖(手动优先✓)" : "无")) + " | 合成=" + (aud || "等待超时"));
+      const _hasProbe = !!(_probe && _probe.mid);
+      rows.push("[" + sc.label + " " + sc.role + "/" + sc.lang + "/强度" + sc.strength + "%] 「" + sc.text.slice(0, 16) + "…」 → " + (_hasProbe ? ("判定=" + (_probe.src || "—") + " 情绪=" + (_probe.emo || "无(neutral)")) : "未探到(判定未采集)") + " | 润色=" + ((_fNow.polishText || _probe.polish) ? "✓" : "—") + " | 立绘=" + (_avNow ? ("#→" + String(_avNow).slice(-22)) : (sc.manual ? "未覆盖(手动优先✓)" : "无")) + " | 合成=" + (aud || "等待超时"));
     }
   } finally {
     try {
