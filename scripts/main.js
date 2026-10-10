@@ -1486,9 +1486,11 @@ function buildSendPop() {
       ui.notifications.warn(_L("ui.preloadFail", "预加载失败") + ": " + ((e && e.message) || "unknown"));
     }
   });
-  // 恢复预加载状态: 已预合成的音频(角色/语气/语言未变)按钮直接显示 done, 再点即发送; 签名变了 → 回到未预加载
+  // 恢复预加载状态: 已预合成的音频(文字一致且角色/语气/语言未变)按钮直接显示 done, 再点即发送; 文字/签名变了 → 回到未预加载
   const preBtn = pop.querySelector(".fvtt-tts-sendpop-preload");
-  if (preBtn && preloadAudio && preloadAudio.url && preloadAudio.watchKey === makeWatchKey()) {
+  const _ta0 = findChatTextarea();
+  const _t0 = (_ta0 && String(_ta0.value || "").trim()) ? stripStageDirections(String(_ta0.value || "").trim()) : "";
+  if (preBtn && preloadAudio && preloadAudio.url && preloadAudio.text === _t0 && preloadAudio.watchKey === makeWatchKey()) {
     preBtn.textContent = _L("ui.preloadedBtn", "✓ 已预加载");
     preBtn.title = _L("ui.preloadedSendTip", "音频已就绪，再点直接播出");
     preBtn.classList.add("done");
@@ -1820,6 +1822,23 @@ function openSendPop() {
   const ta = findChatTextarea();
   const fire = pop.querySelector(".fvtt-tts-sendpop-fire");
   if (fire) fire.disabled = !(ta && String(ta.value || "").trim());
+  // 1.6.31: 聊天输入文本变化 → 预加载按钮 done 态即时清除(文字与已预合成音频不一致时不再一直显示"已预加载")
+  if (ta && ta.dataset.fvttPreloadWatch !== "1") {
+    ta.dataset.fvttPreloadWatch = "1";
+    ta.addEventListener("input", () => {
+      try {
+        const pop2 = buildSendPop();
+        const pb = pop2.querySelector(".fvtt-tts-sendpop-preload");
+        if (!pb) return;
+        const tnow2 = String(ta.value || "").trim() ? stripStageDirections(String(ta.value || "").trim()) : "";
+        if (pb.classList.contains("done") && (!preloadAudio || preloadAudio.text !== tnow2)) {
+          pb.classList.remove("done");
+          pb.textContent = _L("ui.sendPopPreload", "AI 预加载");
+          pb.title = "";
+        }
+      } catch (e) { /* noop */ }
+    });
+  }
 }
 
 function closeSendPop() {
@@ -3676,13 +3695,13 @@ function detectEmotion(text, cur) {
       if (ne && ne !== "neutral") return ne;
     }
     const t = String(text || "");
-    if (/(哈哈|嘻嘻|嘿嘿|好耶|太棒|开心|高兴|万岁|太好了|笑)/.test(t)) return "joy";
-    if (/(呜呜|呜咽|哭|伤心|难过|悲伤|泪|好想|舍不得)/.test(t)) return "sad";
+    if (/(哈哈|嘻嘻|嘿嘿|好耶|太棒|开心|高兴|万岁|太好了|快乐|耶|笑|嘿嘿|妙啊)/.test(t)) return "joy";
+    if (/(呜呜|呜咽|哭|伤心|难过|悲伤|泪|好想|舍不得|呜|唉|叹气)/.test(t)) return "sad";
     if (/[！!]/.test(t)) {
-      if (/(怒|气死|可恶|混蛋|住口|闭嘴|滚|杀)/.test(t)) return "angry";
-      if (/(没想到|怎么会|什么|惊)/.test(t)) return "surprised";
+      if (/(怒|气死|可恶|混蛋|住口|闭嘴|滚|杀|讨厌|烦|气|骂|找死)/.test(t)) return "angry";
+      if (/(没想到|怎么会|什么|惊|啊|哇|咦)/.test(t)) return "surprised";
     }
-    if (/(害怕|怕|恐惧|救命|颤)/.test(t)) return "fear";
+    if (/(害怕|怕|恐惧|救命|颤|鬼|吓)/.test(t)) return "fear";
     return "neutral";
   } catch (e) { return "neutral"; }
 }
