@@ -3832,6 +3832,33 @@ Hooks.on("createChatMessage", (message, options, userId) => { (window.__fvttTTSH
       }
     }
   } catch (e) { /* noop */ }
+  // 🎭 立绘测试消息/诊断开启: createChatMessage 阶段补算立绘判定(1.6.40)
+  //    chatMessage hook 对 ChatMessage.create 不触发(测试按钮消息没走发送框, fl.avatar 没写, 报告也空),
+  //    这里补算并写回 flags, 渲染层才有 fl.avatar、报告才有判定行
+  try {
+    const flV = message && message.flags && message.flags[MODULE];
+    if (flV && (flV.spriteTest || window.__fvttTTSSpriteDiag)) {
+      const profV = loadVoiceProfile();
+      const curV = currentVoice();
+      const profVn = (profV && profV.current) || "";
+      const _selSpV = (profV && profV.chars && profV.chars[profVn] && profV.chars[profVn].selSprite) || "";
+      const cDV = (quickChars && quickChars.chars || []).find(x => x.name === profVn);
+      const _emoSV = String(detectEmotion(String(message.content || ""), curV || null) || "neutral");
+      const _emoListV = _selSpV ? [_selSpV] : spriteBucketForEmotion((cDV && cDV.sprites) || [], _emoSV, (cDV && cDV.emotion_tags) || "");
+      const _rotV = getSpriteRotation(profVn + "|" + _emoSV, _emoSV);
+      const _avV = (_emoListV && _emoListV.length) ? _emoListV[_rotV % _emoListV.length] : "";
+      if (window.__fvttTTSSpriteDiag) {
+        try {
+          (window.__fvttTTSSpriteDiagList = window.__fvttTTSSpriteDiagList || []).push({ ts: Date.now(), role: profVn, text: String(message.content || "").slice(0, 30), emo: _selSpV ? "手动" : _emoSV, etLines: (cDV ? String(cDV.emotion_tags || "").split(/\n+/).length : 0), cands: _emoListV.length, av: _avV, manual: !!_selSpV });
+          console.warn("[gpt-sovits-tts][立绘判定] 角色=" + profVn + " 文本=" + String(message.content || "").slice(0, 24) + " | 情绪=" + (_selSpV ? "手动" : _emoSV) + " | 候选数=" + _emoListV.length + " | 选中=" + _avV);
+        } catch (e) { /* noop */ }
+      }
+      if (_avV && flV.avatar !== _avV) {
+        try { message.flags[MODULE] = message.flags[MODULE] || {}; message.flags[MODULE].avatar = _avV; message.flags[MODULE].selSprite = _selSpV || ""; } catch (e) { /* noop */ }
+        try { message.update({ [`flags.${MODULE}.avatar`]: _avV, [`flags.${MODULE}.selSprite`]: _selSpV || "" }); } catch (e) { /* noop */ }
+      }
+    }
+  } catch (e) { /* noop */ }
   // 🚄 传输测试(玩家侧): 收到测试消息立即拉取音频计时 → 回执(聊天消息可靠通道) + 直接写 pl 报告段(直连可达时)
   try {
     const flS = message && message.flags && message.flags[MODULE];
