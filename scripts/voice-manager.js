@@ -618,6 +618,7 @@ export class VoiceManager {
         if (!cn) { ui.notifications.warn(t("vm.spriteTestNoChar", "请先选择角色再测")); return; }
         // 1.6.33: 测试期间开启立绘/语气判定诊断(console 打印判定过程), 5 分钟后自动关(留时间手动发朗读测语气)
         window.__fvttTTSSpriteDiag = true;
+        window.__fvttTTSSpriteDiagList = [];   // 1.6.43 测试批次隔离: 清空上次收集(防残留污染报告)
         setTimeout(() => { try { window.__fvttTTSSpriteDiag = false; } catch (e) { /* noop */ } }, 300000);
         const tests = [
           { t: "哈哈，太棒了！", e: "joy" },
@@ -635,7 +636,9 @@ export class VoiceManager {
         }
         // 1.6.35 自动生成测试报告(判定结果汇总, 预期 vs 实际) → 发服务器 tts-reports.log, 作者直接读文件排查
         try {
-          await new Promise(r => setTimeout(r, 1500));   // 等 hook 收集完判定结果
+          // 1.6.43 等判定收集齐(最多6秒): hook判定与消息创建并发, 固定1.5s会漏行(上次只收齐2/5)
+          let waitN = 0;
+          while (waitN < 30 && ((window.__fvttTTSSpriteDiagList || []).length < 5)) { await new Promise(r => setTimeout(r, 200)); waitN++; }
           const rows = (window.__fvttTTSSpriteDiagList || []).filter(x => x && x.text).slice(-8);
           const expectMap = { "哈哈，太棒了！": "joy", "你这个混蛋！": "angry", "呜呜，好难过……": "sad", "什么？！怎么会这样！": "surprised", "好可怕，救命！": "fear" };
           const lines = rows.map((r0) => {

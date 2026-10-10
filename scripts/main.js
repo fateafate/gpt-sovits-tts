@@ -4522,6 +4522,8 @@ function applyEmotionAvatar(message, html) {
 
 // 无角色(默认音色)消息: AI 从角色列表选最像说话者的角色 → 更新 flags → 立绘随角色显示
 async function maybePickAvatarRole(message) {
+  // 1.6.43 立绘测试消息不触发AI自动选角(纯测试, 无LLM时不再刷屏"AI自动选角失败")
+  try { const flA2 = message && message.flags && message.flags[MODULE]; if (flA2 && flA2.spriteTest) return; } catch (e) { /* noop */ }
   try {
     // LLM 失败降级: 一次失败(API 不通/404/超时)后本会话禁用, 避免每消息反复调失败刷屏
     if (window.__fvttTTSPickRoleBroken === true) return;
