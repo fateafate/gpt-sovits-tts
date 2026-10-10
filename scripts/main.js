@@ -500,6 +500,9 @@ async function speak(text, { lang = null, sender = "", refAudioPath = null, prom
     try { const _aiE = await aiJudgeEmotionNow(finalText, prof0.current || ""); if (_aiE) _emoDet = _aiE; } catch (e) { /* noop */ }
     if (!_emoDet) _emoDet = detectEmotion(finalText, pv);
     if (_emoDet && _emoDet !== "neutral") { overrides = overrides || {}; overrides.emotion = _emoDet; }
+    if (window.__fvttTTSSpriteDiag) {
+      try { console.warn("[gpt-sovits-tts][语气判定] 文本=" + String(finalText || "").slice(0, 24) + " | AI=" + (_aiE || "无(未配LLM)") + " | 规则=" + ((_emoDet || "") || "无") + " | 调制=" + ((_emoDet && _emoDet !== "neutral") ? "开(" + _emoDet + ")" : "关(neutral)") + " | 槽音频=" + (pv.auxRef ? "有(不调制)" : "无")); } catch (e) { /* noop */ }
+    }
   }
 
   // ---- 朗读风格提示词(音频栏输入, 如"更严肃认真、中间不要中断"): 应用到合成参数 ----
@@ -3754,7 +3757,12 @@ Hooks.on("chatMessage", (chatLog, message, chatData) => {
             const _emoS = String(detectEmotion(String(message.content || chatData.content || ""), cur || null) || "neutral");
             const _emoList = spriteBucketForEmotion(cD.sprites, _emoS, cD.emotion_tags);
             const _rot = getSpriteRotation(prof0n + "|" + _emoS, _emoS);
-            return cD.sprites[_emoList[_rot % _emoList.length]];
+            const _av = cD.sprites[_emoList[_rot % _emoList.length]];
+            // 1.6.33 立绘判定诊断(立绘测试按钮自动开启, 测完自动关; 用于定位"立绘为什么不换")
+            if (window.__fvttTTSSpriteDiag) {
+              try { console.warn("[gpt-sovits-tts][立绘判定] 文本=" + String(message.content || "").slice(0, 24) + " | 情绪=" + _emoS + " | 标注行数=" + String(cD.emotion_tags || "").split(/\n+/).length + " | 候选数=" + _emoList.length + " | 选中=" + _av); } catch (e) { /* noop */ }
+            }
+            return _av;
           }
           return (cD && cD.avatar) || (cur && cur.avatar) || "";
         } catch (e) { return ""; } })(),

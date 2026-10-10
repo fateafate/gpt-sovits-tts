@@ -1568,11 +1568,11 @@ async def tts_handle(req: dict):
             req["prompt_lang"] = CHAR_CONFIG["prompt_lang"]
         if not req.get("text_lang"):
             req["text_lang"] = CHAR_CONFIG.get("default_text_lang", "auto")
-    # 诊断: 合成请求落盘(每次 /tts 实际收到的文字/语言/辅助参考), 排查"不同输入合成同一段"
+    # 诊断: 合成请求落盘(每次 /tts 实际收到的文字/语言/辅助参考/情绪调制), 排查"不同输入合成同一段/情绪没生效"
     try:
         with open(os.path.join(os.path.dirname(__file__), "tts-requests.log"), "a", encoding="utf-8") as _lf:
-            _lf.write("[%s] [tts] text=%r lang=%s role=%r aux=%s\n" % (
-                time.strftime("%H:%M:%S"), str(req.get("text") or "")[:60], req.get("text_lang"), req.get("role"), str(req.get("aux_ref_audio_paths") or [])[:140]))
+            _lf.write("[%s] [tts] text=%r lang=%s role=%r aux=%s emo=%r mix=%s\n" % (
+                time.strftime("%H:%M:%S"), str(req.get("text") or "")[:60], req.get("text_lang"), req.get("role"), str(req.get("aux_ref_audio_paths") or [])[:140], str(req.get("emotion") or ""), str(req.get("emotion_mix") or "")))
     except Exception:
         pass
     # 客户端可传参考音频(如语气样本/导入片段), 解析为服务器真实路径; 短样本(<3s)静音补足

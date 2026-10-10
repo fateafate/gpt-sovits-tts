@@ -616,6 +616,9 @@ export class VoiceManager {
       try {
         const cn = (loadVoiceProfile().current) || "";
         if (!cn) { ui.notifications.warn(t("vm.spriteTestNoChar", "请先选择角色再测")); return; }
+        // 1.6.33: 测试期间开启立绘/语气判定诊断(console 打印判定过程), 5 分钟后自动关(留时间手动发朗读测语气)
+        window.__fvttTTSSpriteDiag = true;
+        setTimeout(() => { try { window.__fvttTTSSpriteDiag = false; } catch (e) { /* noop */ } }, 300000);
         const tests = [
           { t: "哈哈，太棒了！", e: "joy" },
           { t: "你这个混蛋！", e: "angry" },
@@ -630,7 +633,7 @@ export class VoiceManager {
           } catch (e) { /* noop */ }
           if (i < tests.length - 1) await new Promise(r => setTimeout(r, 2000));
         }
-        ui.notifications.info(t("vm.spriteTestDone", "立绘测试完成：看聊天里立绘是否随情绪切换（开心/愤怒/悲伤/惊讶/害怕）"));
+        ui.notifications.info(t("vm.spriteTestDone", "立绘测试完成：看聊天立绘是否随情绪切换；控制台有[立绘判定]日志（5分钟内手动发朗读可看[语气判定]）"));
       } catch (e) { /* noop */ }
     });
     // 读取语音分配表(带类型防御: 设置曾被错误存成字符串时按空表处理, 防止坏值传播)
