@@ -3442,7 +3442,7 @@ Hooks.once("ready", () => {
       svcRequest(c0.serverUrl, "POST", "/llm", {
         base: c0.llmBaseUrl || "https://api.openai.com/v1", key: c0.llmKey, model: c0.llmModel || "gpt-4o-mini",
         text: "ping", emotions: [{ key: "calm", label: "平静" }],
-      }, { timeoutMs: 5000 })
+      }, { timeoutMs: 3000, retries: 0 })   // 1.6.48 探测3s超时且不重试: LLM不可达快速判broken, 不拖慢打开
         .then((r) => { if (r && !r.ok) { try { window.__fvttTTSLlmBroken = true; } catch (e) { /* noop */ } } })
         .catch(() => { try { window.__fvttTTSLlmBroken = true; } catch (e) { /* noop */ } });
     } catch (e) { /* noop */ }
@@ -3764,7 +3764,7 @@ function aiJudgeEmotionNow(text, role) {
         base: cfg.llmBaseUrl || "https://api.openai.com/v1", key: cfg.llmKey, model: cfg.llmModel || "gpt-4o-mini",
         text: String(text || "").slice(0, 1200), role: role || prof.current || "", setting: (qcC && qcC.setting) || "", emotions: emos,
         style: getStylePrompt(role || prof.current || "") || "",   // 1.6.47 朗读风格作LLM判语气参考(Shinsekai式: 风格=给AI决定这句子语气)
-      }, { timeoutMs: 6000 });
+      }, { timeoutMs: 4000, retries: 0 });   // 1.6.48 判语气4s超时不重试(外部LLM慢时快速降级规则/风格词, 不拖慢朗读)
       const j = r.jsonSafe ? r.jsonSafe() : (r.json || {});
       if (j && j.ok && j.emotion) return String(j.emotion);
     } catch (e) { /* noop */ }

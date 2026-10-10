@@ -515,7 +515,7 @@ export async function gptSovitsStatus(serverUrl) {
 /** 通用 TTS 服务请求(socket 代理优先 → 直连回退): https 页面(GM/玩家经 frp)Mixed Content 根治。
  *  base=serverUrl(可带协议), method=GET|POST, path="/characters" 等, bodyJSON 可选。
  *  返回 { ok, status, json, direct } — direct=false 表示走了 socket 代理, true 表示直连。 */
-export async function svcRequest(base, method, path, bodyJSON, { timeoutMs = 30000, binary = false, b64Body = "", contentType = "" } = {}) {
+export async function svcRequest(base, method, path, bodyJSON, { timeoutMs = 30000, binary = false, b64Body = "", contentType = "", retries = 3 } = {}) {
   const b = String(base || "http://127.0.0.1:9881").replace(/\/+$/, "");
   // 1) socket 代理(服务端转发, 浏览器无 Mixed Content 问题; 二进制经 base64 传输)
   const pr = await gptSovitsSocketProxy({
@@ -557,9 +557,10 @@ export async function svcRequest(base, method, path, bodyJSON, { timeoutMs = 300
     } else if (method !== "GET" && bodyJSON !== undefined) {
       reqBody = JSON.stringify(bodyJSON);
     }
-    // 1.6.44 瞬时连接失败重试(ERR_CONNECTION_CLOSED/网络抖动): 最多3次, 间隔0.8s/2s, 3次仍败才 console 诊断
+    // 1.6.44 瞬时连接失败重试(ERR_CONNECTION_CLOSED/网络抖动): 默认最多3次, 间隔0.8s/2s; /llm等慢端点传 retries:0 不重试(1.6.48)
     let lastErr = null;
-    for (let _try = 0; _try < 3; _try++) {
+    const _rMax = Math.max(0, Math.min(5, retries | 0));
+    for (let _try = 0; _try <= _rMax; _try++) {
       if (_try > 0) { try { await new Promise(r => setTimeout(r, _try === 1 ? 800 : 2000)); } catch (e) { /* noop */ } }
       try {
         const r = await fetch(b + path, { method: String(method || "GET").toUpperCase(), headers: hdrs, body: reqBody, signal: AbortSignal.timeout(timeoutMs) });
@@ -575,8 +576,8 @@ export async function svcRequest(base, method, path, bodyJSON, { timeoutMs = 300
         return { ok: r.ok, status: r.status, _json: json, audioUrl: _audioUrl, cache: _cache, direct: true, json: () => Promise.resolve(json), jsonSafe: () => json, text: () => Promise.resolve(txt) };
       } catch (e) {
         lastErr = e;
-        if (_try === 2) {
-          try { console.warn("[gpt-sovits-tts] 直连TTS失败(重试3次仍败): " + (b + path) + " err=" + String((e && e.message) || e).slice(0, 120)); } catch (e2) { /* noop */ }
+        if (_try === _rMax) {
+          try { console.warn("[gpt-sovits-tts] 直连TTS失败(重试" + _rMax + "次仍败): " + (b + path) + " err=" + String((e && e.message) || e).slice(0, 120)); } catch (e2) { /* noop */ }
         }
       }
     }
