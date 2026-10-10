@@ -276,6 +276,7 @@ export class VoiceManager {
       <footer class="fvtt-tts-vm-foot">
         <button type="button" class="fvtt-tts-vm-back" style="display:none">${t("vm.back", "返回")}</button>
         <button type="button" class="fvtt-tts-vm-usage" title="最新使用测试: 引擎连通→合成播放→立绘切换→风格判定, 一条龙出报告(替代旧自检/高压/速度/玩家自测)">🧪 使用测试</button>
+        <button type="button" class="fvtt-tts-vm-aitest" title="提示词/AI/立绘三合一测试: AI按朗读提示词判语气+润色台词+直接选立绘, 强度0/50/100%对比, 手动选立绘优先验证(共4句, 约30~60秒)">🤖 提示词/AI测试</button>
         <span class="fvtt-tts-vm-spacer" style="flex:1"></span>
         <button type="button" class="fvtt-tts-vm-test">${t("vm.test", "试听")}</button>
         <button type="button" class="fvtt-tts-vm-save">${t("vm.save", "保存")}</button>
@@ -283,6 +284,16 @@ export class VoiceManager {
         <button type="button" class="fvtt-tts-vm-runassign" title="${t("vm.runAssignTitle", "给每个账号指定语音由谁的电脑生成(仅主持人)")}">👥 ${t("vm.runAssign", "语音生成者分配")}</button>` : ""}
       </footer>`;
     this.el.querySelector(".fvtt-tts-vm-close").addEventListener("click", () => this.close());
+    this.el.querySelector(".fvtt-tts-vm-aitest").addEventListener("click", async () => {
+      try {
+        const cn = (loadVoiceProfile().current) || "";
+        if (!cn) { ui.notifications.warn("请先选择角色再测"); return; }
+        ui.notifications.info("提示词/AI/立绘测试开始(约30~60秒, 共4句: 严肃/开心/惊讶/手动优先)");
+        const fn = (typeof window.runAIPromptTest === "function") ? window.runAIPromptTest : null;
+        if (fn) await fn();
+        else ui.notifications.error("测试函数未就绪(runAIPromptTest), 请刷新后重试");
+      } catch (e) { ui.notifications.error("测试失败: " + String((e && e.message) || e).slice(0, 80)); }
+    });
     this.el.querySelector(".fvtt-tts-vm-usage").addEventListener("click", async () => {
       try {
         const cn = (loadVoiceProfile().current) || "";

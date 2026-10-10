@@ -1005,6 +1005,10 @@ async function maybeSpeak(message) {
               }
             } catch (e) { /* noop */ }
           }
+          // 1.6.54 AI 测试探针(提示词/AI/立绘三合一测试收集用)
+          if (window.__fvttTTSAiLineDiag) {
+            try { (window.__fvttTTSAiLineDiagList = window.__fvttTTSAiLineDiagList || []).push({ ts: Date.now(), text: String(decision.text || "").slice(0, 30), emo: String(res.emotion || ""), polish: String(res.polish || "").slice(0, 40), sprite: res.sprite || 0, strength: styleStrengthOf(roleN), manual: !!(flA && flA.selSprite) }); } catch (e) { /* noop */ }
+          }
           else if (res.reason && res.reason !== "no-llm" && res.reason !== "no-slots" && res.reason !== "llm-broken") console.debug(`[gpt-sovits-tts] AI 判断未应用: ${res.reason}`);
         } catch (e) { /* noop */ }
       }
@@ -3840,6 +3844,97 @@ function styleEmotionKey(style) {
 
 // AI 语气判定(1.6.24): LLM 根据台词+角色提示词判情绪(驱动声音调制+立绘分组); 未配/失败/超时降级规则; 同批说话复用一次调用
 let _aiEmoPro = null;
+// 1.6.54 提示词/AI/立绘三合一测试: ①强度插值表 ②4条真实消息走完整朗读链(AI判语气+润色+选立绘) ③手动选立绘优先验证
+window.runAIPromptTest = async function runAIPromptTest() {
+  const MOD = MODULE;
+  const rows = [];
+  let cn = "";
+  try { cn = (loadVoiceProfile().current) || ""; } catch (e) { /* noop */ }
+  if (!cn) { ui.notifications.warn("请先选择角色再测"); return null; }
+  let verTxt = "?";
+  try { verTxt = game.modules.get(MOD) ? game.modules.get(MOD).version : "?"; } catch (e) { /* noop */ }
+  const cfg = getCfg();
+  const style = (typeof getStylePrompt === "function" ? (getStylePrompt(cn) || "") : "") || "";
+  const llmOk = !!(cfg.llmEnabled && cfg.llmKey) && window.__fvttTTSLlmBroken !== true;
+  rows.push("角色=" + cn + " | 朗读提示词=" + (style || "(未填, 用示例词)") + " | AI=" + (llmOk ? "可用" : "不可用(将走规则降级)") + " | 版本=" + verTxt);
+
+  // ① 提示词强度插值表(0/25/50/100%)
+  const _kw0 = styleKeywordParams(style || "严肃认真", 20);
+  const _ssRows = [];
+  [0, 25, 50, 100].forEach(pct => {
+    const _r = pct / 100;
+    const _spd = _kw0.speed ? (1 + (_kw0.speed - 1) * _r) : 1.0;
+    _ssRows.push(pct + "%→" + (_spd === 1.0 ? "spd=1.00" : "spd=" + _spd.toFixed(2)));
+  });
+  rows.push("[强度表] 关键词" + (_kw0.speed ? ("命中语速=" + _kw0.speed) : "未命中语速") + ": " + _ssRows.join(" | ") + (_kw0.split ? " | 切分: <25%不启用" : ""));
+
+  // ② 真实发送 4 条(走完整朗读链): 句4 模拟使用者手动选立绘 → 验证 AI 不覆盖
+  const scenes = [
+    { label: "句1", text: "今天的事情，就交给我吧。我会认真处理的。", strength: 100, manual: false },
+    { label: "句2", text: "哈哈，太棒啦！我们一起去吧～！", strength: 100, manual: false },
+    { label: "句3", text: "什么？你说的是真的吗？！", strength: 0, manual: false },
+    { label: "句4", text: "居然会变成这样——", strength: 50, manual: true },
+  ];
+  let manualSprite = "";
+  try {
+    const cc = (quickChars && quickChars.chars || []).find(x => x.name === cn);
+    if (cc && cc.sprites && cc.sprites[0]) manualSprite = cc.sprites[0];
+  } catch (e) { /* noop */ }
+  const _origStre = (() => { try { const vp = loadVoiceProfile(); const cc = (vp.chars && vp.chars[cn]) || null; return (cc && typeof cc.styleStrength === "number") ? cc.styleStrength : (typeof cfg.styleStrength === "number" ? cfg.styleStrength : 50); } catch (e) { return 50; } })();
+  window.__fvttTTSAiLineDiag = true;
+  window.__fvttTTSAiLineDiagList = [];
+  try {
+    for (let i = 0; i < scenes.length; i++) {
+      const sc = scenes[i];
+      try {
+        const profT = loadVoiceProfile();
+        profT.chars = profT.chars || {};
+        const cT = profT.chars[cn] || (profT.chars[cn] = { name: cn });
+        cT.styleStrength = sc.strength;   // 临时设置本条强度
+        saveVoiceProfile(profT);
+      } catch (e) { /* noop */ }
+      const flT = { fromModSend: true, role: cn, lang: "auto" };
+      if (sc.manual && manualSprite) flT.selSprite = manualSprite;   // 模拟使用者在立绘库点选
+      let msg = null;
+      try { msg = await ChatMessage.create({ content: sc.text, speaker: { alias: cn }, flags: { [MOD]: flT } }); }
+      catch (e) { rows.push("[" + sc.label + "] 发送失败: " + String((e && e.message) || e).slice(0, 60)); continue; }
+      const _before = (window.__fvttTTSAiLineDiagList || []).slice();
+      let waited = 0;
+      while (waited < 125 && (window.__fvttTTSAiLineDiagList || []).length <= _before.length) { await new Promise(r => setTimeout(r, 200)); waited++; }
+      let aud = "";
+      waited = 0;
+      while (waited < 100) {
+        try {
+          const m2 = game.messages.get(msg.id);
+          const f2 = m2 && m2.flags && m2.flags[MOD];
+          if (f2 && (f2.audioUrl || f2.audioData)) { aud = "✓"; break; }
+        } catch (e) { /* noop */ }
+        await new Promise(r => setTimeout(r, 200)); waited++;
+      }
+      const _probe = (window.__fvttTTSAiLineDiagList || []).slice(-1)[0] || {};
+      const _fNow = (() => { try { const m3 = game.messages.get(msg.id); return (m3 && m3.flags && m3.flags[MOD]) || {}; } catch (e) { return {}; } })();
+      const _aiSprite = _fNow.aiSprite || "";
+      rows.push("[" + sc.label + "(强度" + sc.strength + "%)] 「" + sc.text.slice(0, 16) + "…」 → AI情绪=" + (_probe.emo || "(未知/降级)") + " | 润色=" + ((_fNow.polishText || _probe.polish) ? "✓" : "—") + " | AI立绘=" + (_aiSprite ? ("#→" + String(_aiSprite).slice(-22)) : (sc.manual ? "未覆盖(手动优先✓)" : "无")) + " | 合成=" + (aud || "等待超时"));
+    }
+  } finally {
+    try {
+      const profR = loadVoiceProfile();
+      profR.chars = profR.chars || {};
+      const cR = profR.chars[cn] || (profR.chars[cn] = { name: cn });
+      cR.styleStrength = _origStre;
+      saveVoiceProfile(profR);
+    } catch (e) { /* noop */ }
+    window.__fvttTTSAiLineDiag = false;
+    window.__fvttTTSAiLineDiagList = [];
+  }
+  // ③ 报告落盘 + 展示
+  const reportTxt = "[AI提示词测试报告] " + new Date().toLocaleString("zh-CN") + " | 角色=" + cn + " | 版本=" + verTxt + "\n" + rows.join("\n");
+  console.warn("[gpt-sovits-tts][AI测试]\n" + reportTxt);
+  try { await svcRequest(cfg.serverUrl || "http://127.0.0.1:9881", "POST", "/diag", { type: "ai-lines-report", report: reportTxt }, { retries: 0 }); } catch (e) { /* noop */ }
+  ui.notifications.info("AI测试完成: " + rows.length + " 行报告(控制台/服务器日志)");
+  return rows;
+};
+
 function aiJudgeEmotionNow(text, role) {
   if (window.__fvttTTSLlmBroken === true) return null;   // 1.6.51 LLM 不可达: 直接返回(不再等 4s 超时)
   const _key = String(text || "") + "|" + String(role || "");

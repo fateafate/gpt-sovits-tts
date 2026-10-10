@@ -3031,7 +3031,7 @@ async def diag_endpoint(request: Request):
     except Exception:
         body = {}
     try:
-        _rt = "tts-reports.log" if str(body.get("type") or "") == "sprite-test-report" else "tts-requests.log"
+        _rt = "tts-reports.log" if str(body.get("type") or "") in ("sprite-test-report", "ai-lines-report") else "tts-requests.log"
         with open(os.path.join(os.path.dirname(__file__), _rt), "a", encoding="utf-8") as _lf:
             if _rt == "tts-reports.log":
                 _lf.write("\n===== %s =====\n%s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"), str(body.get("report") or "")))
