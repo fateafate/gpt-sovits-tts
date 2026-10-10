@@ -483,6 +483,23 @@ export class VoiceManager {
       </label>
       <div class="fvtt-tts-vm-hint">${t("vm.emotionHint", "语气槽在「编辑角色」里绑定音频；未绑定的语气用主参考音色。")}</div></section>`;
 
+    // ---- 立绘库(1.6.30): 主界面也显示当前角色全部立绘(蓝色单选, 说话立绘跟这里; 语音跟语气/情绪) ----
+    const spritesMain = (active && Array.isArray(active.sprites) && active.sprites.length) ? active.sprites : [];
+    if (spritesMain.length) {
+      const selM = ((p && p.selSprite) || "");
+      const spriteBaseM = (location.origin || "") + "/modules/gpt-sovits-tts/engine/audio_export/";
+      html += `<section class="fvtt-tts-vm-sec">
+        <div class="fvtt-tts-vm-title2">${t("vm.spriteLib", "立绘库")} <span class="fvtt-tts-vm-sprite-hint">${t("vm.spriteLibHint", "蓝色=纯立绘(不绑语音)，单选；语音跟语气/情绪，立绘跟这里。再点同张取消(恢复自动)")}</span></div>
+        <div class="fvtt-tts-vm-sprites">
+          ${spritesMain.map((s, i) => {
+            const on = selM === s ? " fvtt-tts-vm-sprite-on" : "";
+            const sUrl = spriteBaseM + String(s || "").replace(/^chars\//, "chars/");
+            return `<div class="fvtt-tts-vm-sprite-item${on}" data-sprite="${esc(s)}" title="${esc(s)}"><img src="${esc(sUrl)}" loading="lazy"><span class="fvtt-tts-vm-sprite-no">${i + 1}</span></div>`;
+          }).join("")}
+        </div>
+      </section>`;
+    }
+
     // 音色模型(GM, 服务端全局)
     if (isGM && active) {
       const ml = (active && (active.models_list || (this.charsData && this.charsData.detail && this.charsData.detail.models_list))) || { gpt: [], sovits: [] };
@@ -574,6 +591,23 @@ export class VoiceManager {
       });
     }
     body.querySelector(".fvtt-tts-vm-avpick").addEventListener("click", () => this._pickAvatar());
+    // 立绘库单选(1.6.30 主界面): 与编辑页一致 — 点选存 profile.chars[name].selSprite, 再点同张取消(恢复自动)
+    body.querySelectorAll(".fvtt-tts-vm-sprite-item").forEach(it => {
+      it.addEventListener("click", () => {
+        try {
+          const s = it.dataset.sprite;
+          const cn = (loadVoiceProfile().current) || "";
+          const prof = loadVoiceProfile();
+          prof.chars = prof.chars || {};
+          const c = prof.chars[cn] || (prof.chars[cn] = { name: cn });
+          const nv = (c.selSprite === s) ? "" : s;
+          c.selSprite = nv;
+          saveVoiceProfile(prof);
+          body.querySelectorAll(".fvtt-tts-vm-sprite-item").forEach(x => x.classList.toggle("fvtt-tts-vm-sprite-on", x === it && !!nv));
+          ui.notifications.info(nv ? (t("vm.spritePicked", "已选立绘：") + s) : t("vm.spriteAuto", "已取消，说话立绘按语气自动"));
+        } catch (e) { /* noop */ }
+      });
+    });
     // 读取语音分配表(带类型防御: 设置曾被错误存成字符串时按空表处理, 防止坏值传播)
 function safeAssignments() {
   try {

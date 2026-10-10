@@ -624,7 +624,7 @@ async function speak(text, { lang = null, sender = "", refAudioPath = null, prom
                 if (_pvCtx.promptLang) _upd.promptLang = _pvCtx.promptLang;
                 if (_pvCtx.auxRef) _upd.auxRef = _pvCtx.auxRef;
                 if (typeof _pvCtx.emotionMix === "number") _upd.emotionMix = _pvCtx.emotionMix;
-                if (_pvCtx.emotion) _upd.emotion = _pvCtx.emotion;
+                if (_pvCtx.emotion) _upd.emotion = normalizeEmotionKey(_pvCtx.emotion);   // 1.6.30 标准化(槽 key→joy/sad/...), 他端兜底合成调制才认
               }
             } catch (e) { /* noop */ }
             if (!Object.keys(_upd).length) { /* 无可用数据 */ }
@@ -3653,11 +3653,28 @@ function emoTagWords(emo) {
   return ["平静", "说话", "看着你", "闭眼", "中性"];
 }
 
+// 情绪键标准化(1.6.30): 语气槽 key/label(中文"开心/愤怒"或 custom_x) → 标准枚举(joy/sad/...)
+// 修"手动选了语气槽但立绘/声音调制不变" — 此前槽 key 原样传入, 情绪词表/调制表都认不出
+function normalizeEmotionKey(key) {
+  const k = String(key || "").toLowerCase();
+  if (/(开心|高兴|喜悦|大笑|微笑|好笑|兴奋|欢乐|joy|happy|laugh|smile|欢)/.test(k)) return "joy";
+  if (/(哭|难过|伤心|悲伤|泪|泣|沮丧|sad|cry|crying)/.test(k)) return "sad";
+  if (/(怒|生气|狂暴|气愤|恼|可恶|angry|rage|mad)/.test(k)) return "angry";
+  if (/(惊|愣|surprised|shock|wow)/.test(k)) return "surprised";
+  if (/(怕|恐惧|fear|scared|horror|害怕|哆嗦)/.test(k)) return "fear";
+  if (/(平静|温柔|calm|neutral|正常|冷|无语)/.test(k)) return "neutral";
+  return k || "neutral";
+}
+
 // 情绪规则判定(1.6.20): 无 LLM 依赖 — 台词关键词/标点 → 情绪key(引擎后处理调制近似语气); 显式选择的语气优先
 function detectEmotion(text, cur) {
   try {
     const e = (cur && cur.emotion) || "";
-    if (e && e !== "neutral") return e;
+    if (e) {
+      // 手动语气(语气槽)优先: 标准化成 joy/sad/angry/... 再返回(1.6.30: 不再原样吐槽 key)
+      const ne = normalizeEmotionKey(e);
+      if (ne && ne !== "neutral") return ne;
+    }
     const t = String(text || "");
     if (/(哈哈|嘻嘻|嘿嘿|好耶|太棒|开心|高兴|万岁|太好了|笑)/.test(t)) return "joy";
     if (/(呜呜|呜咽|哭|伤心|难过|悲伤|泪|好想|舍不得)/.test(t)) return "sad";
@@ -3705,7 +3722,7 @@ Hooks.on("chatMessage", (chatLog, message, chatData) => {
       const cur = currentVoice();
       const fl = {
         role: prof0.current || "",
-        emotion: (cur && cur.emotion) || "",
+        emotion: normalizeEmotionKey((cur && cur.emotion) || ""),   // 1.6.30 标准化枚举: 他端立绘分组/兜底声音调制都能认
         ttsProvider: String((cur && cur.ttsProvider) || ""),
         // 立绘路径随消息同步(跨端一致): 情绪分组(不同语气不同立绘) + 组内轮换(同语气连说换不同张) > 语气槽立绘 — 1.6.21
         avatar: (() => { try {
@@ -3715,7 +3732,7 @@ Hooks.on("chatMessage", (chatLog, message, chatData) => {
           if (_selSp) return _selSp;
           const cD = (quickChars && quickChars.chars || []).find(x => x.name === prof0n);
           if (cD && Array.isArray(cD.sprites) && cD.sprites.length >= 1) {
-            const _emoS = String((cur && cur.emotion) || detectEmotion(String(message.content || chatData.content || ""), null) || "");
+            const _emoS = String(detectEmotion(String(message.content || chatData.content || ""), cur || null) || "neutral");
             const _emoList = spriteBucketForEmotion(cD.sprites, _emoS, cD.emotion_tags);
             const _rot = getSpriteRotation(prof0n + "|" + _emoS, _emoS);
             return cD.sprites[_emoList[_rot % _emoList.length]];
