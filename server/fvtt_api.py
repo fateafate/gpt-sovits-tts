@@ -3388,16 +3388,20 @@ async def llm_assess_endpoint(request: Request):
     role_lines = ""
     if role_name or setting:
         role_lines = "角色: %s\n角色设定: %s\n" % (role_name or "未知", setting or "无")
+    style_lines = ""
+    if style:
+        style_lines = "朗读提示词(判断语气与润色时优先贴合该风格): %s\n" % style
     option_lines = "\n".join("- %s (%s)" % (k, v) for k, v in emo_map.items())
     sys_prompt = (
         "你是语气分析+台词润色助手(%s)。任务：根据台词内容、角色性格及其所在对话上下文，判断说话者语气，并%s。\n"
+        "%s"
         "%s"
         "该角色可用语气选项:\n%s\n"
         "要求：\n"
         "1) emotion 必须是上面选项里的英文 key 之一（优先贴合该角色性格与台词语气）；\n"
         "2) polish 保持原意、不改事实内容，通过语气词/口语化/感叹让表达更自然更有情绪表现力，简体中文；\n"
         "3) 判断语气时优先依据台词本身与角色性格，上下文(最近对话)只作辅助理解语境；\n"
-        "4) 只输出一个 JSON 对象，格式: {\"emotion\": \"key\", \"polish\": \"润色后的台词\"}，不要任何解释、不要 markdown。" % (role_name or "声音助手", "按该语气把台词润色得更自然" if want_polish else "不润色, polish 填空字符串", role_lines, option_lines)
+        "4) 只输出一个 JSON 对象，格式: {\"emotion\": \"key\", \"polish\": \"润色后的台词\"}，不要任何解释、不要 markdown。" % (role_name or "声音助手", "按该语气把台词润色得更自然" if want_polish else "不润色, polish 填空字符串", role_lines, style_lines, option_lines)
     )
     user_content = text[:1200]
     if context:

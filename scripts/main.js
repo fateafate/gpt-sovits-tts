@@ -71,7 +71,7 @@ const SETTINGS = [
   ["aiSharedKey",   { type: String, scope: "world", default: "", restricted: true, name: "settings.aiSharedKey.name", hint: "settings.aiSharedKey.hint" }],
   ["aiSharedModel", { type: String, scope: "world", default: "", restricted: true, name: "settings.aiSharedModel.name", hint: "settings.aiSharedModel.hint" }],
   ["aiSharedModels", { type: String, scope: "world", default: "", restricted: true, name: "settings.aiSharedModels.name", hint: "settings.aiSharedModels.hint" }],
-  ["llmPolish",     { type: Boolean, scope: "client", default: false,            name: "settings.llmPolish.name",   hint: "settings.llmPolish.hint" }],
+  ["llmPolish",     { type: Boolean, scope: "client", default: true,             name: "settings.llmPolish.name",   hint: "settings.llmPolish.hint" }],
   ["llmMergePolish", { type: Boolean, scope: "client", default: true,          name: "settings.llmMergePolish.name", hint: "settings.llmMergePolish.hint" }],
   ["llmModels",     { type: Array,   scope: "client", default: [],                name: "settings.llmModels.name",   hint: "settings.llmModels.hint" }],
   ["aiPickAvatar",  { type: Boolean, scope: "client", default: true,              name: "settings.aiPickAvatar.name",  hint: "settings.aiPickAvatar.hint" }],
@@ -933,8 +933,8 @@ async function maybeSpeak(message) {
       }
     }
   } catch (e) { /* noop */ }
-  // 朗读永远用用户发送的原文(不覆盖成 AI 回复/润色文本)
-  let speakText = decision.text;
+  // 朗读文本: 优先上次 AI 润色结果(重播一致); 否则用原文
+  let speakText = (fl && fl.polishText) || decision.text;
   // AI 语气调配(对标成品软件):
   //  - 未选语气(默认) → AI 自主判断语气(只选情绪槽, 不改台词)
   //  - 已选语气 → 不重判情绪; 情绪槽音频已随 flags 应用
@@ -948,8 +948,19 @@ async function maybeSpeak(message) {
       let _emo = "";
       if (cfg.llmEnabled && cfg.llmKey && window.__fvttTTSLlmBroken !== true) {
         try {
-          const res = await judgeAndPolishByLLM(decision.text, roleN, false, getChatContext());
+          const res = await judgeAndPolishByLLM(decision.text, roleN, !!cfg.llmPolish, getChatContext());
           if (res.ok && res.emotion) _emo = String(res.emotion);
+          // 1.6.52 朗读提示词交给AI(Shinsekai式): AI按角色人设+朗读提示词润色台词朗读; 聊天记录保持原文, flags记polishText(重播一致)
+          if (res.ok && res.polish && cfg.llmPolish) {
+            speakText = res.polish;
+            try {
+              if (message && message.flags && message.flags[MODULE]) {
+                const _nfP = { ...(message.flags[MODULE]) };
+                _nfP.polishText = res.polish;
+                safeMsgWrite(message, { flags: { [MODULE]: _nfP } });
+              }
+            } catch (e) { /* noop */ }
+          }
           else if (res.reason && res.reason !== "no-llm" && res.reason !== "no-slots" && res.reason !== "llm-broken") console.debug(`[gpt-sovits-tts] AI 判断未应用: ${res.reason}`);
         } catch (e) { /* noop */ }
       }
@@ -1471,7 +1482,7 @@ function buildSendPop() {
         }
       }
       // 按当前角色/语气/情绪占比预合成这段输入文本(与发送时的声音完全一致)
-      const stripP = tnow;
+      let stripP = tnow;
       const profP = loadVoiceProfile();
       const roleP = profP.current || "";
       const emoP = profP.emotion || "";
@@ -1487,8 +1498,10 @@ function buildSendPop() {
       } else if (cfgP2.llmEnabled && cfgP2.llmKey) {
         // 无手动语气 → 与发送时一致: AI 判断语气(不改台词), 预合成音频带 AI 语气, 避免"预加载默认 vs 发送 AI 语气"听感不一
         try {
-          const resP = await judgeAndPolishByLLM(stripP, roleP, false, "");
+          const resP = await judgeAndPolishByLLM(stripP, roleP, !!cfgP2.llmPolish, "");
           if (resP.ok && resP.emotion) {
+            // 1.6.52 与朗读一致: AI 润色文本也用于预合成音频(否则"预加载原文 vs 朗读润色稿"听感/内容不一)
+            if (resP.polish && cfgP2.llmPolish) stripP = resP.polish;
             const slotP = findEmotionSlot(resP.emotion, roleP);
             if (slotP) {
               if (slotP.ref_audio_path) overridesP.auxRefAudioPaths = [`fvtt_chars/${roleP}/${slotP.ref_audio_path}`];
@@ -1768,6 +1781,7 @@ async function judgeAndPolishByLLM(text, charName, wantPolish, context) {
             emotions: emotionsList,
             role: charName || "",
             setting: (c && c.setting) || "",
+            style: (typeof getStylePrompt === "function" ? (getStylePrompt(charName || "") || "") : ""),   // 1.6.52 朗读提示词交给AI: 判语气+润色都参考它(Shinsekai式)
             polish: !!wantPolish,
           }, { timeoutMs: 70000 });
         const j = await r.json().catch(() => ({}));

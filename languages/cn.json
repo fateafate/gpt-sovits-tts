@@ -94,7 +94,7 @@
     "llmBaseUrl": { "name": "LLM API 地址 (LLM API Base URL)", "hint": "OpenAI 兼容端点。例：OpenAI=https://api.openai.com/v1；DeepSeek=https://api.deepseek.com/v1；或其他兼容服务。" },
     "llmKey": { "name": "LLM API 密钥 (LLM API Key)", "hint": "你的模型服务密钥(仅本机模块使用)。" },
     "llmModel": { "name": "LLM 模型 (LLM Model)", "hint": "模型名，如 gpt-4o-mini / deepseek-chat。可先在语音设置面板「获取模型列表」后，这里自动变成服务可用模型的下拉。" },
-    "llmPolish": { "name": "AI 润色台词 (AI Polish Lines)", "hint": "开: AI 判断语气后按该情绪微调台词(加语气词/情绪表达, 不改原意)再朗读, 复刻成品软件的语气多样性；关: 朗读原文。" },
+    "llmPolish": { "name": "AI 润色台词 (AI Polish Lines)", "hint": "开(默认): 朗读时 AI 按角色人设+朗读提示词微调台词(加语气词/情绪表达, 不改原意)再朗读, 复刻成品软件的语气多样性；关: 朗读原文。" },
     "llmMergePolish": { "name": "判断+润色合并调用 (Merge Judgement & Polish)", "hint": "开: 一次 LLM 调用同时判断语气和润色台词, 延迟减半(推荐)；关: 分两次调用(判断一次、润色一次)。" },
     "llmModels": { "name": "LLM 可用模型缓存 (Fetched LLM Models)", "hint": "自动缓存：语音设置面板「获取模型列表」拉取到的可用模型（本项自动维护，无需手动填写）。" }
   },
