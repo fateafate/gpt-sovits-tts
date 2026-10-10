@@ -497,11 +497,16 @@ async function speak(text, { lang = null, sender = "", refAudioPath = null, prom
   // 情绪(1.6.24): LLM 根据台词+角色提示词判情绪(优先, 声音调制+立绘分组) > 显式选择 > 规则判定; 失败降级不阻塞
   if (pv && !pv.auxRef) {
     let _emoDet = null;
-    try { const _aiE = await aiJudgeEmotionNow(finalText, prof0.current || ""); if (_aiE) _emoDet = _aiE; } catch (e) { /* noop */ }
+    let _aiE = null;
+    let _stSrc = "";
+    // 1.6.47 朗读风格优先作语气判定参考(对标 Shinsekai: 风格给AI决定这句话的语气; 无LLM时先按风格词映射)
+    try { _stSrc = getStylePrompt(prof0.current || "") || String((pv && pv.stylePrompt) || ((prof0.chars && prof0.chars[(prof0.current || "")]) || {}).stylePrompt || "").trim(); } catch (e) { /* noop */ }
+    try { const _stE = styleEmotionKey(_stSrc); if (_stE) _emoDet = _stE; } catch (e) { /* noop */ }
+    if (!_emoDet) { try { _aiE = await aiJudgeEmotionNow(finalText, prof0.current || ""); if (_aiE) _emoDet = _aiE; } catch (e) { /* noop */ } }
     if (!_emoDet) _emoDet = detectEmotion(finalText, pv);
     if (_emoDet && _emoDet !== "neutral") { overrides = overrides || {}; overrides.emotion = _emoDet; }
     if (window.__fvttTTSSpriteDiag) {
-      try { console.warn("[gpt-sovits-tts][语气判定] 文本=" + String(finalText || "").slice(0, 24) + " | AI=" + (_aiE || "无(未配LLM)") + " | 规则=" + ((_emoDet || "") || "无") + " | 调制=" + ((_emoDet && _emoDet !== "neutral") ? "开(" + _emoDet + ")" : "关(neutral)") + " | 槽音频=" + (pv.auxRef ? "有(不调制)" : "无")); } catch (e) { /* noop */ }
+      try { console.warn("[gpt-sovits-tts][语气判定] 文本=" + String(finalText || "").slice(0, 24) + " | 风格=" + String(_stSrc || "-").slice(0, 20) + " | AI=" + (_aiE || "无(未配LLM或降级)") + " | 规则=" + ((_emoDet || "") || "无") + " | 调制=" + ((_emoDet && _emoDet !== "neutral") ? "开(" + _emoDet + ")" : "关(neutral)") + " | 槽音频=" + (pv.auxRef ? "有(不调制)" : "无")); } catch (e) { /* noop */ }
     }
   }
 
@@ -3418,12 +3423,14 @@ Hooks.once("ready", () => {
   try { installModuleSocket(); } catch (e) { /* noop */ }
   try { installGmProxy(); } catch (e) { /* noop */ }
   // 🔬 1.5.0 场景化全面测试套件(取代旧测试按钮): 玩家套件(28场景玩家视角) + GM 综合套件(28场景全员视角)
-  try {
-    installTTSTests({
-      getCfg, speak, blobToBase64, stripStageDirections, findEmotionSlot,
-      loadVoiceProfile, currentVoice, cacheAudio, _modulePath, loadQuickChars,
-    });
-  } catch (e) { console.error("[gpt-sovits-tts] tests install failed:", e); }
+  setTimeout(() => {   // 1.6.47 测试套件延后注册(打开世界首屏更顺, 不阻塞 ready)
+    try {
+      installTTSTests({
+        getCfg, speak, blobToBase64, stripStageDirections, findEmotionSlot,
+        loadVoiceProfile, currentVoice, cacheAudio, _modulePath, loadQuickChars,
+      });
+    } catch (e) { console.error("[gpt-sovits-tts] tests install failed:", e); }
+  }, 800);
   // 🤖 LLM 健康预探测: 配置了 AI 就发一次小请求, 失败(502/404/网络)→本会话禁用全部 LLM 调用
   // (根治每句 /llm 502 刷屏: GM 端 F12 看到的多条 502 来自"玩家发起→GM 转发→引擎 502" + 并发窗口;
   //  各端 8s 内先探一次并设标记, 之后 judgeAndPolishByLLM/预加载/选角全部跳过; 修好 base/key 后刷新恢复)
@@ -3721,6 +3728,25 @@ function detectEmotion(text, cur) {
   } catch (e) { return "neutral"; }
 }
 
+// 朗读风格 → 情绪枚举(1.6.47, 对标 Shinsekai: 风格是给AI决定"这句话语气"的参考; 无LLM时先按风格词映射情绪, 再规则/AI兜底)
+function styleEmotionKey(style) {
+  try {
+    const s = String(style || "");
+    if (!s.trim()) return "";
+    const _stMap = [
+      [/严肃|认真|正式|威严|庄重|稳重|庄严|沉着|冷静/, "calm"],
+      [/激动|兴奋|紧张|热血|高亢|有力|燃|热/, "joy"],
+      [/生气|愤怒|恼火|怒|气愤/, "angry"],
+      [/害怕|恐惧|恐慌/, "fear"],
+      [/惊讶|吃惊|震惊/, "surprised"],
+      [/难过|悲伤|哭/, "sad"],
+      [/温柔|轻柔|舒缓|慵懒|软|温和|平静|优美|甜/, "joy"],
+    ];
+    for (let i = 0; i < _stMap.length; i++) { if (_stMap[i][0].test(s)) return _stMap[i][1]; }
+    return "";
+  } catch (e) { return ""; }
+}
+
 // AI 语气判定(1.6.24): LLM 根据台词+角色提示词判情绪(驱动声音调制+立绘分组); 未配/失败/超时降级规则; 同批说话复用一次调用
 let _aiEmoPro = null;
 function aiJudgeEmotionNow(text, role) {
@@ -3737,6 +3763,7 @@ function aiJudgeEmotionNow(text, role) {
       const r = await svcRequest(cfg.serverUrl, "POST", "/llm", {
         base: cfg.llmBaseUrl || "https://api.openai.com/v1", key: cfg.llmKey, model: cfg.llmModel || "gpt-4o-mini",
         text: String(text || "").slice(0, 1200), role: role || prof.current || "", setting: (qcC && qcC.setting) || "", emotions: emos,
+        style: getStylePrompt(role || prof.current || "") || "",   // 1.6.47 朗读风格作LLM判语气参考(Shinsekai式: 风格=给AI决定这句子语气)
       }, { timeoutMs: 6000 });
       const j = r.jsonSafe ? r.jsonSafe() : (r.json || {});
       if (j && j.ok && j.emotion) return String(j.emotion);
