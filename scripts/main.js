@@ -533,9 +533,10 @@ async function speak(text, { lang = null, sender = "", refAudioPath = null, prom
     let _stSrc = "";
     // 1.6.47 朗读风格优先作语气判定参考(对标 Shinsekai: 风格给AI决定这句话的语气; 无LLM时先按风格词映射)
     try { _stSrc = getStylePrompt(prof0.current || "") || String((pv && pv.stylePrompt) || ((prof0.chars && prof0.chars[(prof0.current || "")]) || {}).stylePrompt || "").trim(); } catch (e) { /* noop */ }
-    try { const _stE = styleEmotionKey(_stSrc); if (_stE) _emoDet = _stE; } catch (e) { /* noop */ }
+    // 1.6.56 判定顺序: AI > 文本规则优先 > 提示词基调兜底(否则提示词"愤怒"会把开心句也判成愤怒)
     if (!_emoDet) { try { _aiE = await aiJudgeEmotionNow(finalText, prof0.current || ""); if (_aiE) _emoDet = _aiE; } catch (e) { /* noop */ } }
     if (!_emoDet) _emoDet = detectEmotion(finalText, pv);
+    if (!_emoDet) { try { const _stE = styleEmotionKey(_stSrc); if (_stE) _emoDet = _stE; } catch (e) { /* noop */ } }
     if (_emoDet && _emoDet !== "neutral") { overrides = overrides || {}; overrides.emotion = _emoDet; }
     if (window.__fvttTTSSpriteDiag) {
       try { console.warn("[gpt-sovits-tts][语气判定] 文本=" + String(finalText || "").slice(0, 24) + " | 提示词=" + String(_stSrc || "-").slice(0, 20) + " | AI=" + (_aiE || "无(未配LLM或降级)") + " | 规则=" + ((_emoDet || "") || "无") + " | 调制=" + ((_emoDet && _emoDet !== "neutral") ? "开(" + _emoDet + ")" : "关(neutral)") + " | 槽音频=" + (pv.auxRef ? "有(不调制)" : "无")); } catch (e) { /* noop */ }
@@ -1010,10 +1011,10 @@ async function maybeSpeak(message) {
         } catch (e) { /* noop */ }
       }
       if (!_emo) {
-        // 1.6.50 无LLM/失败/未配: 风格词→规则判定(无AI时同样能切换情绪参考音)
+        // 1.6.56 文本情绪优先, 提示词基调兜底(否则提示词"愤怒"会把"哈哈太棒了"也判成愤怒)
         try {
           const _stP = getStylePrompt(roleN) || "";
-          _emo = styleEmotionKey(_stP) || detectEmotion(decision.text, null);
+          _emo = detectEmotion(decision.text, null) || styleEmotionKey(_stP);
         } catch (e) { try { _emo = detectEmotion(decision.text, null); } catch (e2) { _emo = ""; } }
       }
       if (_emo && _emo !== "neutral") {
@@ -3857,7 +3858,7 @@ window.runAIPromptTest = async function runAIPromptTest() {
   const cfg = getCfg();
   const style = (typeof getStylePrompt === "function" ? (getStylePrompt(cn) || "") : "") || "";
   const llmOk = !!(cfg.llmEnabled && cfg.llmKey) && window.__fvttTTSLlmBroken !== true;
-  rows.push("角色=" + cn + " | 朗读提示词=" + (style || "(未填, 用示例词)") + " | AI=" + (llmOk ? "可用" : "不可用(将走规则降级)") + " | 版本=" + verTxt + (verTxt === "1.6.55" ? "" : " ⚠ 若≠1.6.55 请强刷 Foundry(GM设置→模块或Ctrl+F5)"));
+  rows.push("角色=" + cn + " | 朗读提示词=" + (style || "(未填, 用示例词)") + " | AI=" + (llmOk ? "可用" : "不可用(将走规则降级)") + " | 版本=" + verTxt + (verTxt === "1.6.56" ? "" : " ⚠ 若≠1.6.56 请强刷 Foundry(GM设置→模块或Ctrl+F5)"));
 
   // ① 提示词强度插值表(0/25/50/100%)
   const _kw0 = styleKeywordParams(style || "严肃认真", 20);
@@ -3869,18 +3870,23 @@ window.runAIPromptTest = async function runAIPromptTest() {
   });
   rows.push("[强度表] 关键词" + (_kw0.speed ? ("命中语速=" + _kw0.speed) : "未命中语速") + ": " + _ssRows.join(" | ") + (_kw0.split ? " | 切分: <25%不启用" : ""));
 
-  // ② 真实发送 4 条(走完整朗读链): 句4 模拟使用者手动选立绘 → 验证 AI 不覆盖
+  // ② 真实发送 5 条(多语种×多语气×双模型, 走完整朗读链): 最后一条模拟使用者手动选立绘 → 验证 AI 不覆盖
+  // 丛雨=Murasame(愤怒提示词→愤怒基调); 七海千秋=nanami(模型切换); 语种 zh/ja/en 混测
   const scenes = [
-    { label: "句1", text: "今天的事情，就交给我吧。我会认真处理的。", strength: 100, manual: false },
-    { label: "句2", text: "哈哈，太棒啦！我们一起去吧～！", strength: 100, manual: false },
-    { label: "句3", text: "什么？你说的是真的吗？！", strength: 0, manual: false },
-    { label: "句4", text: "居然会变成这样——", strength: 50, manual: true },
+    { label: "句1", role: "丛雨", lang: "zh", text: "今天的事情，就交给我吧。我会认真处理的。", strength: 100, manual: false },   // 期望: 文本neutral→提示词愤怒→angry(愤怒变声)
+    { label: "句2", role: "丛雨", lang: "zh", text: "哈哈，太棒啦！我们一起去吧～！", strength: 100, manual: false },                    // 期望: 文本优先→joy(不被愤怒覆盖)
+    { label: "句3", role: "丛雨", lang: "ja", text: "えっ？！本当ですか？！信じられない……", strength: 50, manual: false },               // ja 惊讶
+    { label: "句4", role: "七海千秋", lang: "en", text: "Oh no… why did it have to end like this…", strength: 100, manual: false },       // 切七海模型 en 悲伤
+    { label: "句5", role: "七海千秋", lang: "zh", text: "嗯…那就这样吧。", strength: 0, manual: true },                                    // 七海 zh 平静 + 手动立绘优先
   ];
-  let manualSprite = "";
-  try {
-    const cc = (quickChars && quickChars.chars || []).find(x => x.name === cn);
-    if (cc && cc.sprites && cc.sprites[0]) manualSprite = cc.sprites[0];
-  } catch (e) { /* noop */ }
+  const _origRole = (() => { try { return (loadVoiceProfile().current) || ""; } catch (e) { return ""; } })();
+  const manualSpriteOf = (r) => {
+    try {
+      const cc = (quickChars && quickChars.chars || []).find(x => x.name === r);
+      if (cc && cc.sprites && cc.sprites[0]) return cc.sprites[0];
+    } catch (e) { /* noop */ }
+    return "";
+  };
   const _origStre = (() => { try { const vp = loadVoiceProfile(); const cc = (vp.chars && vp.chars[cn]) || null; return (cc && typeof cc.styleStrength === "number") ? cc.styleStrength : (typeof cfg.styleStrength === "number" ? cfg.styleStrength : 50); } catch (e) { return 50; } })();
   window.__fvttTTSAiLineDiag = true;
   window.__fvttTTSAiLineDiagList = [];
@@ -3889,15 +3895,16 @@ window.runAIPromptTest = async function runAIPromptTest() {
       const sc = scenes[i];
       try {
         const profT = loadVoiceProfile();
+        profT.current = sc.role;   // 临时切到场景角色(多模型测试: 引擎按 role 换模型)
         profT.chars = profT.chars || {};
-        const cT = profT.chars[cn] || (profT.chars[cn] = { name: cn });
+        const cT = profT.chars[sc.role] || (profT.chars[sc.role] = { name: sc.role });
         cT.styleStrength = sc.strength;   // 临时设置本条强度
         saveVoiceProfile(profT);
       } catch (e) { /* noop */ }
-      const flT = { fromModSend: true, role: cn, lang: "auto" };
-      if (sc.manual && manualSprite) flT.selSprite = manualSprite;   // 模拟使用者在立绘库点选
+      const flT = { fromModSend: true, role: sc.role, lang: sc.lang };
+      if (sc.manual) { const _ms = manualSpriteOf(sc.role); if (_ms) flT.selSprite = _ms; }   // 模拟使用者在立绘库点选
       let msg = null;
-      try { msg = await ChatMessage.create({ content: sc.text, speaker: { alias: cn }, flags: { [MOD]: flT } }); }
+      try { msg = await ChatMessage.create({ content: sc.text, speaker: { alias: sc.role }, flags: { [MOD]: flT } }); }
       catch (e) { rows.push("[" + sc.label + "] 发送失败: " + String((e && e.message) || e).slice(0, 60)); continue; }
       const _before = (window.__fvttTTSAiLineDiagList || []).slice();
       let waited = 0;
@@ -3914,12 +3921,13 @@ window.runAIPromptTest = async function runAIPromptTest() {
       }
       const _probe = (window.__fvttTTSAiLineDiagList || []).slice(-1)[0] || {};
       const _fNow = (() => { try { const m3 = game.messages.get(msg.id); return (m3 && m3.flags && m3.flags[MOD]) || {}; } catch (e) { return {}; } })();
-      const _aiSprite = _fNow.aiSprite || "";
-      rows.push("[" + sc.label + "(强度" + sc.strength + "%)] 「" + sc.text.slice(0, 16) + "…」 → 判定=" + (_probe.src || "—") + " 情绪=" + (_probe.emo || "无(neutral)") + " | 润色=" + ((_fNow.polishText || _probe.polish) ? "✓" : "—") + " | AI立绘=" + (_aiSprite ? ("#→" + String(_aiSprite).slice(-22)) : (sc.manual ? "未覆盖(手动优先✓)" : "无")) + " | 合成=" + (aud || "等待超时"));
+      const _avNow = _fNow.avatar || _fNow.selSprite || _fNow.aiSprite || "";
+      rows.push("[" + sc.label + " " + sc.role + "/" + sc.lang + "/强度" + sc.strength + "%] 「" + sc.text.slice(0, 16) + "…」 → 判定=" + (_probe.src || "—") + " 情绪=" + (_probe.emo || "无(neutral)") + " | 润色=" + ((_fNow.polishText || _probe.polish) ? "✓" : "—") + " | 立绘=" + (_avNow ? ("#→" + String(_avNow).slice(-22)) : (sc.manual ? "未覆盖(手动优先✓)" : "无")) + " | 合成=" + (aud || "等待超时"));
     }
   } finally {
     try {
       const profR = loadVoiceProfile();
+      profR.current = _origRole;   // 恢复原角色
       profR.chars = profR.chars || {};
       const cR = profR.chars[cn] || (profR.chars[cn] = { name: cn });
       cR.styleStrength = _origStre;
