@@ -3746,7 +3746,8 @@ Hooks.on("chatMessage", (chatLog, message, chatData) => {
         role: prof0.current || "",
         emotion: normalizeEmotionKey((cur && cur.emotion) || ""),   // 1.6.30 标准化枚举: 他端立绘分组/兜底声音调制都能认
         ttsProvider: String((cur && cur.ttsProvider) || ""),
-        // 立绘路径随消息同步(跨端一致): 情绪分组(不同语气不同立绘) + 组内轮换(同语气连说换不同张) > 语气槽立绘 — 1.6.21
+        // 立绘路径随消息同步(跨端一致): 手动选立绘(立绘库) > 情绪分组+组内轮换 > 语气槽立绘 — 1.6.34
+        selSprite: ((() => { try { const _pn = (prof0 && prof0.current) || ""; return (prof0 && prof0.chars && prof0.chars[_pn] && prof0.chars[_pn].selSprite) || ""; } catch (e) { return ""; } })()),
         avatar: (() => { try {
           const prof0n = (prof0 && prof0.current) || "";
           // 1.6.29 手动选立绘(立绘库)最高优先: 语音跟语气槽/情绪, 立绘跟这里
@@ -3766,7 +3767,7 @@ Hooks.on("chatMessage", (chatLog, message, chatData) => {
           }
           return (cD && cD.avatar) || (cur && cur.avatar) || "";
         } catch (e) { return ""; } })(),
-        slotAvatar: (() => { try { const sD = (cur && cur.emotion) ? findEmotionSlot(cur.emotion, prof0.current || "") : null; return (sD && sD.avatar) || ""; } catch (e) { return ""; } })(),
+        slotAvatar: (() => { try { const _pn2 = (prof0 && prof0.current) || ""; const _selSp2 = (prof0 && prof0.chars && prof0.chars[_pn2] && prof0.chars[_pn2].selSprite) || ""; return _selSp2 ? "" : ((findEmotionSlot((cur && cur.emotion) || "", _pn2) || {}).avatar || ""); } catch (e) { return ""; } })(),   // 1.6.34 手动选立绘时语气槽立绘让位
         ref: (cur && cur.ref) || "",
         auxRef: (cur && cur.auxRef) || "",
         promptText: (cur && cur.promptText) || "",
@@ -4390,7 +4391,7 @@ function applyEmotionAvatar(message, html) {
     // 立绘跟随朗读(1.6.6): 只有"实际合成/播放了语音"的消息才插立绘 — 纯文本/旁白/动作消息不插。
     // 判定: 消息 flags 已带音频(写回完成) 或 本端已播过该消息(playedIds / 已播 src)。
     // 新消息合成前渲染 → 无音频不插; 写回后 updateChatMessage 播放路径补插。
-    const hasAudio = !!(fl && (fl.audioData || fl.audioUrl));
+    const hasAudio = !!(fl && (fl.audioData || fl.audioUrl || fl.selSprite || fl.spriteTest));   // 1.6.34 手动选立绘/立绘测试消息即使未朗读也插立绘
     const playedHere = (() => {
       try {
         if (message && message.id && playedIds.has(message.id)) return true;
@@ -4420,7 +4421,7 @@ function applyEmotionAvatar(message, html) {
     }
     const c = (role && quickChars && quickChars.chars || []).find(x => x.name === role);
     const slot = (fl && fl.emotion) ? findEmotionSlot(fl.emotion, role) : null;   // key/label 均可匹配 → 立绘随语气
-    let av = (fl && (fl.slotAvatar || fl.avatar)) || (slot && slot.avatar) || (c && c.avatar) || "";   // 消息自带立绘(跨端一致) → 本地角色数据
+    let av = (fl && (fl.selSprite || fl.slotAvatar || fl.avatar)) || (slot && slot.avatar) || (c && c.avatar) || "";   // 1.6.34 手动选立绘 > 消息自带(跨端) > 语气槽立绘
     if (!av && c) {
       // 兜底: 取该角色第一张有图的语气槽立绘
       try {

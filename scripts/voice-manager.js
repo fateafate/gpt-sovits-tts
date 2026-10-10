@@ -629,7 +629,7 @@ export class VoiceManager {
         ui.notifications.info(t("vm.spriteTestStart", "立绘测试开始：依次发送5条不同情绪消息（2秒间隔）"));
         for (let i = 0; i < tests.length; i++) {
           try {
-            await ChatMessage.create({ content: tests[i].t, speaker: { alias: cn } });
+            await ChatMessage.create({ content: tests[i].t, speaker: { alias: cn }, flags: { "gpt-sovits-tts": { spriteTest: true } } });   // 1.6.34 测试消息带标记 → 渲染层强制插立绘(无需朗读)
           } catch (e) { /* noop */ }
           if (i < tests.length - 1) await new Promise(r => setTimeout(r, 2000));
         }
