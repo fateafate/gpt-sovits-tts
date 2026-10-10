@@ -3020,15 +3020,20 @@ async def llm_polish_endpoint(request: Request):
 
 @APP.post("/diag")
 async def diag_endpoint(request: Request):
-    """{text?, src?, messageId?, ts?} → 客户端播放诊断落盘(排查"播放固定同一段")"""
+    """{text?, src?, messageId?, type?, report?} → 客户端诊断落盘:
+    [play] 播放诊断; type=sprite-test-report 时写 tts-reports.log(立绘测试报告, 作者直接读文件排查)"""
     try:
         body = await request.json()
     except Exception:
         body = {}
     try:
-        with open(os.path.join(os.path.dirname(__file__), "tts-requests.log"), "a", encoding="utf-8") as _lf:
-            _lf.write("[%s] [play] src=%s mid=%s text=%r\n" % (
-                time.strftime("%H:%M:%S"), str(body.get("src") or "")[:20], str(body.get("messageId") or "")[:16], str(body.get("text") or "")[:60]))
+        _rt = "tts-reports.log" if str(body.get("type") or "") == "sprite-test-report" else "tts-requests.log"
+        with open(os.path.join(os.path.dirname(__file__), _rt), "a", encoding="utf-8") as _lf:
+            if _rt == "tts-reports.log":
+                _lf.write("\n===== %s =====\n%s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"), str(body.get("report") or "")))
+            else:
+                _lf.write("[%s] [play] src=%s mid=%s text=%r\n" % (
+                    time.strftime("%H:%M:%S"), str(body.get("src") or "")[:20], str(body.get("messageId") or "")[:16], str(body.get("text") or "")[:60]))
     except Exception:
         pass
     return {"ok": True}

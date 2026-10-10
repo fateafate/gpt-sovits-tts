@@ -633,7 +633,27 @@ export class VoiceManager {
           } catch (e) { /* noop */ }
           if (i < tests.length - 1) await new Promise(r => setTimeout(r, 2000));
         }
-        ui.notifications.info(t("vm.spriteTestDone", "立绘测试完成：看聊天立绘是否随情绪切换；控制台有[立绘判定]日志（5分钟内手动发朗读可看[语气判定]）"));
+        // 1.6.35 自动生成测试报告(判定结果汇总, 预期 vs 实际) → 发服务器 tts-reports.log, 作者直接读文件排查
+        try {
+          await new Promise(r => setTimeout(r, 1500));   // 等 hook 收集完判定结果
+          const rows = (window.__fvttTTSSpriteDiagList || []).filter(x => x && x.text).slice(-8);
+          const expectMap = { "哈哈，太棒了！": "joy", "你这个混蛋！": "angry", "呜呜，好难过……": "sad", "什么？！怎么会这样！": "surprised", "好可怕，救命！": "fear" };
+          const lines = rows.map((r0) => {
+            const exp = expectMap[r0.text] || "?";
+            const okMark = (exp === r0.emo) ? "✓匹配" : (r0.emo === "neutral" ? "✗未判出(neutral)" : "✗不一致");
+            return "  " + r0.text + " 预期=" + exp + " 判定=" + r0.emo + " " + okMark + " | 标注行数=" + r0.etLines + " 候选数=" + r0.cands + " | 选中=" + r0.av;
+          });
+          const profR = loadVoiceProfile();
+          let verTxt = "?";
+          try { verTxt = game.modules.get("gpt-sovits-tts") ? game.modules.get("gpt-sovits-tts").version : "?"; } catch (e) { /* noop */ }
+          const reportTxt = "[立绘测试报告] " + new Date().toLocaleString("zh-CN") + " | 角色=" + cn + " | 版本=" + verTxt
+            + " | 手动选立绘=" + ((profR.chars && profR.chars[cn] && profR.chars[cn].selSprite) || "无")
+            + (lines.length ? "\n" + lines.join("\n") : "\n(未收集到判定结果)");
+          console.warn("[gpt-sovits-tts][报告]\n" + reportTxt);
+          try { await this._svc("POST", "/diag", { type: "sprite-test-report", report: reportTxt }); } catch (e) { /* noop */ }
+          window.__fvttTTSSpriteDiagList = [];
+        } catch (e) { /* noop */ }
+        ui.notifications.info(t("vm.spriteTestDone", "立绘测试完成：报告已自动生成并发送服务器"));
       } catch (e) { /* noop */ }
     });
     // 读取语音分配表(带类型防御: 设置曾被错误存成字符串时按空表处理, 防止坏值传播)

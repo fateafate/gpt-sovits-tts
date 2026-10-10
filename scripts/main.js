@@ -3761,7 +3761,12 @@ Hooks.on("chatMessage", (chatLog, message, chatData) => {
             const _av = cD.sprites[_emoList[_rot % _emoList.length]];
             // 1.6.33 立绘判定诊断(立绘测试按钮自动开启, 测完自动关; 用于定位"立绘为什么不换")
             if (window.__fvttTTSSpriteDiag) {
-              try { console.warn("[gpt-sovits-tts][立绘判定] 文本=" + String(message.content || "").slice(0, 24) + " | 情绪=" + _emoS + " | 标注行数=" + String(cD.emotion_tags || "").split(/\n+/).length + " | 候选数=" + _emoList.length + " | 选中=" + _av); } catch (e) { /* noop */ }
+              try {
+                // 1.6.35: 判定结果收集进全局列表 → 立绘测试按钮生成报告发服务器(作者直接读文件)
+                const _diagRow = { ts: Date.now(), text: String(message.content || "").slice(0, 30), emo: _emoS, etLines: String(cD.emotion_tags || "").split(/\n+/).length, cands: _emoList.length, av: _av };
+                (window.__fvttTTSSpriteDiagList = window.__fvttTTSSpriteDiagList || []).push(_diagRow);
+                console.warn("[gpt-sovits-tts][立绘判定] 文本=" + _diagRow.text + " | 情绪=" + _emoS + " | 标注行数=" + _diagRow.etLines + " | 候选数=" + _diagRow.cands + " | 选中=" + _av);
+              } catch (e) { /* noop */ }
             }
             return _av;
           }
