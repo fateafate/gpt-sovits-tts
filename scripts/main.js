@@ -139,7 +139,8 @@ function buildSpriteList(c) {
 function styleKeywordParams(style, textLen) {
   const s = String(style || "");
   const out = { speed: 0, split: "", frag: 0, fast: false };
-  if (/严肃|认真|正式|威严|庄重|沉重|冷静|沉着/.test(s)) out.speed = 0.92;
+  if (/愤怒|生气|发怒|恼火|火大|暴怒|怒火|严厉|呵斥/.test(s)) out.speed = 1.15;
+  else if (/严肃|认真|正式|威严|庄重|沉重|冷静|沉着/.test(s)) out.speed = 0.92;
   else if (/急促|激动|兴奋|紧张|高亢|有力|热血/.test(s)) out.speed = 1.12;
   else if (/舒缓|温柔|轻柔|慵懒|软|慢/.test(s)) out.speed = 0.9;
   if (/不中断|连贯|一气呵成|不要停|顺畅/.test(s)) {
@@ -1005,11 +1006,7 @@ async function maybeSpeak(message) {
               }
             } catch (e) { /* noop */ }
           }
-          // 1.6.54 AI 测试探针(提示词/AI/立绘三合一测试收集用)
-          if (window.__fvttTTSAiLineDiag) {
-            try { (window.__fvttTTSAiLineDiagList = window.__fvttTTSAiLineDiagList || []).push({ ts: Date.now(), text: String(decision.text || "").slice(0, 30), emo: String(res.emotion || ""), polish: String(res.polish || "").slice(0, 40), sprite: res.sprite || 0, strength: styleStrengthOf(roleN), manual: !!(flA && flA.selSprite) }); } catch (e) { /* noop */ }
-          }
-          else if (res.reason && res.reason !== "no-llm" && res.reason !== "no-slots" && res.reason !== "llm-broken") console.debug(`[gpt-sovits-tts] AI 判断未应用: ${res.reason}`);
+          if (res.reason && res.reason !== "no-llm" && res.reason !== "no-slots" && res.reason !== "llm-broken") console.debug(`[gpt-sovits-tts] AI 判断未应用: ${res.reason}`);
         } catch (e) { /* noop */ }
       }
       if (!_emo) {
@@ -1040,6 +1037,10 @@ async function maybeSpeak(message) {
               safeMsgWrite(message, { flags: { [MODULE]: _nf } });
             }
           } catch (e) { /* noop */ }
+        }
+        // 1.6.55 统一探针(规则降级路径也采集: 无AI时报告同样显示规则判定结果与强度)
+        if (window.__fvttTTSAiLineDiag) {
+          try { (window.__fvttTTSAiLineDiagList = window.__fvttTTSAiLineDiagList || []).push({ ts: Date.now(), text: String(decision.text || "").slice(0, 30), emo: String(_emo || ""), src: (cfg.llmEnabled && cfg.llmKey && window.__fvttTTSLlmBroken !== true) ? "AI" : "规则/风格", strength: styleStrengthOf(roleN), manual: !!(flA && flA.selSprite) }); } catch (e) { /* noop */ }
         }
       }
     } else if (flA && flA.emotion) {
@@ -3856,7 +3857,7 @@ window.runAIPromptTest = async function runAIPromptTest() {
   const cfg = getCfg();
   const style = (typeof getStylePrompt === "function" ? (getStylePrompt(cn) || "") : "") || "";
   const llmOk = !!(cfg.llmEnabled && cfg.llmKey) && window.__fvttTTSLlmBroken !== true;
-  rows.push("角色=" + cn + " | 朗读提示词=" + (style || "(未填, 用示例词)") + " | AI=" + (llmOk ? "可用" : "不可用(将走规则降级)") + " | 版本=" + verTxt);
+  rows.push("角色=" + cn + " | 朗读提示词=" + (style || "(未填, 用示例词)") + " | AI=" + (llmOk ? "可用" : "不可用(将走规则降级)") + " | 版本=" + verTxt + (verTxt === "1.6.55" ? "" : " ⚠ 若≠1.6.55 请强刷 Foundry(GM设置→模块或Ctrl+F5)"));
 
   // ① 提示词强度插值表(0/25/50/100%)
   const _kw0 = styleKeywordParams(style || "严肃认真", 20);
@@ -3914,7 +3915,7 @@ window.runAIPromptTest = async function runAIPromptTest() {
       const _probe = (window.__fvttTTSAiLineDiagList || []).slice(-1)[0] || {};
       const _fNow = (() => { try { const m3 = game.messages.get(msg.id); return (m3 && m3.flags && m3.flags[MOD]) || {}; } catch (e) { return {}; } })();
       const _aiSprite = _fNow.aiSprite || "";
-      rows.push("[" + sc.label + "(强度" + sc.strength + "%)] 「" + sc.text.slice(0, 16) + "…」 → AI情绪=" + (_probe.emo || "(未知/降级)") + " | 润色=" + ((_fNow.polishText || _probe.polish) ? "✓" : "—") + " | AI立绘=" + (_aiSprite ? ("#→" + String(_aiSprite).slice(-22)) : (sc.manual ? "未覆盖(手动优先✓)" : "无")) + " | 合成=" + (aud || "等待超时"));
+      rows.push("[" + sc.label + "(强度" + sc.strength + "%)] 「" + sc.text.slice(0, 16) + "…」 → 判定=" + (_probe.src || "—") + " 情绪=" + (_probe.emo || "无(neutral)") + " | 润色=" + ((_fNow.polishText || _probe.polish) ? "✓" : "—") + " | AI立绘=" + (_aiSprite ? ("#→" + String(_aiSprite).slice(-22)) : (sc.manual ? "未覆盖(手动优先✓)" : "无")) + " | 合成=" + (aud || "等待超时"));
     }
   } finally {
     try {
