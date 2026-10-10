@@ -938,47 +938,59 @@ async function maybeSpeak(message) {
   // AI 语气调配(对标成品软件):
   //  - 未选语气(默认) → AI 自主判断语气(只选情绪槽, 不改台词)
   //  - 已选语气 → 不重判情绪; 情绪槽音频已随 flags 应用
-  if (cfg.llmEnabled && cfg.llmKey) {
-    try {
-      const flA = fl || null;
-      const roleN = (flA && flA.role) || "";
-      if (!(flA && flA.emotion)) {
-        // 默认 → AI 自主判断语气(不改文字)
-        const res = await judgeAndPolishByLLM(decision.text, roleN, false, getChatContext());
-        if (res.ok && res.emotion) {
-          const slot = findEmotionSlot(res.emotion, roleN);
-          if (slot) {
-            overrides = overrides || {};
-            if (slot.ref_audio_path) overrides.auxRefAudioPaths = [`fvtt_chars/${roleN}/${slot.ref_audio_path}`]; // 主参考为基础 + 情绪叠加
-            if (slot.prompt_text) overrides.promptText = slot.prompt_text;
-            if (slot.prompt_lang) overrides.promptLang = slot.prompt_lang;
-            if (typeof overrides.emotionMix !== "number") overrides.emotionMix = 0.75;  // 对标成品: 情绪要明显可辨
-            console.debug(`[gpt-sovits-tts] AI 自动语气朗读: ${res.emotion} (台词保持原文)`);
-            // 记录 AI 语气到消息 flags → 重播缓存 miss 时用同一语气重新合成(声音与第一次一致, 不再重新判断)
-            try {
-              if (message && message.flags && message.flags[MODULE]) {
-                const _nf = { ...(message.flags[MODULE]) };
-                _nf.emotion = (slot && slot.key) || res.emotion;   // 规范存槽 key(applyEmotionAvatar/朗读都按 key 匹配)
-                if (slot.ref_audio_path) _nf.auxRef = `fvtt_chars/${roleN}/${slot.ref_audio_path}`;
-                if (slot.prompt_text) _nf.promptText = slot.prompt_text;
-                safeMsgWrite(message, { flags: { [MODULE]: _nf } });
-              }
-            } catch (e) { /* noop */ }
-          }
-        } else if (res.reason && res.reason !== "no-llm" && res.reason !== "no-slots") {
-          console.debug(`[gpt-sovits-tts] AI 判断未应用: ${res.reason}`);
-        }
-      } else if (flA && flA.emotion) {
-        // 已选语气 → 不再润色台词; 该语气情绪占比不足时补足到 0.75(让其更明显), 用户手动调高则尊重
-        const curMix = (typeof flA.emotionMix === "number") ? flA.emotionMix : 0;
-        if (curMix < 0.75) {
-          overrides = overrides || {};
-          if (typeof overrides.emotionMix !== "number") overrides.emotionMix = 0.75;
-        }
-        console.debug(`[gpt-sovits-tts] 已选语气 ${flA.emotion} (台词保持原文)`);
+  // 🎙 语气→声音切换(对标 Shinsekai): LLM可用→AI判情绪(不改台词); LLM未配/失败/超时→规则+风格判定;
+  //    无论哪条路, 命中情绪槽(有参考音)就换该槽参考音频合成 → 不同情绪真正切换声音; 无槽才走 DSP 调制兜底
+  try {
+    const flA = fl || null;
+    const roleN = (flA && flA.role) || "";
+    if (!(flA && flA.emotion)) {
+      // 未选语气(默认) → 自动判定语气
+      let _emo = "";
+      if (cfg.llmEnabled && cfg.llmKey && window.__fvttTTSLlmBroken !== true) {
+        try {
+          const res = await judgeAndPolishByLLM(decision.text, roleN, false, getChatContext());
+          if (res.ok && res.emotion) _emo = String(res.emotion);
+          else if (res.reason && res.reason !== "no-llm" && res.reason !== "no-slots" && res.reason !== "llm-broken") console.debug(`[gpt-sovits-tts] AI 判断未应用: ${res.reason}`);
+        } catch (e) { /* noop */ }
       }
-    } catch (e) { /* AI 失败沿用原设置 */ }
-  }
+      if (!_emo) {
+        // 1.6.50 无LLM/失败/未配: 风格词→规则判定(无AI时同样能切换情绪参考音)
+        try {
+          const _stP = getStylePrompt(roleN) || "";
+          _emo = styleEmotionKey(_stP) || detectEmotion(decision.text, null);
+        } catch (e) { try { _emo = detectEmotion(decision.text, null); } catch (e2) { _emo = ""; } }
+      }
+      if (_emo && _emo !== "neutral") {
+        const slot = findEmotionSlot(_emo, roleN);
+        if (slot && slot.ref_audio_path) {
+          overrides = overrides || {};
+          overrides.auxRefAudioPaths = [`fvtt_chars/${roleN}/${slot.ref_audio_path}`];   // 主参考为基础 + 情绪参考叠加
+          if (slot.prompt_text) overrides.promptText = slot.prompt_text;
+          if (slot.prompt_lang) overrides.promptLang = slot.prompt_lang;
+          if (typeof overrides.emotionMix !== "number") overrides.emotionMix = 0.75;   // 情绪要明显可辨
+          console.debug(`[gpt-sovits-tts] 自动语气朗读: ${_emo}${(cfg.llmEnabled && cfg.llmKey && window.__fvttTTSLlmBroken !== true) ? "(AI)" : "(规则/风格)"} 台词保持原文`);   // 1.6.50 降级路径同样换情绪参考音
+          // 记录语气到消息 flags → 重播缓存 miss 时用同一语气重新合成(声音与第一次一致)
+          try {
+            if (message && message.flags && message.flags[MODULE]) {
+              const _nf = { ...(message.flags[MODULE]) };
+              _nf.emotion = slot.key || _emo;
+              _nf.auxRef = `fvtt_chars/${roleN}/${slot.ref_audio_path}`;
+              if (slot.prompt_text) _nf.promptText = slot.prompt_text;
+              safeMsgWrite(message, { flags: { [MODULE]: _nf } });
+            }
+          } catch (e) { /* noop */ }
+        }
+      }
+    } else if (flA && flA.emotion) {
+      // 已选语气 → 不再重判情绪; 情绪占比不足时补足到 0.75(更明显), 用户手动调高则尊重
+      const curMix = (typeof flA.emotionMix === "number") ? flA.emotionMix : 0;
+      if (curMix < 0.75) {
+        overrides = overrides || {};
+        if (typeof overrides.emotionMix !== "number") overrides.emotionMix = 0.75;
+      }
+      console.debug(`[gpt-sovits-tts] 已选语气 ${flA.emotion} (台词保持原文)`);
+    }
+  } catch (e) { /* AI 失败沿用原设置 */ }
   const opts = { lang: flLang || decision.lang, sender: decision.speakerName, ...(overrides || {}) };
   // 预加载音频命中: 输入与预合成文本一致 且 角色/语气/语言/语速未变 → 作者直接播预合成音频并广播(跳过 AI 判断/重新合成, 零等待)
   // 切了角色或语气 → 签名不匹配 → 回落下方正常合成(重新按当前角色/语气合成, 绝不播旧声音)
