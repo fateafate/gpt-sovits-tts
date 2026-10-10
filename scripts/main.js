@@ -893,6 +893,12 @@ function evaluateMessage(message) {
 async function maybeSpeak(message) {
   const cfg = getCfg();
   if (!cfg.enabled) return;
+  // 1.6.42 朗读白名单: 只有通过本模块发送框发出的文字(fromModSend标记)才朗读;
+  // 其他模组消息/普通聊天框直发/系统与机制消息一律不出声(打字停顿朗读不经过此判定, 属本模块显式朗读)
+  try {
+    const flMs = message && message.flags && message.flags[MODULE];
+    if (!(flMs && flMs.fromModSend)) return;
+  } catch (e) { return; }
   if (message.id && voicedIds.has(message.id)) return;
   const decision = evaluateMessage(message);
   if (!decision) return;
@@ -1283,6 +1289,7 @@ async function doSubmitChat(ta) {
         polish: (cur1 && cur1.polishText) || "",
         speed: (cur1 && cur1.speed) || 0,
         lang: getCfg().textLang || "auto",
+        fromModSend: true,   // 1.6.42 朗读白名单标记: 只有通过本模块发送框发出的文字才朗读
         // 代理模式(本机连不到 9881): 附上合成请求 → GM 端 createChatMessage hook 代为合成并写回 flags.audioUrl → 全员播放
         ...(window.__fvttTTSCanDirect === false ? { synthRequest: { text: v, lang: getCfg().textLang || "auto", role: prof1.current || "", emotion: (cur1 && cur1.emotion) || "", speed: (cur1 && cur1.speed) || 0, provider: String((cur1 && cur1.ttsProvider) || "gpt-sovits") } } : {})
       } }
