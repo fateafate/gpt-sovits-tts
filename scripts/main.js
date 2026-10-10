@@ -506,7 +506,7 @@ async function speak(text, { lang = null, sender = "", refAudioPath = null, prom
     if (!_emoDet) _emoDet = detectEmotion(finalText, pv);
     if (_emoDet && _emoDet !== "neutral") { overrides = overrides || {}; overrides.emotion = _emoDet; }
     if (window.__fvttTTSSpriteDiag) {
-      try { console.warn("[gpt-sovits-tts][语气判定] 文本=" + String(finalText || "").slice(0, 24) + " | 风格=" + String(_stSrc || "-").slice(0, 20) + " | AI=" + (_aiE || "无(未配LLM或降级)") + " | 规则=" + ((_emoDet || "") || "无") + " | 调制=" + ((_emoDet && _emoDet !== "neutral") ? "开(" + _emoDet + ")" : "关(neutral)") + " | 槽音频=" + (pv.auxRef ? "有(不调制)" : "无")); } catch (e) { /* noop */ }
+      try { console.warn("[gpt-sovits-tts][语气判定] 文本=" + String(finalText || "").slice(0, 24) + " | 提示词=" + String(_stSrc || "-").slice(0, 20) + " | AI=" + (_aiE || "无(未配LLM或降级)") + " | 规则=" + ((_emoDet || "") || "无") + " | 调制=" + ((_emoDet && _emoDet !== "neutral") ? "开(" + _emoDet + ")" : "关(neutral)") + " | 槽音频=" + (pv.auxRef ? "有(不调制)" : "无")); } catch (e) { /* noop */ }
     }
   }
 
@@ -961,9 +961,11 @@ async function maybeSpeak(message) {
         } catch (e) { try { _emo = detectEmotion(decision.text, null); } catch (e2) { _emo = ""; } }
       }
       if (_emo && _emo !== "neutral") {
+        // 1.6.51 无论有没有情绪槽参考音, emotion 都传给引擎 → 引擎 EMOTION_FX(变调/变速/增益) 让"没有参考音频也有不同声音"
+        overrides = overrides || {};
+        overrides.emotion = _emo;
         const slot = findEmotionSlot(_emo, roleN);
         if (slot && slot.ref_audio_path) {
-          overrides = overrides || {};
           overrides.auxRefAudioPaths = [`fvtt_chars/${roleN}/${slot.ref_audio_path}`];   // 主参考为基础 + 情绪参考叠加
           if (slot.prompt_text) overrides.promptText = slot.prompt_text;
           if (slot.prompt_lang) overrides.promptLang = slot.prompt_lang;
@@ -3762,6 +3764,7 @@ function styleEmotionKey(style) {
 // AI 语气判定(1.6.24): LLM 根据台词+角色提示词判情绪(驱动声音调制+立绘分组); 未配/失败/超时降级规则; 同批说话复用一次调用
 let _aiEmoPro = null;
 function aiJudgeEmotionNow(text, role) {
+  if (window.__fvttTTSLlmBroken === true) return null;   // 1.6.51 LLM 不可达: 直接返回(不再等 4s 超时)
   const _key = String(text || "") + "|" + String(role || "");
   if (_aiEmoPro && _aiEmoPro.key === _key) return _aiEmoPro.p;
   const _p = (async () => {

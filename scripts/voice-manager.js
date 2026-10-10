@@ -319,11 +319,11 @@ export class VoiceManager {
         while (waitN < 30 && ((window.__fvttTTSSpriteDiagList || []).length < 5)) { await new Promise(r => setTimeout(r, 200)); waitN++; }
         const diag = (window.__fvttTTSSpriteDiagList || []).filter(x => x && x.text).slice(-8);
         rows.push("立绘切换: " + (diag.length >= 5 ? "✓ 5/5判定" : ("✗ 只收到" + diag.length + "/5条")) + (diag.length ? " | 例: " + diag[0].text + "→" + diag[0].emo + "(" + diag[0].av + ")" : ""));
-        // ④朗读风格(当前角色提示词 → 是否已配/将作为AI判语气参考)
+        // ④朗读提示词(当前角色提示词 → 是否已配/将作为AI判语气参考)
         try {
           const stP = (typeof getStylePrompt === "function" ? (getStylePrompt(cn) || "") : "");
-          rows.push("朗读风格: " + (stP ? ("✓ 已配: " + String(stP).slice(0, 30) + "（将作为AI判语气的参考，无LLM时按风格词映射情绪）") : "未配（到角色填朗读提示词，会作为AI判语气参考）"));
-        } catch (e) { rows.push("朗读风格: 读取失败"); }
+          rows.push("朗读提示词: " + (stP ? ("✓ 已配: " + String(stP).slice(0, 30) + "（将作为AI判语气的参考，无LLM时按关键词映射情绪）") : "未配（到角色填朗读提示词，会作为AI判语气参考）"));
+        } catch (e) { rows.push("朗读提示词: 读取失败"); }
         window.__fvttTTSSpriteDiag = false;
         window.__fvttTTSSpriteDiagList = [];
         // 报告 → 服务器 tts-reports.log
