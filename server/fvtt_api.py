@@ -2852,6 +2852,46 @@ async def bind_slot(request: Request):
 
 
 # ---------------- LLM 代理: 可选 AI 语气判断(OpenAI 兼容 API; 未配置不影响模块) ----------------
+def _llm_candidate_urls(base):
+    """base 兼容: 中转站常见 带/v1 或 不带 /v1 两种, 依序返回候选 chat/completions 地址(去重保序)"""
+    b = str(base or "").strip().rstrip("/")
+    if not b:
+        b = "https://api.openai.com/v1"
+    cands = []
+    if b.endswith("/v1"):
+        cands = [b + "/chat/completions", b[:-3].rstrip("/") + "/chat/completions"]
+    else:
+        cands = [b + "/chat/completions", b + "/v1/chat/completions"]
+    seen, out = set(), []
+    for c in cands:
+        if c not in seen:
+            seen.add(c)
+            out.append(c)
+    return out
+
+def _llm_chat_call(payload, base, key, timeout=15):
+    """依序尝试候选 URL(404/403 视为路径问题换下一个; 400/401 停止; 网络错误中断), 返回 (data|None, status|None, err|None)"""
+    import urllib.error
+    last_err = None
+    for url in _llm_candidate_urls(base):
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json", "Authorization": "Bearer %s" % key},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return json.loads(resp.read().decode("utf-8")), resp.status, None
+        except urllib.error.HTTPError as e:
+            last_err = "HTTP Error %s: %s" % (e.code, getattr(e, "reason", ""))
+            if e.code not in (404, 403):   # 400/401/5xx: 不是路径问题
+                return None, e.code, last_err
+        except Exception as e:
+            last_err = str(e)
+            break   # 网络错误: base 域名都不通, 换路径无意义
+    return None, None, last_err
+
 @APP.post("/llm")
 async def llm_endpoint(request: Request):
     """{base?, key, model?, text, emotions:[{key,label}]} → {ok, emotion, raw?}"""
@@ -2891,7 +2931,6 @@ async def llm_endpoint(request: Request):
     user_content = text[:1500]
     if context:
         user_content = "最近对话上下文:\n%s\n\n---\n需要判断语气的台词: %s" % (context, text[:1500])
-    url = base.rstrip("/") + "/chat/completions"
     payload = {
         "model": model,
         "messages": [
@@ -2901,17 +2940,9 @@ async def llm_endpoint(request: Request):
         "temperature": 0.2,
         "max_tokens": 512,   # 推理模型(如 deepseek-v4-flash)会先输出大量推理 token, 太小会把正式答案截断成空
     }
-    req = urllib.request.Request(
-        url,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json", "Authorization": "Bearer %s" % key},
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-    except Exception as e:
-        return JSONResponse(status_code=200, content={"ok": False, "message": "LLM 请求失败(无AI语气, 语音不受影响): %s" % e})
+    data, _llm_status, llm_err = _llm_chat_call(payload, base, key, 15)
+    if data is None:
+        return JSONResponse(status_code=200, content={"ok": False, "message": "LLM 请求失败(无AI语气, 语音不受影响): %s" % (llm_err or "unknown")})
     try:
         msg = (data.get("choices") or [{}])[0].get("message", {}) or {}
         content = str(msg.get("content") or "").strip()
@@ -2998,13 +3029,9 @@ async def llm_polish_endpoint(request: Request):
         "temperature": 0.7,
         "max_tokens": 512,
     }
-    url = base.rstrip("/") + "/chat/completions"
-    req = urllib.request.Request(
-        url,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json", "Authorization": "Bearer %s" % key},
-        method="POST",
-    )
+    data, _llm_status, llm_err = _llm_chat_call(payload, base, key, 15)
+    if data is None:
+        return JSONResponse(status_code=200, content={"ok": False, "message": "LLM 请求失败(无AI语气, 语音不受影响): %s" % (llm_err or "unknown")})
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
             data = json.loads(resp.read().decode("utf-8"))
@@ -3246,18 +3273,9 @@ async def llm_pick_role_endpoint(request: Request):
         "temperature": 0.2,
         "max_tokens": 40,
     }
-    url = base.rstrip("/") + "/chat/completions"
-    req = urllib.request.Request(
-        url,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json", "Authorization": "Bearer %s" % key},
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-    except Exception as e:
-        return JSONResponse(status_code=200, content={"ok": False, "message": "LLM 请求失败(无AI语气, 语音不受影响): %s" % e})
+    data, _llm_status, llm_err = _llm_chat_call(payload, base, key, 15)
+    if data is None:
+        return JSONResponse(status_code=200, content={"ok": False, "message": "LLM 请求失败(无AI语气, 语音不受影响): %s" % (llm_err or "unknown")})
     content = ""
     try:
         msg = (data.get("choices") or [{}])[0].get("message", {}) or {}
@@ -3314,18 +3332,9 @@ async def llm_style_endpoint(request: Request):
         "temperature": 0.2,
         "max_tokens": 256,
     }
-    url = base.rstrip("/") + "/chat/completions"
-    req = urllib.request.Request(
-        url,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json", "Authorization": "Bearer %s" % key},
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-    except Exception as e:
-        return JSONResponse(status_code=200, content={"ok": False, "message": "LLM 请求失败(无AI语气, 语音不受影响): %s" % e})
+    data, _llm_status, llm_err = _llm_chat_call(payload, base, key, 15)
+    if data is None:
+        return JSONResponse(status_code=200, content={"ok": False, "message": "LLM 请求失败(无AI语气, 语音不受影响): %s" % (llm_err or "unknown")})
     content = ""
     try:
         msg = (data.get("choices") or [{}])[0].get("message", {}) or {}
@@ -3433,18 +3442,9 @@ async def llm_assess_endpoint(request: Request):
         "temperature": 0.3,
         "max_tokens": 512,
     }
-    url = base.rstrip("/") + "/chat/completions"
-    req = urllib.request.Request(
-        url,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json", "Authorization": "Bearer %s" % key},
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-    except Exception as e:
-        return JSONResponse(status_code=200, content={"ok": False, "message": "LLM 请求失败(无AI语气, 语音不受影响): %s" % e})
+    data, _llm_status, llm_err = _llm_chat_call(payload, base, key, 15)
+    if data is None:
+        return JSONResponse(status_code=200, content={"ok": False, "message": "LLM 请求失败(无AI语气, 语音不受影响): %s" % (llm_err or "unknown")})
     content = ""
     emo = ""
     polish = ""

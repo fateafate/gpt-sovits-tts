@@ -1021,6 +1021,10 @@ async function maybeSpeak(message) {
           _emo = detectEmotion(decision.text, null) || styleEmotionKey(_stP);
         } catch (e) { try { _emo = detectEmotion(decision.text, null); } catch (e2) { _emo = ""; } }
       }
+      // 1.6.60 探针提到情绪槽处理之前: _emo 一确定就采集(neutral/空也采集), 槽处理异常不再吞探针(句1/5"已进hook判定未产"根因)
+      if (window.__fvttTTSAiLineDiag) {
+        try { (window.__fvttTTSAiLineDiagList = window.__fvttTTSAiLineDiagList || []).push({ mid: (message && message.id) || "", ts: Date.now(), text: String(decision.text || "").slice(0, 30), emo: String(_emo || ""), src: (cfg.llmEnabled && cfg.llmKey && window.__fvttTTSLlmBroken !== true) ? "AI" : "规则/风格", strength: styleStrengthOf(roleN), manual: !!(flA && flA.selSprite) }); } catch (e) { /* noop */ }
+      }
       if (_emo && _emo !== "neutral") {
         // 1.6.51 无论有没有情绪槽参考音, emotion 都传给引擎 → 引擎 EMOTION_FX(变调/变速/增益) 让"没有参考音频也有不同声音"
         overrides = overrides || {};
@@ -1042,10 +1046,6 @@ async function maybeSpeak(message) {
               safeMsgWrite(message, { flags: { [MODULE]: _nf } });
             }
           } catch (e) { /* noop */ }
-        }
-        // 1.6.58 探针移到判定块外: 情绪为 neutral/空也采集(否则情绪中性时报告"未探到"), 且不受槽处理异常影响
-        if (window.__fvttTTSAiLineDiag) {
-          try { (window.__fvttTTSAiLineDiagList = window.__fvttTTSAiLineDiagList || []).push({ mid: (message && message.id) || "", ts: Date.now(), text: String(decision.text || "").slice(0, 30), emo: String(_emo || ""), src: (cfg.llmEnabled && cfg.llmKey && window.__fvttTTSLlmBroken !== true) ? "AI" : "规则/风格", strength: styleStrengthOf(roleN), manual: !!(flA && flA.selSprite) }); } catch (e) { /* noop */ }
         }
       }
     } else if (flA && flA.emotion) {
