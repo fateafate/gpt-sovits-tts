@@ -938,6 +938,10 @@ async function maybeSpeak(message) {
     const flMs = message && message.flags && message.flags[MODULE];
     if (!(flMs && flMs.fromModSend)) return;
   } catch (e) { return; }
+  // 1.6.58 测试入口探针(区分"hook未触发/白名单拦截" vs "判定块异常"): 判定探针在下方, 此探针证明进入了 maybeSpeak
+  if (window.__fvttTTSAiLineDiag) {
+    try { (window.__fvttTTSAiLineEnterList = window.__fvttTTSAiLineEnterList || []).push({ mid: (message && message.id) || "", ts: Date.now() }); } catch (e) { /* noop */ }
+  }
   if (message.id && voicedIds.has(message.id)) return;
   const decision = evaluateMessage(message);
   if (!decision) return;
@@ -1039,7 +1043,7 @@ async function maybeSpeak(message) {
             }
           } catch (e) { /* noop */ }
         }
-        // 1.6.55 统一探针(规则降级路径也采集: 无AI时报告同样显示规则判定结果与强度); 1.6.57 带消息id(测试按消息精确匹配, 不再错拿别的句)
+        // 1.6.58 探针移到判定块外: 情绪为 neutral/空也采集(否则情绪中性时报告"未探到"), 且不受槽处理异常影响
         if (window.__fvttTTSAiLineDiag) {
           try { (window.__fvttTTSAiLineDiagList = window.__fvttTTSAiLineDiagList || []).push({ mid: (message && message.id) || "", ts: Date.now(), text: String(decision.text || "").slice(0, 30), emo: String(_emo || ""), src: (cfg.llmEnabled && cfg.llmKey && window.__fvttTTSLlmBroken !== true) ? "AI" : "规则/风格", strength: styleStrengthOf(roleN), manual: !!(flA && flA.selSprite) }); } catch (e) { /* noop */ }
         }
@@ -3890,6 +3894,7 @@ window.runAIPromptTest = async function runAIPromptTest() {
   const _origStre = (() => { try { const vp = loadVoiceProfile(); const cc = (vp.chars && vp.chars[cn]) || null; return (cc && typeof cc.styleStrength === "number") ? cc.styleStrength : (typeof cfg.styleStrength === "number" ? cfg.styleStrength : 50); } catch (e) { return 50; } })();
   window.__fvttTTSAiLineDiag = true;
   window.__fvttTTSAiLineDiagList = [];
+  window.__fvttTTSAiLineEnterList = [];
   try {
     for (let i = 0; i < scenes.length; i++) {
       const sc = scenes[i];
@@ -3906,8 +3911,11 @@ window.runAIPromptTest = async function runAIPromptTest() {
       let msg = null;
       try { msg = await ChatMessage.create({ content: sc.text, speaker: { alias: sc.role }, flags: { [MOD]: flT } }); }
       catch (e) { rows.push("[" + sc.label + "] 发送失败: " + String((e && e.message) || e).slice(0, 60)); continue; }
-      // 1.6.57 按消息id等本句判定探针(最长35s; 不再错拿别的句)
+      // 1.6.57/58 按消息id等本句探针(最长35s): 先等入口探针(证明进入maybeSpeak), 再等判定探针
       let waited = 0;
+      while (waited < 150 && !(window.__fvttTTSAiLineEnterList || []).some(p => p && p.mid === msg.id)) { await new Promise(r => setTimeout(r, 200)); waited++; }
+      const _entered = !!(window.__fvttTTSAiLineEnterList || []).some(p => p && p.mid === msg.id);
+      waited = 0;
       while (waited < 175 && !(window.__fvttTTSAiLineDiagList || []).some(p => p && p.mid === msg.id)) { await new Promise(r => setTimeout(r, 200)); waited++; }
       let aud = "";
       waited = 0;
@@ -3923,7 +3931,7 @@ window.runAIPromptTest = async function runAIPromptTest() {
       const _fNow = (() => { try { const m3 = game.messages.get(msg.id); return (m3 && m3.flags && m3.flags[MOD]) || {}; } catch (e) { return {}; } })();
       const _avNow = _fNow.avatar || _fNow.selSprite || _fNow.aiSprite || "";
       const _hasProbe = !!(_probe && _probe.mid);
-      rows.push("[" + sc.label + " " + sc.role + "/" + sc.lang + "/强度" + sc.strength + "%] 「" + sc.text.slice(0, 16) + "…」 → " + (_hasProbe ? ("判定=" + (_probe.src || "—") + " 情绪=" + (_probe.emo || "无(neutral)")) : "未探到(判定未采集)") + " | 润色=" + ((_fNow.polishText || _probe.polish) ? "✓" : "—") + " | 立绘=" + (_avNow ? ("#→" + String(_avNow).slice(-22)) : (sc.manual ? "未覆盖(手动优先✓)" : "无")) + " | 合成=" + (aud || "等待超时"));
+      rows.push("[" + sc.label + " " + sc.role + "/" + sc.lang + "/强度" + sc.strength + "%] 「" + sc.text.slice(0, 16) + "…」 → " + (_hasProbe ? ("判定=" + (_probe.src || "—") + " 情绪=" + (_probe.emo || "无(neutral)")) : ("未探到(" + (_entered ? "已进hook判定未产" : "hook未触发") + ")")) + " | 润色=" + ((_fNow.polishText || _probe.polish) ? "✓" : "—") + " | 立绘=" + (_avNow ? ("#→" + String(_avNow).slice(-22)) : (sc.manual ? "未覆盖(手动优先✓)" : "无")) + " | 合成=" + (aud || "等待超时"));
     }
   } finally {
     try {
@@ -3936,6 +3944,7 @@ window.runAIPromptTest = async function runAIPromptTest() {
     } catch (e) { /* noop */ }
     window.__fvttTTSAiLineDiag = false;
     window.__fvttTTSAiLineDiagList = [];
+    window.__fvttTTSAiLineEnterList = [];
   }
   // ③ 报告落盘 + 展示
   const reportTxt = "[AI提示词测试报告] " + new Date().toLocaleString("zh-CN") + " | 角色=" + cn + " | 版本=" + verTxt + "\n" + rows.join("\n");
