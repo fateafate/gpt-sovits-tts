@@ -1711,13 +1711,13 @@ async function judgeEmotionByLLM(text, charName, context) {
       }, { timeoutMs: 70000 });
     const j = await r.json().catch(() => ({}));
     if (!r.ok || !j.ok) {
-      // LLM 服务不可用(502/404/网络) → 本会话禁用后续 LLM 调用(根治每句 502 刷屏); 修好 base/key 后刷新页面恢复
-      if (r.status >= 400) { try { window.__fvttTTSLlmBroken = true; } catch (e) { /* noop */ } }
+      // LLM 服务不可用(502/404/网络) → 记具体原因并禁用后续 LLM 调用; 修好 base/key 后每 60s 自动重探恢复
+      if (r.status >= 400) { markLlmBroken((j && j.message) || ("http " + r.status)); }
       return { ok: false, emotion: "", reason: (j && j.message) || ("http " + r.status) };
     }
     return { ok: true, emotion: (j && j.emotion) || "" };
   } catch (e) {
-    try { window.__fvttTTSLlmBroken = true; } catch (e2) { /* noop */ }
+    markLlmBroken(String((e && e.message) || e));
     return { ok: false, emotion: "", reason: String(e && e.message || e) };
   }
 }
@@ -1785,7 +1785,7 @@ window.preloadAI = async function preloadAI() {
         emotions: [{ key: "calm", label: "平静" }, { key: "happy", label: "开心" }],
       }, { timeoutMs: 60000 });
     const j = await r.json().catch(() => ({}));
-    if (!r.ok || !j.ok) { if (r.status >= 400) { try { window.__fvttTTSLlmBroken = true; } catch (e) { /* noop */ } } return { ok: false, message: (j && j.message) || ("http " + r.status) }; }
+    if (!r.ok || !j.ok) { if (r.status >= 400) { markLlmBroken((j && j.message) || ("http " + r.status)); } return { ok: false, message: (j && j.message) || ("http " + r.status) }; }
     window.__aiPreloaded = true;   // 共享预热状态(语音设置面板/发送面板都不再重复预热)
     return { ok: true, ms: Math.round(performance.now() - t0), emotion: (j.emotion) || "" };
   } catch (e) {
@@ -1810,15 +1810,65 @@ async function polishTextByLLM(text, emotion, emotionLabel, context) {
       }, { timeoutMs: 70000 });
     const j = await r.json().catch(() => ({}));
     if (!r.ok || !j.ok || !j.text) {
-      if (r.status >= 400) { try { window.__fvttTTSLlmBroken = true; } catch (e) { /* noop */ } }
+      if (r.status >= 400) { markLlmBroken((j && j.message) || ("http " + r.status)); }
       return { ok: false, text: "" };
     }
     const out = String(j.text).trim();
     return out ? { ok: true, text: out } : { ok: false, text: "" };
   } catch (e) {
-    try { window.__fvttTTSLlmBroken = true; } catch (e2) { /* noop */ }
+    markLlmBroken(String((e && e.message) || e));
     return { ok: false, text: "" };
   }
+}
+
+/** 1.6.59 LLM 健康管理(模块级): 失败记原因(__fvttTTSLlmErr) + 禁用时每 60s 自动重探, 修好 base/key 后自动恢复(无需刷新) */
+function markLlmBroken(err) {
+  try { window.__fvttTTSLlmBroken = true; window.__fvttTTSLlmErr = String(err || "LLM 请求失败"); } catch (e) { /* noop */ }
+}
+function maskKey(k) {
+  try {
+    const s = String(k || "");
+    if (!s) return "(未填)";
+    return s.length <= 8 ? (s.slice(0, 3) + "…") : (s.slice(0, 4) + "…" + s.slice(-4));
+  } catch (e) { return "(?)"; }
+}
+async function probeLLMOnce() {
+  try {
+    const c0 = getCfg();
+    if (!c0.llmEnabled || !c0.llmKey) return { ok: false, reason: "未配置 llmEnabled/llmKey" };
+    const r = await svcRequest(c0.serverUrl, "POST", "/llm", {
+      base: c0.llmBaseUrl || "https://api.openai.com/v1", key: c0.llmKey, model: c0.llmModel || "gpt-4o-mini",
+      text: "ping", emotions: [{ key: "calm", label: "平静" }],
+    }, { timeoutMs: 12000, retries: 1 });   // 1.6.59 探测放宽: 12s 超时+1次重试, 慢而可达的 API 不再误判 broken
+    const j = (r && typeof r.json === "function") ? await r.json().catch(() => ({})) : {};
+    if (r && r.ok && j && j.ok && j.emotion) {
+      try { window.__fvttTTSLlmBroken = false; window.__fvttTTSLlmErr = ""; } catch (e) { /* noop */ }
+      return { ok: true };
+    }
+    markLlmBroken((j && j.message) || (r && ("http " + r.status)) || "未知错误");
+    return { ok: false, reason: window.__fvttTTSLlmErr };
+  } catch (e) {
+    markLlmBroken(String((e && e.message) || e));
+    return { ok: false, reason: window.__fvttTTSLlmErr };
+  }
+}
+function armLlmReProbe() {
+  try {
+    if (window.__fvttTTSLlmReProbeArmed === true) return;
+    window.__fvttTTSLlmReProbeArmed = true;
+    let _normTicks = 0;
+    setInterval(() => {
+      try {
+        if (window.__fvttTTSLlmBroken === true) {
+          probeLLMOnce().then(res => {
+            if (res && res.ok) { try { if (ui && ui.notifications) ui.notifications.info("LLM 已恢复：AI 判语气/润色/选立绘重新启用"); } catch (e) { /* noop */ } }
+          });
+        } else if ((++_normTicks % 10) === 0) {
+          probeLLMOnce();   // 正常中每 10 分钟探一次, 中途掉线也自动标 broken
+        }
+      } catch (e) { /* noop */ }
+    }, 60000);
+  } catch (e) { /* noop */ }
 }
 
 /** 判断+润色合并(可选开关 llmMergePolish): 一次 LLM 调用返回 {emotion, polish}.
@@ -1861,12 +1911,12 @@ async function judgeAndPolishByLLM(text, charName, wantPolish, context) {
         if (r.ok && j.ok && j.emotion) {
           return { ok: true, emotion: String(j.emotion), polish: String(j.polish || "").trim() };
         }
-        // 合并调用失败: LLM 服务不可用(>=400) → 本会话禁用(根治每句 502 刷屏), 不再回退分开调用
-        if (r.status >= 400) { try { window.__fvttTTSLlmBroken = true; } catch (e) { /* noop */ } return { ok: false, emotion: "", reason: (j && j.message) || ("http " + r.status) }; }
+        // 合并调用失败: LLM 服务不可用(>=400) → 记原因并禁用(根治每句 502 刷屏), 不再回退分开调用
+        if (r.status >= 400) { markLlmBroken((j && j.message) || ("http " + r.status)); return { ok: false, emotion: "", reason: (j && j.message) || ("http " + r.status) }; }
         // 结果为空/业务失败 → 回退分开调用(保证情绪判断不丢失)
         console.debug("[gpt-sovits-tts] 合并语气判断失败, 回退分开调用:", (j && j.message) || ("http " + r.status));
       } catch (e) {
-        try { window.__fvttTTSLlmBroken = true; } catch (e2) { /* noop */ }
+        markLlmBroken(String((e && e.message) || e));
         console.debug("[gpt-sovits-tts] 合并语气判断异常, 回退分开调用:", e && e.message);
       }
     }
@@ -3532,20 +3582,12 @@ Hooks.once("ready", () => {
       });
     } catch (e) { console.error("[gpt-sovits-tts] tests install failed:", e); }
   }, 800);
-  // 🤖 LLM 健康预探测: 配置了 AI 就发一次小请求, 失败(502/404/网络)→本会话禁用全部 LLM 调用
-  // (根治每句 /llm 502 刷屏: GM 端 F12 看到的多条 502 来自"玩家发起→GM 转发→引擎 502" + 并发窗口;
-  //  各端 8s 内先探一次并设标记, 之后 judgeAndPolishByLLM/预加载/选角全部跳过; 修好 base/key 后刷新恢复)
+  // 🤖 LLM 健康预探测(1.6.59): 失败记录原因并每 60s 自动重探, 修好 base/key 自动恢复(见模块级 probeLLMOnce/armLlmReProbe)
   setTimeout(() => {
     try {
       const c0 = getCfg();
       if (!c0.llmEnabled || !c0.llmKey) return;
-      if (window.__fvttTTSLlmBroken === true) return;
-      svcRequest(c0.serverUrl, "POST", "/llm", {
-        base: c0.llmBaseUrl || "https://api.openai.com/v1", key: c0.llmKey, model: c0.llmModel || "gpt-4o-mini",
-        text: "ping", emotions: [{ key: "calm", label: "平静" }],
-      }, { timeoutMs: 3000, retries: 0 })   // 1.6.48 探测3s超时且不重试: LLM不可达快速判broken, 不拖慢打开
-        .then((r) => { if (r && !r.ok) { try { window.__fvttTTSLlmBroken = true; } catch (e) { /* noop */ } } })
-        .catch(() => { try { window.__fvttTTSLlmBroken = true; } catch (e) { /* noop */ } });
+      probeLLMOnce().then(res => { armLlmReProbe(); if (res && res.ok) console.debug("[gpt-sovits-tts] LLM 探测通过, AI 链路可用"); });
     } catch (e) { /* noop */ }
   }, 3000);
   // 🔊 Foundry playAudio 广播监听(记录已播 src): 与 audioData DB 兜底去重(双通道合一, 防重复播放);
@@ -3825,6 +3867,17 @@ function detectEmotion(text, cur) {
       if (/(没想到|怎么会|什么|惊|啊|哇|咦)/.test(t)) return "surprised";
     }
     if (/(害怕|怕|恐惧|救命|颤|鬼|吓)/.test(t)) return "fear";
+    // 1.6.59 日/英语常见情绪词(无AI时非中文文本也能规则判定; 中文优先规则在前, 兜底提示词基调在后)
+    if (/(えっ|ええ|まじ|うそ|嘘|ほんと|本当|信じられない|マジ)/.test(t)) return "surprised";
+    if (/(うわ|すごい|やった|嬉しい|楽しい|最高|わーい|わあ|いいね|ラッキー)/.test(t)) return "joy";
+    if (/(悲しい|辛い|泣き|涙|さようなら|嫌だ|寂しい)/.test(t)) return "sad";
+    if (/(ふざける|クソ|ムカ|うざい|怒って|怒る)/.test(t)) return "angry";
+    if (/(怖い|助けて|恐ろしい|やばい|怖く)/.test(t)) return "fear";
+    if (/(what|wow|really|no way|unbelievable|oh my|are you serious|seriously)/i.test(t)) return "surprised";
+    if (/(haha|awesome|great|yay|love|happy|nice|cool|amazing|wonderful|fantastic|best)/i.test(t)) return "joy";
+    if (/(so sad|why|sad|cry|hurt|miss you|goodbye|lonely|sorry|farewell)/i.test(t)) return "sad";
+    if (/(damn|hate|angry|shut up|stupid|jerk|idiot|bullshit)/i.test(t)) return "angry";
+    if (/(help|scared|afraid|monster|nightmare|terrified|horrible)/i.test(t)) return "fear";
     return "neutral";
   } catch (e) { return "neutral"; }
 }
@@ -3861,8 +3914,22 @@ window.runAIPromptTest = async function runAIPromptTest() {
   try { verTxt = game.modules.get(MOD) ? game.modules.get(MOD).version : "?"; } catch (e) { /* noop */ }
   const cfg = getCfg();
   const style = (typeof getStylePrompt === "function" ? (getStylePrompt(cn) || "") : "") || "";
+  // 1.6.59 LLM 诊断: 处于禁用时先主动重探一次(用户可能刚改好 base/key), 成功本轮即恢复 AI 链路
+  if (cfg.llmEnabled && cfg.llmKey && window.__fvttTTSLlmBroken === true) {
+    try { await probeLLMOnce(); } catch (e) { /* noop */ }
+  }
   const llmOk = !!(cfg.llmEnabled && cfg.llmKey) && window.__fvttTTSLlmBroken !== true;
-  rows.push("角色=" + cn + " | 朗读提示词=" + (style || "(未填, 用示例词)") + " | AI=" + (llmOk ? "可用" : "不可用(将走规则降级)") + " | 版本=" + verTxt + (verTxt === "1.6.57" ? " (JS=1.6.57✓)" : " ⚠ 清单缓存显示" + verTxt + "≠1.6.57, 请强刷(Ctrl+F5)后重测"));
+  let _llmDiag = "";   // 1.6.59 LLM 诊断行(失败具体原因, 便于用户自查 base/key/model)
+  if (!cfg.llmEnabled || !cfg.llmKey) {
+    _llmDiag = "未配置: 需开\"AI\"开关并填 key(模块设置)";
+  } else if (llmOk) {
+    _llmDiag = "可用✓";
+  } else {
+    _llmDiag = "禁用(最近失败: " + String(window.__fvttTTSLlmErr || "?").slice(0, 140) + ")";
+  }
+  _llmDiag += " | base=" + String(cfg.llmBaseUrl || "https://api.openai.com/v1").slice(0, 42) + " | model=" + (cfg.llmModel || "gpt-4o-mini") + " | key=" + maskKey(cfg.llmKey);
+  rows.push("LLM诊断: " + _llmDiag + " | AI=" + (llmOk ? "可用(本测试走AI链)" : "不可用(将走规则降级)"));
+  rows.push("角色=" + cn + " | 朗读提示词=" + (style || "(未填, 用示例词)") + " | 版本=" + verTxt + (verTxt === "1.6.59" ? " (JS=1.6.59✓)" : " ⚠ 清单缓存显示" + verTxt + "≠1.6.59: GM → 设置 → 游戏系统 → 重载世界(Relaunch World)一次"));
 
   // ① 提示词强度插值表(0/25/50/100%)
   const _kw0 = styleKeywordParams(style || "严肃认真", 20);
