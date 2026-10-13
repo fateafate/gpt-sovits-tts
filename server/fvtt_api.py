@@ -143,6 +143,7 @@ import signal
 import json
 import urllib.request
 import urllib.error
+import asyncio   # 1.6.62 LLM 请求线程化(asyncio.to_thread): 防止外部 API 慢请求阻塞整个引擎事件循环
 import numpy as np
 import soundfile as sf
 from fastapi import FastAPI, Response, Request
@@ -2977,7 +2978,7 @@ async def llm_endpoint(request: Request):
         "temperature": 0.2,
         "max_tokens": 512,   # 推理模型(如 deepseek-v4-flash)会先输出大量推理 token, 太小会把正式答案截断成空
     }
-    data, _llm_status, llm_err = _llm_chat_call(payload, base, key, 15)
+    data, _llm_status, llm_err = await asyncio.to_thread(_llm_chat_call, payload, base, key, 15)
     if data is None:
         return JSONResponse(status_code=200, content={"ok": False, "message": "LLM 请求失败(无AI语气, 语音不受影响): %s" % (llm_err or "unknown")})
     try:
@@ -3012,21 +3013,25 @@ async def llm_models_endpoint(request: Request):
     if not key:
         return JSONResponse(status_code=400, content={"ok": False, "message": "api key 未配置, 请在模块设置里填写后使用"})
     # 1.6.61 路径兜底: base 带/不带 /v1 都尝试(DeepSeek 官方 https://api.deepseek.com 与 .../v1 均可)
-    data = None
-    last_err = None
-    for _mu in _llm_candidate_urls(base, "/models"):
-        req = urllib.request.Request(_mu, headers={"Authorization": "Bearer %s" % key}, method="GET")
-        try:
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
+    # 1.6.62 放线程里跑: 外部 API 请求(最长 15s×2)不能阻塞引擎事件循环, 否则 /status 与合成请求全部超时
+    def _do_fetch_models():
+        _d = None
+        _e = None
+        for _mu in _llm_candidate_urls(base, "/models"):
+            _rq = urllib.request.Request(_mu, headers={"Authorization": "Bearer %s" % key}, method="GET")
+            try:
+                with urllib.request.urlopen(_rq, timeout=15) as _resp:
+                    _d = json.loads(_resp.read().decode("utf-8"))
+                    break
+            except urllib.error.HTTPError as _he:
+                _e = _llm_err_text(_he)
+                if _he.code not in (404, 403):
+                    break
+            except Exception as _ex:
+                _e = str(_ex)
                 break
-        except urllib.error.HTTPError as e:
-            last_err = _llm_err_text(e)
-            if e.code not in (404, 403):
-                break
-        except Exception as e:
-            last_err = str(e)
-            break
+        return _d, _e
+    data, last_err = await asyncio.to_thread(_do_fetch_models)
     if data is None:
         return JSONResponse(status_code=200, content={"ok": False, "message": "获取模型列表失败: %s" % (last_err or "unknown")})
     models = []
@@ -3077,7 +3082,7 @@ async def llm_polish_endpoint(request: Request):
         "temperature": 0.7,
         "max_tokens": 512,
     }
-    data, _llm_status, llm_err = _llm_chat_call(payload, base, key, 15)
+    data, _llm_status, llm_err = await asyncio.to_thread(_llm_chat_call, payload, base, key, 15)
     if data is None:
         return JSONResponse(status_code=200, content={"ok": False, "message": "LLM 请求失败(无AI语气, 语音不受影响): %s" % (llm_err or "unknown")})
     try:
@@ -3321,7 +3326,7 @@ async def llm_pick_role_endpoint(request: Request):
         "temperature": 0.2,
         "max_tokens": 40,
     }
-    data, _llm_status, llm_err = _llm_chat_call(payload, base, key, 15)
+    data, _llm_status, llm_err = await asyncio.to_thread(_llm_chat_call, payload, base, key, 15)
     if data is None:
         return JSONResponse(status_code=200, content={"ok": False, "message": "LLM 请求失败(无AI语气, 语音不受影响): %s" % (llm_err or "unknown")})
     content = ""
@@ -3380,7 +3385,7 @@ async def llm_style_endpoint(request: Request):
         "temperature": 0.2,
         "max_tokens": 256,
     }
-    data, _llm_status, llm_err = _llm_chat_call(payload, base, key, 15)
+    data, _llm_status, llm_err = await asyncio.to_thread(_llm_chat_call, payload, base, key, 15)
     if data is None:
         return JSONResponse(status_code=200, content={"ok": False, "message": "LLM 请求失败(无AI语气, 语音不受影响): %s" % (llm_err or "unknown")})
     content = ""
@@ -3490,7 +3495,7 @@ async def llm_assess_endpoint(request: Request):
         "temperature": 0.3,
         "max_tokens": 512,
     }
-    data, _llm_status, llm_err = _llm_chat_call(payload, base, key, 15)
+    data, _llm_status, llm_err = await asyncio.to_thread(_llm_chat_call, payload, base, key, 15)
     if data is None:
         return JSONResponse(status_code=200, content={"ok": False, "message": "LLM 请求失败(无AI语气, 语音不受影响): %s" % (llm_err or "unknown")})
     content = ""

@@ -1840,7 +1840,7 @@ async function probeLLMOnce() {
     const r = await svcRequest(c0.serverUrl, "POST", "/llm", {
       base: c0.llmBaseUrl || "https://api.openai.com/v1", key: c0.llmKey, model: c0.llmModel || "gpt-4o-mini",
       text: "ping", emotions: [{ key: "calm", label: "平静" }],
-    }, { timeoutMs: 12000, retries: 1 });   // 1.6.59 探测放宽: 12s 超时+1次重试, 慢而可达的 API 不再误判 broken
+    }, { timeoutMs: 20000, retries: 1 });   // 1.6.62 探测 20s 超时+1次重试(外部 API 偶发慢时不再轻易判失败)
     const j = (r && typeof r.json === "function") ? await r.json().catch(() => ({})) : {};
     if (r && r.ok && j && j.ok && j.emotion) {
       try { window.__fvttTTSLlmBroken = false; window.__fvttTTSLlmErr = ""; } catch (e) { /* noop */ }
