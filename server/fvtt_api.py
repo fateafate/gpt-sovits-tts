@@ -2949,7 +2949,12 @@ def _llm_chat_call(payload, base, key, timeout=15):
             )
             try:
                 with urllib.request.urlopen(req, timeout=timeout) as resp:
-                    return json.loads(resp.read().decode("utf-8")), resp.status, None
+                    _raw = resp.read().decode("utf-8", "ignore")
+                    try:
+                        return json.loads(_raw), resp.status, None
+                    except Exception:
+                        # 1.6.66 服务返回非 JSON(HTML 错误页/纯文本提示, 常见于"模型名不存在")→ 原文透传, 便于定位
+                        return None, resp.status, "服务返回非 JSON 响应(前200字符): %s" % ((_raw or "").strip()[:200] or "(空响应)")
             except urllib.error.HTTPError as e:
                 last_err = _llm_err_text(e)
                 if e.code in (404, 403):
@@ -3055,7 +3060,12 @@ async def llm_models_endpoint(request: Request):
             _rq = urllib.request.Request(_mu, headers={"Authorization": "Bearer %s" % key}, method="GET")
             try:
                 with urllib.request.urlopen(_rq, timeout=15) as _resp:
-                    _d = json.loads(_resp.read().decode("utf-8"))
+                    _raw = _resp.read().decode("utf-8", "ignore")
+                    try:
+                        _d = json.loads(_raw)
+                    except Exception:
+                        _e = "服务返回非 JSON 响应(前200字符): %s" % ((_raw or "").strip()[:200] or "(空响应)")
+                        break
                     break
             except urllib.error.HTTPError as _he:
                 _e = _llm_err_text(_he)
