@@ -776,8 +776,23 @@ function safeAssignments() {
         if (!models.length) { if (aiStatus) aiStatus.textContent = t("vm.aiNoModels2", "该服务未返回可用模型"); return; }
         this._aiModels = models;
         aiModelSel.innerHTML = models.map(m => `<option value="${esc(m)}">${esc(m)}</option>`).join("");
-        try { await game.settings.set("gpt-sovits-tts", "llmModels", models); await game.settings.set("gpt-sovits-tts", "llmModel", models[0]); } catch (e) { /* noop */ }
-        if (aiStatus) aiStatus.textContent = "✓ " + t("vm.aiDetected", "检测到模型") + " " + models.length + " 个：" + models.slice(0, 5).join(", ");
+        // 1.6.67 逐个实测可用性(最多前 5 个): 服务端列出的模型不一定真能调用(中转站常见), 验证后标注 ✓/✗ 并优先选用可用的
+        if (aiStatus) aiStatus.textContent = "检测到 " + models.length + " 个模型(服务商提供)，正在逐个验证可用性…";
+        const cand = models.slice(0, 5);
+        const marks = [];
+        let firstOk = "";
+        for (let i = 0; i < cand.length; i++) {
+          let pr = null;
+          try { pr = (typeof window.probeModelUsable === "function") ? await window.probeModelUsable(cand[i]) : null; }
+          catch (e) { pr = { ok: false, reason: String((e && e.message) || e) }; }
+          if (pr && pr.ok) { marks.push(cand[i] + " ✓"); if (!firstOk) firstOk = cand[i]; }
+          else { marks.push(cand[i] + " ✗(" + String((pr && pr.reason) || "失败").slice(0, 46) + ")"); }
+        }
+        if (cand.length < models.length) marks.push("(+" + (models.length - cand.length) + " 个未验证)");
+        const chosen = firstOk || models[0];
+        try { await game.settings.set("gpt-sovits-tts", "llmModels", models); await game.settings.set("gpt-sovits-tts", "llmModel", chosen); } catch (e) { /* noop */ }
+        try { aiModelSel.value = chosen; } catch (e) { /* noop */ }
+        if (aiStatus) aiStatus.textContent = "✓ " + t("vm.aiDetected", "检测到模型") + " " + models.length + " 个（服务商提供，已选用 " + chosen + "）：" + marks.join(" | ");
       } catch (err) { if (aiStatus) aiStatus.textContent = t("vm.aiDetectFail", "检测失败") + ": " + (err.message || err); }
     };
     if (aiBaseInp) { aiBaseInp.addEventListener("change", aiDetect); aiBaseInp.addEventListener("blur", aiDetect); }

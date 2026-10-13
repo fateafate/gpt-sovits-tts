@@ -1763,7 +1763,8 @@ function refreshSettingsModelSelect() {
     try { models = game.settings.get(MODULE, "llmModels") || []; } catch (e) { /* noop */ }
     if (!Array.isArray(models)) models = [];
     const cur = sel.value || "";
-    const list = [...new Set([...LLM_PRESET_MODELS, ...models])];
+    // 1.6.67 服务商"检测到的模型"排在最前(应当使用对方提供的名称); 模块预设只作兜底排在后面
+    const list = [...new Set([...models, ...LLM_PRESET_MODELS])];
     sel.innerHTML = (list.map(m => `<option value="${esc(m)}" ${m === cur ? "selected" : ""}>${esc(m)}</option>`).join("")) || `<option value="">-</option>`;
   } catch (e) { /* noop */ }
 }
@@ -1892,6 +1893,24 @@ async function probeLLMOnce() {
     return { ok: false, reason: window.__fvttTTSLlmErr };
   }
 }
+/** 1.6.67 指定模型的可用性探测: /models 列出 ≠ 真能调用(中转站常见), 用一次极短 chat 实测该模型 */
+window.probeModelUsable = async function probeModelUsable(model) {
+  try {
+    const cfg = getCfg();
+    if (!cfg.llmBaseUrl || !cfg.llmKey) return { ok: false, reason: "未配置 base/key" };
+    const r = await svcRequest(cfg.serverUrl, "POST", "/llm", {
+      base: cfg.llmBaseUrl || "https://api.openai.com/v1",
+      key: cfg.llmKey,
+      model: String(model || ""),
+      text: "ping",
+      emotions: [{ key: "calm", label: "平静" }],
+    }, { timeoutMs: 20000, retries: 0 });
+    const j = (r && typeof r.json === "function") ? await r.json().catch(() => ({})) : {};
+    if (r && r.ok && j && j.ok) return { ok: true, emotion: String(j.emotion || "") };
+    return { ok: false, reason: String((j && j.message) || ("http " + (r && r.status)) || "unknown") };
+  } catch (e) { return { ok: false, reason: String((e && e.message) || e) }; }
+};
+
 function armLlmReProbe() {
   try {
     if (window.__fvttTTSLlmReProbeArmed === true) return;
