@@ -4123,6 +4123,41 @@ async function analyzeAudioHead(url) {
   } catch (e) { return null; }
 }
 
+/** 1.6.72 解码音频为 PCM(供情绪声线对比用) */
+async function decodeAudioToData(url) {
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC || !url) return null;
+    const resp = await fetch(url, { cache: "no-store" });
+    if (!resp.ok) return null;
+    const buf = await resp.arrayBuffer();
+    const ctx = new AC();
+    const ab = await new Promise((res, rej) => {
+      let p = null;
+      try { p = ctx.decodeAudioData(buf, res, rej); } catch (e) { rej(e); }
+      if (p && typeof p.then === "function") p.then(res, rej);
+    });
+    try { ctx.close(); } catch (e) { /* noop */ }
+    if (!ab) return null;
+    return { ch: ab.getChannelData(0), sr: ab.sampleRate, dur: ab.duration };
+  } catch (e) { return null; }
+}
+
+/** 1.6.72 两段波形相关系数(1=几乎相同, 越低差异越大): 用于判断"两个情绪是否真的换声线" */
+function waveCorr(x, y) {
+  try {
+    const n = Math.min(x.length, y.length);
+    if (n < 2000) return -1;
+    let sx = 0, sy = 0;
+    for (let i = 0; i < n; i++) { sx += x[i]; sy += y[i]; }
+    const mx = sx / n, my = sy / n;
+    let num = 0, dx = 0, dy = 0;
+    for (let i = 0; i < n; i++) { const a = x[i] - mx, b = y[i] - my; num += a * b; dx += a * a; dy += b * b; }
+    if (dx <= 0 || dy <= 0) return -1;
+    return num / Math.sqrt(dx * dy);
+  } catch (e) { return -1; }
+}
+
 // 1.6.64 最终测试: 一键跑全链路 → 自动生成报告文件(engine/final_test_report.md), 可直接发给作者查看
 //  覆盖: 引擎连通 / LLM 诊断 / 提示词强度插值 / 合成播放 / 句首音量(实测音频包络) / 立绘切换 /
 //        多语种×多语气×双模型 / AI 判语气+润色+选立绘 / 手动选立绘优先
@@ -4217,6 +4252,40 @@ window.runFinalTest = async function runFinalTest() {
       push("- 要像 Shinsekai 那样\"不同情绪不同声音\": 语音设置 → 情绪槽 → 给各情绪绑定该角色的样本音频。");
     }
   } catch (e) { push("- 情绪参考音: 读取失败"); }
+  push("");
+  push("## 二·C、情绪声线实测(同一句 + 两个不同情绪参考音 各合成一次, 比对波形)");
+  push("");
+  try {
+    const _cc2 = (quickChars && quickChars.chars || []).find(x => x.name === cn) || null;
+    const _refs = ((_cc2 && _cc2.emotions) || []).filter(e => e && (e.ref_audio_path || e.ref)).slice(0, 2);
+    if (_refs.length < 2) {
+      push("- 跳过: 角色「" + cn + "」带参考音频的情绪槽不足 2 个, 无法对比。切到有情绪样本的角色(例: 七海千秋)再跑即可看到结果。");
+    } else {
+      const _txt2 = "情绪声线对比测试句，一二三四五六七八。";
+      const _mk = async (slot) => {
+        const rel = String(slot.ref_audio_path || slot.ref || "");
+        return await gptSovitsSynth(_txt2, "zh", {
+          serverUrl: cfg.serverUrl, speedFactor: 1.0, mediaType: "mp3", asBlob: true, role: cn,
+          overrides: { refAudioPath: "fvtt_chars/" + cn + "/" + rel, promptText: slot.prompt_text || "", promptLang: slot.prompt_lang || "zh", emotion: slot.key, emotionMix: 1.0 },
+        });
+      };
+      const g1 = await _mk(_refs[0]);
+      const g2 = await _mk(_refs[1]);
+      const u1b = (g1 && g1.blob) ? URL.createObjectURL(g1.blob) : "";
+      const u2b = (g2 && g2.blob) ? URL.createObjectURL(g2.blob) : "";
+      const d1 = u1b ? await decodeAudioToData(u1b) : null;
+      const d2 = u2b ? await decodeAudioToData(u2b) : null;
+      const cr = (d1 && d2) ? waveCorr(d1.ch, d2.ch) : -1;
+      try { if (u1b) URL.revokeObjectURL(u1b); if (u2b) URL.revokeObjectURL(u2b); } catch (e) { /* noop */ }
+      const l1 = (_refs[0].label || _refs[0].key || "情绪1");
+      const l2 = (_refs[1].label || _refs[1].key || "情绪2");
+      if (d1 && d2) {
+        const okc = (cr >= 0 && cr < 0.98);
+        push("- 「" + l1 + "」时长=" + d1.dur.toFixed(2) + "s  vs  「" + l2 + "」时长=" + d2.dur.toFixed(2) + "s | 波形相关=" + (cr < 0 ? "?" : cr.toFixed(3)) + " → " + (okc ? "✓ 两个情绪声线明显不同(真的换声线)" : "⚠ 两个情绪声线接近(样本差异小, 或两个槽指向同一参考音)"));
+        if (!okc) fails.push("情绪声线差异");
+      } else push("- 情绪声线实测: 音频解析失败, 跳过");
+    }
+  } catch (e) { push("- 情绪声线实测: 跳过(" + String((e && e.message) || e).slice(0, 50) + ")"); }
   push("");
   push("## 三、实际朗读(按当前提示词, 1 条健全性验证)");
   push("");
