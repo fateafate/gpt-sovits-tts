@@ -406,7 +406,7 @@ export class VoiceManager {
 
     let html = "";
     // AI 接入 (LLM 语气判断, 可选): 直接在面板顶部填写网址+密钥, 输入完自动检测模型并填充下拉
-    let aiBase = "", aiKeySet = false, aiEnabled = false, aiModel = "", aiModels = [], _cfgTextLang = "", _gmMute = false;
+    let aiBase = "", aiKeySet = false, aiKeyVal = "", aiEnabled = false, aiModel = "", aiModels = [], _cfgTextLang = "", _gmMute = false;
     try {
       // AI 接入区显示: GM 分发的世界共享配置优先(pl 只读, 面板如实反映共享生效状态)
       const _shB = game.settings.get("gpt-sovits-tts", "aiSharedBase") || "";
@@ -414,6 +414,9 @@ export class VoiceManager {
       const _shM = game.settings.get("gpt-sovits-tts", "aiSharedModel") || "";
       aiBase = _shB || game.settings.get("gpt-sovits-tts", "llmBaseUrl") || "";
       aiKeySet = !!(_shK || game.settings.get("gpt-sovits-tts", "llmKey"));
+      // 1.6.68 修 ReferenceError: aiKey is not defined —— 旧代码在"显示密钥"开启后重渲染时引用了不存在的 aiKey,
+      //        导致 _renderMain 抛异常中断 → 立绘库等内容不再刷新(切角色后立绘不变)。用已声明变量承载显示值。
+      if (this._aiKeyShown) { try { aiKeyVal = _shK || game.settings.get("gpt-sovits-tts", "llmKey") || ""; } catch (e2) { aiKeyVal = ""; } }
       aiEnabled = !!(_shB || _shK || game.settings.get("gpt-sovits-tts", "llmEnabled"));
       aiModel = _shM || game.settings.get("gpt-sovits-tts", "llmModel") || "";
       aiModels = this._aiModels || [];
@@ -427,7 +430,7 @@ export class VoiceManager {
       <label class="fvtt-tts-vm-row"><span>${t("vm.aiBase", "API 地址")}</span>
         <input class="fvtt-tts-vm-ai-base" value="${esc(aiBase)}" placeholder="https://api.deepseek.com/v1"></label>
       <label class="fvtt-tts-vm-row"><span>${t("vm.aiKey", "密钥")}</span>
-        <input class="fvtt-tts-vm-ai-key" type="password" value="${esc(this._aiKeyShown && aiKeySet ? aiKey : "")}" placeholder="${aiKeySet ? t("vm.aiKeySaved", "已保存，直接输入即可更换") : "sk-..."}">
+        <input class="fvtt-tts-vm-ai-key" type="password" value="${esc(this._aiKeyShown && aiKeySet ? aiKeyVal : "")}" placeholder="${aiKeySet ? t("vm.aiKeySaved", "已保存，直接输入即可更换") : "sk-..."}">
         ${aiKeySet ? `<button type="button" class="fvtt-tts-vm-btn vm-ai-keyview">${this._aiKeyShown ? "隐藏" : "显示"}</button>` : ""}</label>
       <label class="fvtt-tts-vm-row"><span>${t("vm.aiModel", "模型")}</span>
         <select class="fvtt-tts-vm-ai-model">${aiOpts}</select></label>
