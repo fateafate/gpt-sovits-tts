@@ -990,14 +990,19 @@ async function maybeSpeak(message) {
           if (res.ok && res.emotion) _emo = String(res.emotion);
           // 1.6.52 朗读提示词交给AI(Shinsekai式): AI按角色人设+朗读提示词润色台词朗读; 聊天记录保持原文, flags记polishText(重播一致)
           if (res.ok && res.polish && cfg.llmPolish) {
-            speakText = res.polish;
-            try {
-              if (message && message.flags && message.flags[MODULE]) {
-                const _nfP = { ...(message.flags[MODULE]) };
-                _nfP.polishText = res.polish;
-                safeMsgWrite(message, { flags: { [MODULE]: _nfP } });
-              }
-            } catch (e) { /* noop */ }
+            const _polOk = polishIsSafe(decision.text, res.polish);   // 1.6.63 双保险: 校验通过才用润色文本播出
+            if (_polOk) {
+              speakText = res.polish;
+              try {
+                if (message && message.flags && message.flags[MODULE]) {
+                  const _nfP = { ...(message.flags[MODULE]) };
+                  _nfP.polishText = res.polish;
+                  safeMsgWrite(message, { flags: { [MODULE]: _nfP } });
+                }
+              } catch (e) { /* noop */ }
+            } else {
+              try { console.debug("[gpt-sovits-tts] AI 润色被安全校验拒绝(改动过大), 使用原台词播出"); } catch (e) { /* noop */ }
+            }
           }
           // 1.6.53 AI 选立绘(Shinsekai式): 使用者手动选立绘(selSprite)永远优先, AI 不覆盖
           if (res.ok && res.sprite && !(flA && flA.selSprite)) {
@@ -1794,6 +1799,32 @@ window.preloadAI = async function preloadAI() {
   }
 };
 
+/** 1.6.63 AI 润色安全校验: 不允许"随意改变/减少"台词 — 只接受"加语气词/标点"级别的润色。
+ *  规则: ①去标点空白后长度比下限 0.95(变短=丢内容, 拒绝) 上限 1.15(短句放宽 1.4~1.6, 允许加语气词)
+ *        ②原句里的数字串必须全部保留 ③长句原字符覆盖率 ≥ 90%(防改写/缩写) */
+function polishIsSafe(orig, polished) {
+  try {
+    const o = String(orig || ""), p = String(polished || "");
+    if (!p.trim()) return false;
+    if (o.trim() === p.trim()) return true;
+    const norm = (s) => String(s).replace(/[\s，。！？、；：""''《》〈〉()（）\[\]【】…—～~·\-.,!?;:'"]+/g, "");
+    const on = norm(o), pn = norm(p);
+    if (!on || !pn) return false;
+    const ratio = pn.length / on.length;
+    const maxR = on.length <= 4 ? 1.6 : (on.length <= 8 ? 1.4 : 1.15);
+    if (ratio < 0.95 || ratio > maxR) return false;
+    const nums = o.match(/\d+(?:\.\d+)?/g) || [];
+    for (let i = 0; i < nums.length; i++) { if (p.indexOf(nums[i]) < 0) return false; }
+    if (on.length >= 6) {
+      const seen = new Set(pn);
+      let hit = 0;
+      for (const ch of on) { if (seen.has(ch)) hit++; }
+      if (hit / on.length < 0.9) return false;
+    }
+    return true;
+  } catch (e) { return false; }
+}
+
 /** AI 台词润色(可选, 复刻成品软件"语气更多样"): 按情绪微调台词表达, 不改变原意 */
 async function polishTextByLLM(text, emotion, emotionLabel, context) {
   const cfg = getCfg();
@@ -1815,7 +1846,13 @@ async function polishTextByLLM(text, emotion, emotionLabel, context) {
       return { ok: false, text: "" };
     }
     const out = String(j.text).trim();
-    return out ? { ok: true, text: out } : { ok: false, text: "" };
+    // 1.6.63 安全校验: 润色若改动/删减过大 → 丢弃(宁可用原台词, 也不播被改过的内容)
+    if (!out) return { ok: false, text: "" };
+    if (!polishIsSafe(text, out)) {
+      try { console.debug("[gpt-sovits-tts] AI 润色被安全校验拒绝(改动过大), 使用原台词"); } catch (e) { /* noop */ }
+      return { ok: false, text: "" };
+    }
+    return { ok: true, text: out };
   } catch (e) {
     markLlmBroken(String((e && e.message) || e));
     return { ok: false, text: "" };
@@ -1910,7 +1947,13 @@ async function judgeAndPolishByLLM(text, charName, wantPolish, context) {
           }, { timeoutMs: 70000 });
         const j = await r.json().catch(() => ({}));
         if (r.ok && j.ok && j.emotion) {
-          return { ok: true, emotion: String(j.emotion), polish: String(j.polish || "").trim() };
+          // 1.6.63 润色安全校验: 改动/删减过大 → 只取语气, 台词保持原文播出
+          let _pol = String(j.polish || "").trim();
+          if (_pol && !polishIsSafe(text, _pol)) {
+            try { console.debug("[gpt-sovits-tts] AI 润色被安全校验拒绝(改动过大), 使用原台词"); } catch (e) { /* noop */ }
+            _pol = "";
+          }
+          return { ok: true, emotion: String(j.emotion), polish: _pol };
         }
         // 合并调用失败: LLM 服务不可用(>=400) → 记原因并禁用(根治每句 502 刷屏), 不再回退分开调用
         if (r.status >= 400) { markLlmBroken((j && j.message) || ("http " + r.status)); return { ok: false, emotion: "", reason: (j && j.message) || ("http " + r.status) }; }

@@ -144,6 +144,12 @@ import json
 import urllib.request
 import urllib.error
 import asyncio   # 1.6.62 LLM 请求线程化(asyncio.to_thread): 防止外部 API 慢请求阻塞整个引擎事件循环
+# 1.6.63 音频头部修复(句首静音/弱起): 独立模块便于验证; 导入失败时优雅回退到本文件内旧实现
+try:
+    from _headfix import trim_lead_silence_arr as _hf_trim, clean_head_final as _hf_clean
+except Exception:
+    _hf_trim = None
+    _hf_clean = None
 import numpy as np
 import soundfile as sf
 from fastapi import FastAPI, Response, Request
@@ -399,11 +405,14 @@ def _fade_edges(arr, sr, fade_ms=18):
 
 
 def _trim_lead_silence_arr(arr, sr, max_trim_s=1.2, thresh=0.015):
-    """裁剪合成音频开头的弱音/静音段(修复"前几个字被吞"):
-    实测 GPT-SoVITS 合成开头常有 300~400ms 接近静音(RMS≈0.0002, 整体 0.23),
-    前几个字埋在静音里 → 听感"吞音"。裁到第一个能量≥thresh 的 20ms 窗,
-    并保留 20ms 缓冲(不硬切第一音素)。增益对静音无效, 必须裁剪。
-    注意: 与参考音频裁剪(_trim_lead_silence)不同, 这是数组版本, 作用于合成结果。"""
+    """裁剪合成音频开头的弱音/静音段(修复"前几个字被吞")。
+    1.6.63: 委托 _headfix.trim_lead_silence_arr — 旧实现有 `n <= sr*2.4 直接返回` 的早退,
+    导致 1.2~2.4 秒的短句(聊天最常见)开头 200~300ms 静音完全没被裁剪(实测 2.12s 句静音 0.295s)。"""
+    if _hf_trim is not None:
+        try:
+            return _hf_trim(arr, sr, max_trim_s, thresh)
+        except Exception:
+            pass
     arr = np.asarray(arr, dtype=np.float32)
     n = len(arr)
     max_trim = int(sr * max_trim_s)
@@ -1692,6 +1701,12 @@ async def tts_handle(req: dict):
             req["text"] = _text_raw
             sr, audio_data = next(tts_generator)   # 引擎内部按切分+batch 并行合成, 返回整段
             audio_data = _limit_peak(_boost_head(_lift_weak_head(_trim_lead_silence_arr(_to_float_audio(audio_data), sr), sr), sr))   # 归一化 → 裁纯静音 → 弱起软提升 → 头部增益 → 防削波
+            # 1.6.63 末端头部清理(兜底): 语音起点对齐裁剪 + 开头弱音软提升, 保证"开头几个字听得见"
+            if _hf_clean is not None:
+                try:
+                    audio_data = _hf_clean(audio_data, sr)
+                except Exception:
+                    pass
             audio_data = pack_audio(BytesIO(), audio_data, sr, media_type).getvalue()
             audio_data = _apply_emotion_fx(audio_data, req.get("emotion") or "")   # 1.6.20 情绪后处理(单参考角色近似语气)
             if want_mp3:
@@ -3065,9 +3080,10 @@ async def llm_polish_endpoint(request: Request):
         return JSONResponse(status_code=400, content={"ok": False, "message": "text required"})
     sys_prompt = (
         "你是台词润色助手。用户给你一句台词, 你需要把它润色成更能表达[%s]情绪的版本。"
-        "要求: 1) 保持原意和人物说话习惯, 不改变事实内容; "
-        "2) 通过添加语气词、口语化表达、停顿或感叹, 让语气更自然、更有情绪表现力; "
-        "3) 不添加原文没有的新内容/新信息, 不要解释, 不要加引号; "
+        "硬性要求(违反即失败): 1) **逐字保留原台词的全部信息** — 严禁删除、替换、缩写、改写任何实词/数字/专有名词/称呼, 严禁改变句序句式, 严禁新增原句没有的事实信息; "
+        "2) 只允许在句首/句尾添加语气词(呀/呢/哦/啦/嘛)与标点停顿符号(……、！、？、——)来体现情绪; "
+        "3) 润色后去掉标点空白后的字符数与原台词差异不得超过 10%%, 若无法在保持原句完整的前提下润色则原样返回原台词; "
+        "4) 不添加原文没有的新内容/新信息, 不要解释, 不要加引号; "
         "4) 只输出润色后的台词本身(一句或几句话), 简体中文优先。" % (emotion_label or "自然")
     )
     user_content = text[:1200]
@@ -3478,7 +3494,9 @@ async def llm_assess_endpoint(request: Request):
         "该角色可用语气选项:\n%s\n"
         "要求：\n"
         "1) emotion 必须是上面选项里的英文 key 之一（优先贴合该角色性格与台词语气）；\n"
-        "2) polish 保持原意、不改事实内容，通过语气词/口语化/感叹让表达更自然更有情绪表现力，简体中文；\n"
+        "2) polish 必须**逐字保留原台词的全部信息**：只允许在句首/句尾添加语气词(如 呀/呢/哦/啦/嘛)与标点停顿符号(如 ……、！、？、——)，"
+        "**严禁**删除、替换、缩写或改写原句里的任何实词/数字/专有名词/称呼，**严禁**改变句序与句式，**严禁**新增原句没有的事实信息；"
+        "润色后去掉标点空白后的字符数与原台词的差异不得超过 10%%；若无法在保持原句完整的前提下润色，就把 polish 填成原台词本身；简体中文；\n"
         "3) 判断语气时优先依据台词本身与角色性格，上下文(最近对话)只作辅助理解语境；\n"
         "4) sprite 为整数编号，必须是立绘编号表里的编号之一，按这句台词的语气情绪选择最合适的那张；表为空或拿不准时填 0（0=不换立绘）；\n"
         "5) 只输出一个 JSON 对象，格式: {\"emotion\": \"key\", \"polish\": \"润色后的台词\", \"sprite\": 编号}，不要任何解释、不要 markdown。" % (role_name or "声音助手", "按该语气把台词润色得更自然" if want_polish else "不润色, polish 填空字符串", role_lines, style_lines, sprite_lines, option_lines)
@@ -3492,7 +3510,7 @@ async def llm_assess_endpoint(request: Request):
             {"role": "system", "content": sys_prompt},
             {"role": "user", "content": user_content},
         ],
-        "temperature": 0.3,
+        "temperature": 0.2,   # 1.6.63 降低随机性: 润色只加语气词/标点, 避免随意改写原句
         "max_tokens": 512,
     }
     data, _llm_status, llm_err = await asyncio.to_thread(_llm_chat_call, payload, base, key, 15)
