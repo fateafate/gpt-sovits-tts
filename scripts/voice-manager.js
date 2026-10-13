@@ -275,8 +275,7 @@ export class VoiceManager {
       <div class="fvtt-tts-vm-body"></div>
       <footer class="fvtt-tts-vm-foot">
         <button type="button" class="fvtt-tts-vm-back" style="display:none">${t("vm.back", "返回")}</button>
-        <button type="button" class="fvtt-tts-vm-usage" title="最新使用测试: 引擎连通→合成播放→立绘切换→风格判定, 一条龙出报告(替代旧自检/高压/速度/玩家自测)">🧪 使用测试</button>
-        <button type="button" class="fvtt-tts-vm-aitest" title="提示词/AI/立绘三合一测试: AI按朗读提示词判语气+润色台词+直接选立绘, 强度0/50/100%对比, 手动选立绘优先验证(共4句, 约30~60秒)">🤖 提示词/AI测试</button>
+        <button type="button" class="fvtt-tts-vm-finaltest" title="最终测试(一键全链路): 引擎连通 → LLM诊断 → 提示词强度 → 合成 → 句首音量(实测音频包络) → 立绘切换 → 多语种×多语气×双模型 → AI判语气/润色/选立绘 → 手动选立绘优先; 跑完自动生成报告文件 engine\final_test_report.md">🏁 最终测试</button>
         <span class="fvtt-tts-vm-spacer" style="flex:1"></span>
         <button type="button" class="fvtt-tts-vm-test">${t("vm.test", "试听")}</button>
         <button type="button" class="fvtt-tts-vm-save">${t("vm.save", "保存")}</button>
@@ -284,17 +283,20 @@ export class VoiceManager {
         <button type="button" class="fvtt-tts-vm-runassign" title="${t("vm.runAssignTitle", "给每个账号指定语音由谁的电脑生成(仅主持人)")}">👥 ${t("vm.runAssign", "语音生成者分配")}</button>` : ""}
       </footer>`;
     this.el.querySelector(".fvtt-tts-vm-close").addEventListener("click", () => this.close());
-    this.el.querySelector(".fvtt-tts-vm-aitest").addEventListener("click", async () => {
+    const _ftBtn = this.el.querySelector(".fvtt-tts-vm-finaltest");
+    if (_ftBtn) _ftBtn.addEventListener("click", async () => {
       try {
         const cn = (loadVoiceProfile().current) || "";
         if (!cn) { ui.notifications.warn("请先选择角色再测"); return; }
-        ui.notifications.info("提示词/AI/立绘测试开始(约30~60秒, 共4句: 严肃/开心/惊讶/手动优先)");
-        const fn = (typeof window.runAIPromptTest === "function") ? window.runAIPromptTest : null;
+        ui.notifications.info("最终测试开始(约1~2分钟, 5句多语种×多语气): 引擎→LLM→强度→合成→句首音量→立绘→AI判定/润色/选立绘; 结束自动生成报告文件");
+        const fn = (typeof window.runFinalTest === "function") ? window.runFinalTest : null;
         if (fn) await fn();
-        else ui.notifications.error("测试函数未就绪(runAIPromptTest), 请刷新后重试");
-      } catch (e) { ui.notifications.error("测试失败: " + String((e && e.message) || e).slice(0, 80)); }
+        else ui.notifications.error("测试函数未就绪(runFinalTest), 请刷新后重试");
+      } catch (e) { ui.notifications.error("最终测试失败: " + String((e && e.message) || e).slice(0, 90)); }
     });
-    this.el.querySelector(".fvtt-tts-vm-usage").addEventListener("click", async () => {
+    // 1.6.64 旧的"使用测试/提示词AI测试"按钮已合并进"最终测试"; 下面保留旧逻辑但按存在性守卫(元素不存在则整段跳过)
+    const _oldUsageBtn = this.el.querySelector(".fvtt-tts-vm-usage");
+    if (_oldUsageBtn) _oldUsageBtn.addEventListener("click", async () => {
       try {
         const cn = (loadVoiceProfile().current) || "";
         if (!cn) { ui.notifications.warn("请先选择角色再测"); return; }

@@ -3121,22 +3121,37 @@ async def llm_polish_endpoint(request: Request):
 @APP.post("/diag")
 async def diag_endpoint(request: Request):
     """{text?, src?, messageId?, type?, report?} → 客户端诊断落盘:
-    [play] 播放诊断; type=sprite-test-report 时写 tts-reports.log(立绘测试报告, 作者直接读文件排查)"""
+    [play] 播放诊断; type=sprite-test-report/ai-lines-report 追加 tts-reports.log;
+    type=final-test → 覆盖写 engine/final_test_report.md(最终测试报告, 路径稳定, 作者/用户直接读取查看)"""
     try:
         body = await request.json()
     except Exception:
         body = {}
+    _saved = ""
     try:
-        _rt = "tts-reports.log" if str(body.get("type") or "") in ("sprite-test-report", "ai-lines-report") else "tts-requests.log"
-        with open(os.path.join(os.path.dirname(__file__), _rt), "a", encoding="utf-8") as _lf:
+        _type = str(body.get("type") or "")
+        _rep = str(body.get("report") or "")
+        _base = os.path.dirname(__file__)
+        if _type == "final-test":
+            # 1.6.64 最终测试: 每次覆盖写一份独立报告文件(不追加, 始终是最新一次结果)
+            _fp = os.path.normpath(os.path.join(_base, "..", "engine", "final_test_report.md"))
+            try:
+                os.makedirs(os.path.dirname(_fp), exist_ok=True)
+                with open(_fp, "w", encoding="utf-8") as _f:
+                    _f.write(_rep if _rep.endswith("\n") else (_rep + "\n"))
+                _saved = _fp
+            except Exception:
+                _saved = ""
+        _rt = "tts-reports.log" if _type in ("sprite-test-report", "ai-lines-report", "final-test") else "tts-requests.log"
+        with open(os.path.join(_base, _rt), "a", encoding="utf-8") as _lf:
             if _rt == "tts-reports.log":
-                _lf.write("\n===== %s =====\n%s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"), str(body.get("report") or "")))
+                _lf.write("\n===== %s =====\n%s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"), _rep))
             else:
                 _lf.write("[%s] [play] src=%s mid=%s text=%r\n" % (
                     time.strftime("%H:%M:%S"), str(body.get("src") or "")[:20], str(body.get("messageId") or "")[:16], str(body.get("text") or "")[:60]))
     except Exception:
         pass
-    return {"ok": True}
+    return {"ok": True, "saved": _saved}
 
 
 @APP.post("/selftest")

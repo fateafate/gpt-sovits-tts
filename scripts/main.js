@@ -4065,6 +4065,182 @@ window.runAIPromptTest = async function runAIPromptTest() {
   return rows;
 };
 
+/** 1.6.64 音频头部包络分析(浏览器 WebAudio 解码真实音频): 用于验证"开头几个字是否听得见" */
+async function analyzeAudioHead(url) {
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC || !url) return null;
+    const resp = await fetch(url, { cache: "no-store" });
+    if (!resp.ok) return null;
+    const buf = await resp.arrayBuffer();
+    const ctx = new AC();
+    const ab = await new Promise((res, rej) => {
+      let p = null;
+      try { p = ctx.decodeAudioData(buf, res, rej); } catch (e) { rej(e); }
+      if (p && typeof p.then === "function") p.then(res, rej);
+    });
+    if (!ab) { try { ctx.close(); } catch (e) { /* noop */ } return null; }
+    const ch = ab.getChannelData(0), sr = ab.sampleRate, N = ch.length;
+    const rms = (s, e) => {
+      const i0 = Math.floor(s * sr), i1 = Math.min(Math.floor(e * sr), N);
+      if (i1 <= i0) return 0;
+      let sum = 0;
+      for (let i = i0; i < i1; i++) sum += ch[i] * ch[i];
+      return Math.sqrt(sum / (i1 - i0));
+    };
+    let silent = -1;
+    const step = Math.max(1, Math.floor(sr * 0.01));
+    const lim = Math.min(N, Math.floor(sr * 1.5));
+    for (let i = 0; i < lim; i += step) { if (rms(i / sr, (i + step) / sr) > 0.01) { silent = i / sr; break; } }
+    const out = { dur: ab.duration, sr: sr, rms20: rms(0, 0.02), rms50: rms(0.02, 0.05), rms100: rms(0.05, 0.1), silentHead: silent };
+    try { ctx.close(); } catch (e) { /* noop */ }
+    return out;
+  } catch (e) { return null; }
+}
+
+// 1.6.64 最终测试: 一键跑全链路 → 自动生成报告文件(engine/final_test_report.md), 可直接发给作者查看
+//  覆盖: 引擎连通 / LLM 诊断 / 提示词强度插值 / 合成播放 / 句首音量(实测音频包络) / 立绘切换 /
+//        多语种×多语气×双模型 / AI 判语气+润色+选立绘 / 手动选立绘优先
+window.runFinalTest = async function runFinalTest() {
+  const MOD = MODULE;
+  const L = [];
+  const push = (s) => { try { L.push(String(s)); } catch (e) { /* noop */ } };
+  const t0 = Date.now();
+  let cn = ""; try { cn = (loadVoiceProfile().current) || ""; } catch (e) { /* noop */ }
+  if (!cn) { ui.notifications.warn("请先选择角色再测"); return null; }
+  let verTxt = "?"; try { verTxt = game.modules.get(MOD) ? game.modules.get(MOD).version : "?"; } catch (e) { /* noop */ }
+  let opName = ""; try { opName = (game.user && game.user.name) || ""; } catch (e) { /* noop */ }
+  const cfg = getCfg();
+  const style = (() => { try { return getStylePrompt(cn) || ""; } catch (e) { return ""; } })();
+  const fails = [];
+
+  push("# GPT-SoVITS TTS 最终测试报告");
+  push("");
+  push("- 时间: " + new Date().toLocaleString("zh-CN") + " | 执行者: " + opName + " | 当前角色: " + cn + " | 模块版本: " + verTxt);
+  push("");
+  push("## 一、环境与配置");
+  let engOk = false;
+  try {
+    const rs = await svcRequest(cfg.serverUrl, "GET", "/status", null, { timeoutMs: 8000, retries: 0 });
+    const sj = (rs && typeof rs.json === "function") ? await rs.json().catch(() => ({})) : {};
+    engOk = !!(rs && rs.ok && sj && sj.ok);
+    push("- 引擎连通: " + (engOk
+      ? ("✓ 服务=" + String(sj.service || "") + " | 激活角色=" + String((sj.character && sj.character.name) || "?") + " | device=" + String(sj.device || ""))
+      : ("✗ " + String((sj && sj.message) || ("http " + (rs && rs.status))))));
+  } catch (e) {
+    push("- 引擎连通: ✗ 连不上(" + String((e && e.message) || e).slice(0, 70) + ")");
+  }
+  if (!engOk) fails.push("引擎连通");
+  if (cfg.llmEnabled && cfg.llmKey && window.__fvttTTSLlmBroken === true) { try { await probeLLMOnce(); } catch (e) { /* noop */ } }
+  const llmOk = !!(cfg.llmEnabled && cfg.llmKey) && window.__fvttTTSLlmBroken !== true;
+  push("- LLM: " + (llmOk ? "可用✓" : ((cfg.llmEnabled && cfg.llmKey) ? ("禁用 — " + String(window.__fvttTTSLlmErr || "?").slice(0, 150)) : "未配置(设置里开 AI 并填 key)")));
+  push("- LLM 配置: base=" + String(cfg.llmBaseUrl || "(空)").slice(0, 50) + " | model=" + String(cfg.llmModel || "(空)") + " | key=" + maskKey(cfg.llmKey));
+  push("- 朗读提示词: " + (style || "(未填)") + " | AI润色=" + (cfg.llmPolish ? "开" : "关") + " | 服务端地址=" + String(cfg.serverUrl || ""));
+  push("");
+  push("## 二、朗读提示词强度(0~100% 插值到语速)");
+  const _kw0 = styleKeywordParams(style || "严肃认真", 20);
+  const _ss = [];
+  [0, 25, 50, 100].forEach(pct => {
+    const spd = _kw0.speed ? (1 + (_kw0.speed - 1) * (pct / 100)) : 1.0;
+    _ss.push(pct + "%→spd=" + spd.toFixed(2));
+  });
+  push("- 关键词" + (_kw0.speed ? ("命中语速=" + _kw0.speed) : "未命中语速") + ": " + _ss.join(" | ") + (_kw0.split ? " | 切分: <25% 不启用" : ""));
+  push("");
+  push("## 三、多语种 × 多语气 × 双模型 全链实测");
+  push("");
+  push("(每条: 判定来源 / 情绪 / AI润色 / 立绘 / 合成 / 句首音量)");
+  const scenes = [
+    { label: "句1", role: "丛雨", lang: "zh", text: "今天的事情，就交给我吧。我会认真处理的。", strength: 100, manual: false },
+    { label: "句2", role: "丛雨", lang: "zh", text: "哈哈，太棒啦！我们一起去吧～！", strength: 100, manual: false },
+    { label: "句3", role: "丛雨", lang: "ja", text: "えっ？！本当ですか？！信じられない……", strength: 50, manual: false },
+    { label: "句4", role: "七海千秋", lang: "en", text: "Oh no… why did it have to end like this…", strength: 100, manual: false },
+    { label: "句5", role: "七海千秋", lang: "zh", text: "嗯…那就这样吧。", strength: 0, manual: true },
+  ];
+  const _origRole = (() => { try { return (loadVoiceProfile().current) || ""; } catch (e) { return ""; } })();
+  const _origStre = (() => { try { const vp = loadVoiceProfile(); const cc = (vp.chars && vp.chars[cn]) || null; return (cc && typeof cc.styleStrength === "number") ? cc.styleStrength : 50; } catch (e) { return 50; } })();
+  const manualSpriteOf = (r) => { try { const cc = (quickChars && quickChars.chars || []).find(x => x.name === r); return (cc && cc.sprites && cc.sprites[0]) || ""; } catch (e) { return ""; } };
+  window.__fvttTTSAiLineDiag = true;
+  window.__fvttTTSAiLineDiagList = [];
+  window.__fvttTTSAiLineEnterList = [];
+  try {
+    for (let i = 0; i < scenes.length; i++) {
+      const sc = scenes[i];
+      try {
+        const profT = loadVoiceProfile();
+        profT.current = sc.role;
+        profT.chars = profT.chars || {};
+        const cT = profT.chars[sc.role] || (profT.chars[sc.role] = { name: sc.role });
+        cT.styleStrength = sc.strength;
+        saveVoiceProfile(profT);
+      } catch (e) { /* noop */ }
+      const flT = { fromModSend: true, role: sc.role, lang: sc.lang };
+      if (sc.manual) { const _ms = manualSpriteOf(sc.role); if (_ms) flT.selSprite = _ms; }
+      let msg = null;
+      try { msg = await ChatMessage.create({ content: sc.text, speaker: { alias: sc.role }, flags: { [MOD]: flT } }); }
+      catch (e) { push("[" + sc.label + "] 发送失败: " + String((e && e.message) || e).slice(0, 60)); fails.push(sc.label + "发送"); continue; }
+      let waited = 0;
+      while (waited < 150 && !(window.__fvttTTSAiLineEnterList || []).some(p => p && p.mid === msg.id)) { await new Promise(r => setTimeout(r, 200)); waited++; }
+      const _entered = !!(window.__fvttTTSAiLineEnterList || []).some(p => p && p.mid === msg.id);
+      waited = 0;
+      while (waited < 175 && !(window.__fvttTTSAiLineDiagList || []).some(p => p && p.mid === msg.id)) { await new Promise(r => setTimeout(r, 200)); waited++; }
+      let aud = "", url3 = "";
+      waited = 0;
+      while (waited < 120) {
+        try {
+          const m2 = game.messages.get(msg.id);
+          const f2 = m2 && m2.flags && m2.flags[MOD];
+          if (f2 && f2.audioUrl) { aud = "✓"; url3 = String(f2.audioUrl); break; }
+        } catch (e) { /* noop */ }
+        await new Promise(r => setTimeout(r, 200)); waited++;
+      }
+      const _probe = (window.__fvttTTSAiLineDiagList || []).find(p => p && p.mid === msg.id) || {};
+      const _fNow = (() => { try { const m3 = game.messages.get(msg.id); return (m3 && m3.flags && m3.flags[MOD]) || {}; } catch (e) { return {}; } })();
+      const _av = _fNow.avatar || _fNow.selSprite || _fNow.aiSprite || "";
+      let headTxt = "";
+      if (url3) {
+        const an = await analyzeAudioHead(url3);
+        if (an) {
+          const okH = (an.silentHead >= 0 && an.silentHead <= 0.08);
+          headTxt = " | 句首=" + an.rms20.toFixed(3) + "(静音头" + (an.silentHead < 0 ? "无" : an.silentHead.toFixed(3) + "s") + ")" + (okH ? "✓" : "⚠");
+          if (!okH) fails.push(sc.label + "句首音量");
+        }
+      }
+      push("- [" + sc.label + " " + sc.role + "/" + sc.lang + "/强度" + sc.strength + "%] 「" + sc.text.slice(0, 18) + "…」 → "
+        + (_probe.mid ? ("判定=" + (_probe.src || "-") + " 情绪=" + (_probe.emo || "无")) : ("未探到(" + (_entered ? "已进hook" : "hook未触发") + ")"))
+        + " | 润色=" + ((_fNow.polishText || "").trim() ? "✓" : "—")
+        + " | 立绘=" + (_av ? String(_av).slice(-26) : (sc.manual ? "未覆盖(手动优先✓)" : "无"))
+        + " | 合成=" + (aud || "超时") + headTxt);
+    }
+  } finally {
+    try {
+      const profR = loadVoiceProfile();
+      profR.current = _origRole;
+      profR.chars = profR.chars || {};
+      const cR = profR.chars[cn] || (profR.chars[cn] = { name: cn });
+      cR.styleStrength = _origStre;
+      saveVoiceProfile(profR);
+    } catch (e) { /* noop */ }
+    window.__fvttTTSAiLineDiag = false;
+    window.__fvttTTSAiLineDiagList = [];
+    window.__fvttTTSAiLineEnterList = [];
+  }
+  push("");
+  push("## 四、结论");
+  push("- 耗时: " + Math.round((Date.now() - t0) / 1000) + "s | LLM: " + (llmOk ? "AI链路(判语气+润色+选立绘)已启用" : "规则降级(无AI: 文本规则/提示词基调 + EMOTION_FX 变声)"));
+  push("- 关键项: " + (fails.length ? ("⚠ 存在问题 → " + fails.join("、")) : "全部通过 ✓"));
+  push("- 报告文件: engine\\final_test_report.md (模块 engine 目录下; 覆盖式写入, 始终为最近一次结果)");
+  const md = L.join("\n");
+  try { console.warn("[gpt-sovits-tts][最终测试]\n" + md); } catch (e) { /* noop */ }
+  let saved = "";
+  try {
+    const r = await svcRequest(cfg.serverUrl, "POST", "/diag", { type: "final-test", report: md }, { timeoutMs: 20000, retries: 0 });
+    const j = (r && typeof r.json === "function") ? await r.json().catch(() => ({})) : {};
+    saved = (j && j.saved) || "";
+  } catch (e) { /* noop */ }
+  ui.notifications.info("最终测试完成(耗时 " + Math.round((Date.now() - t0) / 1000) + "s)。报告文件: " + (saved || "engine\\final_test_report.md"));
+  return { markdown: md, saved: saved, fails: fails };
+};
+
 function aiJudgeEmotionNow(text, role) {
   if (window.__fvttTTSLlmBroken === true) return null;   // 1.6.51 LLM 不可达: 直接返回(不再等 4s 超时)
   const _key = String(text || "") + "|" + String(role || "");
