@@ -759,7 +759,17 @@ function safeAssignments() {
       if (aiStatus) aiStatus.textContent = t("vm.aiDetecting", "检测中…");
       try {
         const j = (typeof window.fetchModelsFromServer === "function") ? await window.fetchModelsFromServer(base, key) : null;
-        if (!j || !j.ok) { if (aiStatus) aiStatus.textContent = t("vm.aiDetectFail", "检测失败") + ": " + ((j && j.message) || "unknown"); return; }
+        if (!j || !j.ok) {
+          const _msg = String((j && j.message) || "unknown");
+          // 1.6.61 引擎未启动时说清原因(否则只显示 Failed to fetch, 看不出是引擎没跑)
+          const _engineDown = /Failed to fetch|ERR_CONNECTION|NetworkError|refused|http 0|fetch failed/i.test(_msg);
+          if (aiStatus) {
+            aiStatus.textContent = _engineDown
+              ? "✗ 语音引擎未启动(9881 连不上)：先双击 engine\\启动引擎.bat 启动引擎, 再点本按钮检测"
+              : (t("vm.aiDetectFail", "检测失败") + ": " + _msg);
+          }
+          return;
+        }
         const models = j.models || [];
         if (!models.length) { if (aiStatus) aiStatus.textContent = t("vm.aiNoModels2", "该服务未返回可用模型"); return; }
         this._aiModels = models;

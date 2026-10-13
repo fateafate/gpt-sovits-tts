@@ -1764,7 +1764,8 @@ function refreshSettingsModelSelect() {
 /** 调服务端 /llm/models 拉取模型列表 */
 async function fetchModelsFromServer(base, key) {
   const cfg = getCfg();
-  const r = await svcRequest(cfg.serverUrl, "POST", "/llm/models", { base, key }, { timeoutMs: 40000 });
+  // 1.6.61 引擎不在时不反复重试刷屏(3次×ERR_CONNECTION_REFUSED): 单次尝试 + 15s 超时
+  const r = await svcRequest(cfg.serverUrl, "POST", "/llm/models", { base, key }, { timeoutMs: 15000, retries: 0 });
   const j = await r.json().catch(() => ({}));
   if (!r.ok || !j.ok) return { ok: false, message: (j && j.message) || ("http " + r.status) };
   return { ok: true, models: (j.models) || [] };

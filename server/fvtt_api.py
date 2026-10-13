@@ -142,6 +142,7 @@ import wave
 import signal
 import json
 import urllib.request
+import urllib.error
 import numpy as np
 import soundfile as sf
 from fastapi import FastAPI, Response, Request
@@ -2852,16 +2853,16 @@ async def bind_slot(request: Request):
 
 
 # ---------------- LLM 代理: 可选 AI 语气判断(OpenAI 兼容 API; 未配置不影响模块) ----------------
-def _llm_candidate_urls(base):
-    """base 兼容: 中转站常见 带/v1 或 不带 /v1 两种, 依序返回候选 chat/completions 地址(去重保序)"""
+def _llm_candidate_urls(base, endpoint="/chat/completions"):
+    """base 兼容: 中转站/官方常见 带/v1 或 不带 /v1 两种, 依序返回候选地址(去重保序)"""
     b = str(base or "").strip().rstrip("/")
     if not b:
         b = "https://api.openai.com/v1"
-    cands = []
+    ep = str(endpoint or "/chat/completions")
     if b.endswith("/v1"):
-        cands = [b + "/chat/completions", b[:-3].rstrip("/") + "/chat/completions"]
+        cands = [b + ep, b[:-3].rstrip("/") + ep]
     else:
-        cands = [b + "/chat/completions", b + "/v1/chat/completions"]
+        cands = [b + ep, b + "/v1" + ep]
     seen, out = set(), []
     for c in cands:
         if c not in seen:
@@ -2869,27 +2870,63 @@ def _llm_candidate_urls(base):
             out.append(c)
     return out
 
-def _llm_chat_call(payload, base, key, timeout=15):
-    """依序尝试候选 URL(404/403 视为路径问题换下一个; 400/401 停止; 网络错误中断), 返回 (data|None, status|None, err|None)"""
-    import urllib.error
-    last_err = None
-    for url in _llm_candidate_urls(base):
-        req = urllib.request.Request(
-            url,
-            data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json", "Authorization": "Bearer %s" % key},
-            method="POST",
-        )
+def _llm_err_text(e):
+    """从 HTTPError 提取正文里的错误信息(如 DeepSeek 的 Model Not Exist), 便于客户端诊断显示"""
+    try:
+        raw = e.read().decode("utf-8", "ignore")
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                return json.loads(resp.read().decode("utf-8")), resp.status, None
-        except urllib.error.HTTPError as e:
-            last_err = "HTTP Error %s: %s" % (e.code, getattr(e, "reason", ""))
-            if e.code not in (404, 403):   # 400/401/5xx: 不是路径问题
+            j = json.loads(raw)
+            msg = ((j.get("error") or {}) if isinstance(j.get("error"), dict) else {}).get("message") or j.get("message") or ""
+            if msg:
+                return "HTTP %s: %s" % (getattr(e, "code", "?"), str(msg)[:200])
+        except Exception:
+            pass
+        if raw.strip():
+            return "HTTP %s: %s" % (getattr(e, "code", "?"), raw.strip()[:200])
+    except Exception:
+        pass
+    return "HTTP Error %s: %s" % (getattr(e, "code", "?"), getattr(e, "reason", ""))
+
+def _llm_chat_call(payload, base, key, timeout=15):
+    """依序尝试候选 URL(404/403 视为路径问题换下一个)与候选模型;
+    模型兜底: base 含 deepseek 且当前模型不可用时自动改试 deepseek-chat / deepseek-reasoner(修"填了官方base却留着gpt模型名"的 400)
+    返回 (data|None, status|None, err|None); payload["model"] 可能被更新为实际成功的模型名"""
+    import urllib.error
+    _base_l = str(base or "").lower()
+    _models = [str(payload.get("model") or "").strip()]
+    if "deepseek" in _base_l:
+        for _m in ("deepseek-chat", "deepseek-reasoner"):
+            if _m not in _models:
+                _models.append(_m)
+    _models = [m for m in _models if m]
+    if not _models:
+        _models = ["gpt-4o-mini"]
+    last_err = None
+    for mi, _m in enumerate(_models):
+        payload["model"] = _m
+        _model_maybe = False
+        for url in _llm_candidate_urls(base):
+            req = urllib.request.Request(
+                url,
+                data=json.dumps(payload).encode("utf-8"),
+                headers={"Content-Type": "application/json", "Authorization": "Bearer %s" % key},
+                method="POST",
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                    return json.loads(resp.read().decode("utf-8")), resp.status, None
+            except urllib.error.HTTPError as e:
+                last_err = _llm_err_text(e)
+                if e.code in (404, 403):
+                    continue   # 路径问题: 换下一个候选地址
+                if e.code == 400 and mi < len(_models) - 1:
+                    _model_maybe = True   # 400 可能是"模型不存在": 换候选模型再试
+                    break
                 return None, e.code, last_err
-        except Exception as e:
-            last_err = str(e)
-            break   # 网络错误: base 域名都不通, 换路径无意义
+            except Exception as e:
+                return None, None, str(e)   # 网络错误: base 域名不通, 换路径/模型无意义
+        if not _model_maybe:
+            break
     return None, None, last_err
 
 @APP.post("/llm")
@@ -2974,13 +3011,24 @@ async def llm_models_endpoint(request: Request):
     key = str(body.get("key") or "").strip()
     if not key:
         return JSONResponse(status_code=400, content={"ok": False, "message": "api key 未配置, 请在模块设置里填写后使用"})
-    url = base.rstrip("/") + "/models"
-    req = urllib.request.Request(url, headers={"Authorization": "Bearer %s" % key}, method="GET")
-    try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-    except Exception as e:
-        return JSONResponse(status_code=200, content={"ok": False, "message": "获取模型列表失败: %s" % e})
+    # 1.6.61 路径兜底: base 带/不带 /v1 都尝试(DeepSeek 官方 https://api.deepseek.com 与 .../v1 均可)
+    data = None
+    last_err = None
+    for _mu in _llm_candidate_urls(base, "/models"):
+        req = urllib.request.Request(_mu, headers={"Authorization": "Bearer %s" % key}, method="GET")
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                break
+        except urllib.error.HTTPError as e:
+            last_err = _llm_err_text(e)
+            if e.code not in (404, 403):
+                break
+        except Exception as e:
+            last_err = str(e)
+            break
+    if data is None:
+        return JSONResponse(status_code=200, content={"ok": False, "message": "获取模型列表失败: %s" % (last_err or "unknown")})
     models = []
     for m in data.get("data") or []:
         mid = str(m.get("id") or "").strip()
