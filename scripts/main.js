@@ -3994,10 +3994,11 @@ window.runAIPromptTest = async function runAIPromptTest() {
   }
   _llmDiag += " | base=" + String(cfg.llmBaseUrl || "https://api.openai.com/v1").slice(0, 42) + " | model=" + (cfg.llmModel || "gpt-4o-mini") + " | key=" + maskKey(cfg.llmKey);
   rows.push("LLM诊断: " + _llmDiag + " | AI=" + (llmOk ? "可用(本测试走AI链)" : "不可用(将走规则降级)"));
-  rows.push("角色=" + cn + " | 朗读提示词=" + (style || "(未填, 用示例词)") + " | 版本=" + verTxt + (verTxt === "1.6.59" ? " (JS=1.6.59✓)" : " ⚠ 清单缓存显示" + verTxt + "≠1.6.59: GM → 设置 → 游戏系统 → 重载世界(Relaunch World)一次"));
+  rows.push("角色=" + cn + " | 朗读提示词=" + (style || "⚠未填(提示词不生效)") + " | 版本=" + verTxt + (verTxt === "1.6.69" ? " (JS=1.6.69✓)" : " ⚠ 清单缓存显示" + verTxt + "≠1.6.69: GM → 设置 → 游戏系统 → 重载世界一次"));
 
-  // ① 提示词强度插值表(0/25/50/100%)
-  const _kw0 = styleKeywordParams(style || "严肃认真", 20);
+  // ① 提示词强度插值表(0/25/50/100%) — 1.6.69 未填时明确标注"不生效"(此前用示例词"严肃认真"算表, 会让人误以为提示词生效了)
+  if (!style) rows.push("[强度表] ⚠ 朗读提示词未填 → 提示词完全不生效(语速固定 spd=1.00, 不做切分/停顿); 到 语音设置→当前角色→朗读提示词 填写");
+  const _kw0 = styleKeywordParams(style || "", 20);
   const _ssRows = [];
   [0, 25, 50, 100].forEach(pct => {
     const _r = pct / 100;
@@ -4158,14 +4159,40 @@ window.runFinalTest = async function runFinalTest() {
   push("- LLM 配置: base=" + String(cfg.llmBaseUrl || "(空)").slice(0, 50) + " | model=" + String(cfg.llmModel || "(空)") + " | key=" + maskKey(cfg.llmKey));
   push("- 朗读提示词: " + (style || "(未填)") + " | AI润色=" + (cfg.llmPolish ? "开" : "关") + " | 服务端地址=" + String(cfg.serverUrl || ""));
   push("");
-  push("## 二、朗读提示词强度(0~100% 插值到语速)");
-  const _kw0 = styleKeywordParams(style || "严肃认真", 20);
-  const _ss = [];
-  [0, 25, 50, 100].forEach(pct => {
-    const spd = _kw0.speed ? (1 + (_kw0.speed - 1) * (pct / 100)) : 1.0;
-    _ss.push(pct + "%→spd=" + spd.toFixed(2));
-  });
-  push("- 关键词" + (_kw0.speed ? ("命中语速=" + _kw0.speed) : "未命中语速") + ": " + _ss.join(" | ") + (_kw0.split ? " | 切分: <25% 不启用" : ""));
+  push("## 二、朗读提示词(是否生效)");
+  if (!style) {
+    push("- ⚠ **未填写朗读提示词** → 引擎侧整段跳过提示词逻辑: 语速固定 spd=1.00、不做切分/停顿调整(与提示词无关)。");
+    push("- 填写位置: 语音设置 → 当前角色 → 朗读提示词(例: 严肃认真 / 愤怒 / 温柔缓慢 / 更活泼)。");
+  } else {
+    const _kw0 = styleKeywordParams(style, 20);
+    const _st0 = styleStrengthOf(cn) / 100;
+    const _cur = 1.0 + ((_kw0.speed || 1.0) - 1.0) * _st0;
+    const _ss = [];
+    [0, 25, 50, 100].forEach(pct => {
+      const spd = _kw0.speed ? (1 + (_kw0.speed - 1) * (pct / 100)) : 1.0;
+      _ss.push(pct + "%→spd=" + spd.toFixed(2));
+    });
+    push("- 提示词=\"" + style + "\" | 关键词" + (_kw0.speed ? ("命中语速=" + _kw0.speed) : "未命中语速") + " | 当前强度=" + Math.round(_st0 * 100) + "% → 本次 spd=" + _cur.toFixed(2) + (_kw0.split ? (" | 切分=" + _kw0.split) : "") + (_kw0.frag ? (" | 停顿frag=" + (_kw0.frag * _st0).toFixed(2)) : ""));
+    push("- 强度插值表: " + _ss.join(" | ") + (_kw0.split ? " | 切分: <25% 不启用" : ""));
+    // 1.6.69 端到端实测: 同一句固定文本, 用 "强度0%(spd=1.00)" 与 "当前强度" 各合成一次, 比较音频时长
+    //   —— 时长按 1/spd 变化即证明提示词真的改变了朗读(不是只显示在报告里)
+    try {
+      const _txt = "提示词强度验证测试句，一二三四五六七八九十。";
+      const r1 = await gptSovitsSynth(_txt, "zh", { serverUrl: cfg.serverUrl, speedFactor: 1.0, mediaType: "mp3", asBlob: true, role: cn });
+      const r2 = await gptSovitsSynth(_txt, "zh", { serverUrl: cfg.serverUrl, speedFactor: _cur, mediaType: "mp3", asBlob: true, role: cn });
+      const u1 = (r1 && r1.blob) ? URL.createObjectURL(r1.blob) : "";
+      const u2 = (r2 && r2.blob) ? URL.createObjectURL(r2.blob) : "";
+      const a1 = u1 ? await analyzeAudioHead(u1) : null;
+      const a2 = u2 ? await analyzeAudioHead(u2) : null;
+      try { if (u1) URL.revokeObjectURL(u1); if (u2) URL.revokeObjectURL(u2); } catch (e) { /* noop */ }
+      if (a1 && a2 && a1.dur > 0) {
+        const _diff = (a2.dur - a1.dur) / a1.dur * 100;
+        const _okp = Math.abs(_diff) > 1.5;
+        push("- **提示词实测**: 强度0%(spd=1.00) 时长=" + a1.dur.toFixed(2) + "s vs 当前(spd=" + _cur.toFixed(2) + ") 时长=" + a2.dur.toFixed(2) + "s → 差异 " + (_diff >= 0 ? "+" : "") + _diff.toFixed(1) + "% " + (_okp ? "✓ 提示词确实生效" : "⚠ 差异不明显(强度太低, 或该提示词未命中关键词)"));
+        if (!_okp) fails.push("提示词生效");
+      } else push("- 提示词实测: 跳过(音频解析失败)");
+    } catch (e) { push("- 提示词实测: 跳过(" + String((e && e.message) || e).slice(0, 50) + ")"); }
+  }
   push("");
   push("## 三、多语种 × 多语气 × 双模型 全链实测");
   push("");
