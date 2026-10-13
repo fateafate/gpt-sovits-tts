@@ -335,6 +335,11 @@ export async function gptSovitsSocketProxy(payload, { engine = "gpt", timeoutMs 
 
 export async function gptSovitsSynth(text, lang, { serverUrl, speedFactor = 1, overrides = null, mediaType = "wav", asBlob = false, role = "", skipDirect = false } = {}) {
   const base = String(serverUrl || "http://127.0.0.1:9880").replace(/\/+$/, "");
+  // 1.6.65 情绪 DSP 强度(严格 Shinsekai: 默认 0 = 引擎不做任何变调/变速, 情绪差异靠情绪参考音频);
+  //   统一在此注入 → 覆盖所有调用点(直接合成/预加载/代理), 不必每个调用处各自传
+  let _fxStrength = 0;
+  try { if (typeof game !== "undefined" && game.settings) _fxStrength = Number(game.settings.get("gpt-sovits-tts", "emotionFxStrength")) || 0; } catch (e) { _fxStrength = 0; }
+  const _emotionFx = (overrides && typeof overrides.emotionFx === "number") ? overrides.emotionFx : (Math.max(0, Math.min(100, _fxStrength)) / 100);
   // socket 代理 payload: 直接用引擎 TTS_Request 字段名(text_lang/speed_factor/media_type), 避免未知字段被忽略→缺参
   const payload = {
     text: String(text),
@@ -342,12 +347,14 @@ export async function gptSovitsSynth(text, lang, { serverUrl, speedFactor = 1, o
     speed_factor: speedFactor,
     media_type: mediaType,
     role: String(role || ""),
+    emotion_fx: _emotionFx,
     ...(overrides ? {
       ...(overrides.refAudioPath ? { ref_audio_path: overrides.refAudioPath } : {}),
       ...(overrides.promptText ? { prompt_text: overrides.promptText } : {}),
       ...(overrides.promptLang ? { prompt_lang: overrides.promptLang } : {}),
       ...(overrides.auxRefAudioPaths && overrides.auxRefAudioPaths.length ? { aux_ref_audio_paths: overrides.auxRefAudioPaths } : {}),
       ...(typeof overrides.emotionMix === "number" ? { emotion_mix: overrides.emotionMix } : {}),
+      ...(typeof overrides.emotionFx === "number" ? { emotion_fx: overrides.emotionFx } : {}),   // 1.6.65 情绪DSP强度(0=不变调不处理, 严格Shinsekai)
       ...(overrides.emotion ? { emotion: overrides.emotion } : {}),
       ...(overrides.textSplitMethod ? { text_split_method: overrides.textSplitMethod } : {}),
       ...(typeof overrides.fragmentInterval === "number" ? { fragment_interval: overrides.fragmentInterval } : {})
@@ -412,7 +419,8 @@ export async function gptSovitsSynth(text, lang, { serverUrl, speedFactor = 1, o
       speed_factor: speedFactor,
       streaming_mode: false,
       media_type: mediaType,
-      allow_short_ref: true
+      allow_short_ref: true,
+      emotion_fx: _emotionFx   // 1.6.65 情绪 DSP 强度(默认 0: 不变调不处理)
     };
     if (role) serverPayload.role = String(role);
     if (overrides) {

@@ -54,6 +54,7 @@
     },
     "speedFactor": { "name": "Speech Speed", "hint": "0.5 - 2.0, 1.0 is normal." },
     "styleStrength": { "name": "Reading Prompt Strength", "hint": "0%: prompt does not change speed/pause; 100%: fully applies. Also adjustable per character." },
+    "emotionFxStrength": { "name": "Emotion FX Strength (DSP)", "hint": "0% (recommended, same as Shinsekai): no pitch/tempo processing at all — emotion comes from the character's emotion reference audio (most natural). Higher values add slight speed/volume only (never pitch). Keep 0 if voices sound odd." },
     "volume": { "name": "Volume", "hint": "0 - 1." },
     "queueMode": {
       "name": "Playback Mode",

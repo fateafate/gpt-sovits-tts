@@ -55,7 +55,7 @@ def trim_lead_silence_arr(arr, sr, max_trim_s=1.2, thresh=0.015):
     return a
 
 
-def clean_head_final(arr, sr, start_thresh=0.03, pad_s=0.03, floor=0.09, max_trim_s=0.7, max_gain=20.0):
+def clean_head_final(arr, sr, start_thresh=0.02, pad_s=0.02, floor=0.12, max_trim_s=1.0, max_gain=24.0):
     """1.6.63 输出末端头部清理(兜底保障"开头几个字听得见"):
     ① 找第一个能量 >= start_thresh 的 20ms 窗作为语音起点, 从"起点前 pad_s"处截断(去掉开头静音);
     ② 把开头 1.0s 内仍低于 floor 的 20ms 窗软提升到 floor(上限 max_gain, 防放大底噪);

@@ -1273,7 +1273,8 @@ class TTS_Request(BaseModel):
     super_sampling: bool = False
     overlap_length: int = 2
     min_chunk_length: int = 16
-    emotion: str = None      # 1.6.20 情绪后处理(单参考角色近似语气: 变调/变速/增益, EMOTION_FX 表)
+    emotion: str = None      # 1.6.20 情绪(用于情绪参考音选择; 1.6.65 起默认不再做 DSP 变调)
+    emotion_fx: float = -1   # 1.6.65 情绪 DSP 强度(0=不处理, 严格 Shinsekai; -1=用服务端默认 DEFAULT_EMOTION_FX=0)
 
 
 def pack_ogg(io_buffer: BytesIO, data: np.ndarray, rate: int):
@@ -1440,38 +1441,49 @@ def check_params(req: dict):
     return None
 
 
-# 情绪 → 合成后处理调制(1.6.20): 单参考音频角色的近似语气 — pitch_semi 半音变调 / tempo 语速倍率 / gain_db 增益dB
-# 有真实情绪槽音频(emotion_mix>0)时引擎走参考音频融合, 不重复做 DSP; 此表用于无情绪槽的单参考角色
+# 情绪 → 合成后处理(1.6.65 严格对齐 Shinsekai: **默认不做任何 DSP**)
+#   Shinsekai 全程没有变调/变速 DSP: 情绪差异靠"情绪参考音频"(立绘挂 voice 样本)承担。
+#   asetrate 变调会连带改变共振峰(音色), 听感像"快放/慢放"、很不自然 —— 因此 pitch_semi 一律 0(不再变调)。
+#   本表只保留 tempo/gain 作为"最大档", 仅当 客户端 emotionFxStrength>0 时按强度缩放施加(0=默认, 完全不处理)。
 EMOTION_FX = {
     "neutral":   {"pitch_semi": 0.0, "tempo": 1.0,  "gain_db": 0.0},
-    "calm":      {"pitch_semi": -0.5, "tempo": 0.98, "gain_db": -1.0},
-    "joy":       {"pitch_semi": 2.0,  "tempo": 1.06, "gain_db": 1.0},
-    "happy":     {"pitch_semi": 2.0,  "tempo": 1.06, "gain_db": 1.0},
-    "sad":       {"pitch_semi": -2.5, "tempo": 0.94, "gain_db": -2.0},
-    "angry":     {"pitch_semi": 1.0,  "tempo": 1.03, "gain_db": 3.0},
-    "surprised": {"pitch_semi": 4.0,  "tempo": 1.08, "gain_db": 1.5},
-    "fear":      {"pitch_semi": -1.5, "tempo": 1.04, "gain_db": -1.5},
+    "calm":      {"pitch_semi": 0.0, "tempo": 0.97, "gain_db": -0.8},
+    "joy":       {"pitch_semi": 0.0, "tempo": 1.04, "gain_db": 0.8},
+    "happy":     {"pitch_semi": 0.0, "tempo": 1.04, "gain_db": 0.8},
+    "sad":       {"pitch_semi": 0.0, "tempo": 0.95, "gain_db": -1.2},
+    "angry":     {"pitch_semi": 0.0, "tempo": 1.03, "gain_db": 1.2},
+    "surprised": {"pitch_semi": 0.0, "tempo": 1.05, "gain_db": 0.8},
+    "fear":      {"pitch_semi": 0.0, "tempo": 1.03, "gain_db": -0.8},
 }
+DEFAULT_EMOTION_FX = 0.0   # 0 = 严格 Shinsekai(零 DSP, 情绪只靠参考音频); 0~1 为强度(仅语速/音量, 永不变调)
 
 
-def _apply_emotion_fx(wav_bytes, emotion):
-    """合成后处理情绪调制: 变调(asetrate 改采样率→变调) + aresample 还原 + atempo 时长补偿×语速 + volume 增益。
-    用引擎自带 runtime/ffmpeg.exe; 无情绪/无调制需求/任何失败 → 原样返回(绝不破坏正常音频)。"""
+def _apply_emotion_fx(wav_bytes, emotion, strength=None):
+    """情绪后处理(可选, **默认关闭**): 只做轻微语速/音量, 永不做变调。
+    严格对齐 Shinsekai: 情绪差异应由情绪参考音频承担; 本函数仅在 emotionFxStrength>0 时生效。
+    任何失败/无需处理 → 原样返回(绝不破坏正常音频)。"""
     try:
+        _st = DEFAULT_EMOTION_FX if strength is None else float(strength)
+        if _st <= 0.001:
+            return wav_bytes
+        _st = max(0.0, min(1.0, _st))
         fx = EMOTION_FX.get(str(emotion or "").strip().lower())
         if not fx:
             return wav_bytes
-        ratio = 2 ** (float(fx["pitch_semi"]) / 12.0)
-        tempo = float(fx["tempo"])
-        gain = float(fx["gain_db"])
+        ratio = 2 ** (float(fx.get("pitch_semi", 0.0) or 0.0) / 12.0)   # 表内恒为 0 → 不变调
+        tempo = 1.0 + (float(fx["tempo"]) - 1.0) * _st
+        gain = float(fx["gain_db"]) * _st
         if abs(ratio - 1.0) < 0.001 and abs(tempo - 1.0) < 0.001 and abs(gain) < 0.05:
             return wav_bytes
         import struct
         sr = 24000
         if len(wav_bytes) >= 44 and wav_bytes[0:4] == b"RIFF":
             sr = struct.unpack("<I", wav_bytes[24:28])[0] or sr
-        _t_all = (1.0 / ratio) * tempo
-        _af = "asetrate=%d*%f,aresample=%d,atempo=%.6f" % (sr, ratio, sr, _t_all)
+        if abs(ratio - 1.0) >= 0.001:
+            _t_all = (1.0 / ratio) * tempo
+            _af = "asetrate=%d*%f,aresample=%d,atempo=%.6f" % (sr, ratio, sr, _t_all)
+        else:
+            _af = "atempo=%.6f" % tempo     # 纯语速(不变调)
         if abs(gain) >= 0.05:
             _af += ",volume=%fdB" % gain
         _ff = os.path.join(os.getcwd(), "runtime", "ffmpeg.exe")
@@ -1708,7 +1720,14 @@ async def tts_handle(req: dict):
                 except Exception:
                     pass
             audio_data = pack_audio(BytesIO(), audio_data, sr, media_type).getvalue()
-            audio_data = _apply_emotion_fx(audio_data, req.get("emotion") or "")   # 1.6.20 情绪后处理(单参考角色近似语气)
+            # 1.6.65 情绪后处理: 默认不做任何 DSP(严格 Shinsekai — 情绪靠参考音频); 仅当 emotion_fx>0 时施加轻微语速/音量(永不变调)
+            try:
+                _eff = float(req.get("emotion_fx", -1))
+            except Exception:
+                _eff = -1.0
+            if _eff < 0:
+                _eff = DEFAULT_EMOTION_FX
+            audio_data = _apply_emotion_fx(audio_data, req.get("emotion") or "", _eff)
             if want_mp3:
                 mp3_bytes = _wav_to_mp3(audio_data)
                 if mp3_bytes:

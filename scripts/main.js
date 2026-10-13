@@ -47,6 +47,8 @@ const SETTINGS = [
   ["textLang",      { type: String,  scope: "client", default: "auto",           choices: { auto: "settings.textLang.auto", zh: "zh", ja: "ja", en: "en", ko: "ko", yue: "yue" }, name: "settings.textLang.name", hint: "settings.textLang.hint" }],
   ["speedFactor",   { type: Number,  scope: "client", default: 1.0,              range: { min: 0.5, max: 2.0, step: 0.05 }, name: "settings.speedFactor.name", hint: "settings.speedFactor.hint" }],
   ["styleStrength", { type: Number,  scope: "client", default: 50,               range: { min: 0, max: 100, step: 5 },    name: "settings.styleStrength.name", hint: "settings.styleStrength.hint" }],
+  // 1.6.65 情绪效果强度(严格对齐 Shinsekai): 默认 0 = 完全不做 DSP 变调, 情绪差异靠"情绪参考音频"; 调高只加轻微语速/音量, 不变调
+  ["emotionFxStrength", { type: Number, scope: "client", default: 0, range: { min: 0, max: 100, step: 5 }, name: "settings.emotionFxStrength.name", hint: "settings.emotionFxStrength.hint" }],
   ["volume",        { type: Number,  scope: "client", default: 1.0,              range: { min: 0, max: 1, step: 0.05 }, name: "settings.volume.name", hint: "settings.volume.hint" }],
   ["queueMode",     { type: String,  scope: "client", default: "queue",          choices: { queue: "settings.queueMode.queue", interrupt: "settings.queueMode.interrupt" }, name: "settings.queueMode.name", hint: "settings.queueMode.hint" }],
   ["typingDebounce",{ type: Number,  scope: "client", default: 1200,             name: "settings.typingDebounce.name", hint: "settings.typingDebounce.hint" }],
@@ -1039,7 +1041,7 @@ async function maybeSpeak(message) {
           overrides.auxRefAudioPaths = [`fvtt_chars/${roleN}/${slot.ref_audio_path}`];   // 主参考为基础 + 情绪参考叠加
           if (slot.prompt_text) overrides.promptText = slot.prompt_text;
           if (slot.prompt_lang) overrides.promptLang = slot.prompt_lang;
-          if (typeof overrides.emotionMix !== "number") overrides.emotionMix = 0.75;   // 情绪要明显可辨
+          if (typeof overrides.emotionMix !== "number") overrides.emotionMix = 1.0;   // 1.6.65 严格 Shinsekai: 情绪槽音频作唯一参考(不再融合, 避免两个参考音混出怪音色)
           console.debug(`[gpt-sovits-tts] 自动语气朗读: ${_emo}${(cfg.llmEnabled && cfg.llmKey && window.__fvttTTSLlmBroken !== true) ? "(AI)" : "(规则/风格)"} 台词保持原文`);   // 1.6.50 降级路径同样换情绪参考音
           // 记录语气到消息 flags → 重播缓存 miss 时用同一语气重新合成(声音与第一次一致)
           try {
@@ -1058,7 +1060,7 @@ async function maybeSpeak(message) {
       const curMix = (typeof flA.emotionMix === "number") ? flA.emotionMix : 0;
       if (curMix < 0.75) {
         overrides = overrides || {};
-        if (typeof overrides.emotionMix !== "number") overrides.emotionMix = 0.75;
+        if (typeof overrides.emotionMix !== "number") overrides.emotionMix = 1.0;   // 1.6.65 严格 Shinsekai: 情绪参考音作唯一参考
       }
       console.debug(`[gpt-sovits-tts] 已选语气 ${flA.emotion} (台词保持原文)`);
     }
@@ -1414,7 +1416,7 @@ async function applyEmotion(emotion, name) {
     const cur = prof.chars[charName];
     cur.emotion = emotion || "";
     prof.emotion = emotion || "";   // 顶层同步(渲染读 prof.emotion, 高亮才随点击变化)
-    if (typeof cur.emotionMix !== "number") cur.emotionMix = 0.5;   // 情绪占比: 0纯默认 ~ 1全情绪
+    if (typeof cur.emotionMix !== "number") cur.emotionMix = 1.0;   // 1.6.65 严格 Shinsekai: 情绪参考音作唯一参考(0=纯默认音, 1=全情绪音)
     if (typeof cur.emotionMod !== "number") cur.emotionMod = 0.5;   // 情感参数调制: 语速等参数强度
     const c = (quickChars && quickChars.chars || []).find(x => x.name === charName);
     const slot = c && c.emotions.find(s => s.key === emotion);
@@ -1573,7 +1575,7 @@ function buildSendPop() {
       }
       const curP = (profP.chars && profP.chars[roleP]) || {};
       if (typeof curP.emotionMix === "number") overridesP.emotionMix = curP.emotionMix;
-      else if (aiEmoP) overridesP.emotionMix = 0.75;   // AI 判断语气 → 与发送时情绪占比一致
+      else if (aiEmoP) overridesP.emotionMix = 1.0;   // 1.6.65 AI 判断语气 → 情绪参考音作唯一参考(与发送时一致, 严格 Shinsekai)
       const { blob, audioUrl } = await gptSovitsSynth(stripP, cfgP2.textLang || "auto", { serverUrl: cfgP2.serverUrl, speedFactor: cfgP2.speedFactor || 1, overrides: Object.keys(overridesP).length ? overridesP : null, mediaType: "mp3", asBlob: true, role: roleP, skipDirect: window.__fvttTTSCanDirect !== true });
       const objUrl = URL.createObjectURL(blob);
       const b64 = await blobToBase64(blob);
