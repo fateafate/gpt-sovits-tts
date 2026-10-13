@@ -538,7 +538,9 @@ async function speak(text, { lang = null, sender = "", refAudioPath = null, prom
     // 1.6.56 判定顺序: AI > 文本规则优先 > 提示词基调兜底(否则提示词"愤怒"会把开心句也判成愤怒)
     if (!_emoDet) { try { _aiE = await aiJudgeEmotionNow(finalText, prof0.current || ""); if (_aiE) _emoDet = _aiE; } catch (e) { /* noop */ } }
     if (!_emoDet) _emoDet = detectEmotion(finalText, pv);
-    if (!_emoDet) { try { const _stE = styleEmotionKey(_stSrc); if (_stE) _emoDet = _stE; } catch (e) { /* noop */ } }
+    // 1.6.71 修 bug: detectEmotion 对中性文本返回字符串 "neutral"(非空) → 旧写法 `if (!_emoDet)` 永远进不来,
+    //   提示词基调兜底彻底失效(实测: 提示词"愤怒"但判定=neutral)。改为把 neutral 也视为"未判定"
+    if (!_emoDet || _emoDet === "neutral") { try { const _stE = styleEmotionKey(_stSrc); if (_stE) _emoDet = _stE; } catch (e) { /* noop */ } }
     if (_emoDet && _emoDet !== "neutral") { overrides = overrides || {}; overrides.emotion = _emoDet; }
     if (window.__fvttTTSSpriteDiag) {
       try { console.warn("[gpt-sovits-tts][语气判定] 文本=" + String(finalText || "").slice(0, 24) + " | 提示词=" + String(_stSrc || "-").slice(0, 20) + " | AI=" + (_aiE || "无(未配LLM或降级)") + " | 规则=" + ((_emoDet || "") || "无") + " | 调制=" + ((_emoDet && _emoDet !== "neutral") ? "开(" + _emoDet + ")" : "关(neutral)") + " | 槽音频=" + (pv.auxRef ? "有(不调制)" : "无")); } catch (e) { /* noop */ }
@@ -1022,11 +1024,12 @@ async function maybeSpeak(message) {
         } catch (e) { /* noop */ }
       }
       if (!_emo) {
-        // 1.6.56 文本情绪优先, 提示词基调兜底(否则提示词"愤怒"会把"哈哈太棒了"也判成愤怒)
+        // 1.6.56 文本情绪优先, 提示词基调兜底; 1.6.71 修 neutral 短路: 文本判为 neutral 时同样要用提示词基调
         try {
           const _stP = getStylePrompt(roleN) || "";
-          _emo = detectEmotion(decision.text, null) || styleEmotionKey(_stP);
-        } catch (e) { try { _emo = detectEmotion(decision.text, null); } catch (e2) { _emo = ""; } }
+          const _de = detectEmotion(decision.text, null);
+          _emo = (_de && _de !== "neutral") ? _de : (styleEmotionKey(_stP) || _de || "");
+        } catch (e) { try { _emo = detectEmotion(decision.text, null) || ""; } catch (e2) { _emo = ""; } }
       }
       // 1.6.60 探针提到情绪槽处理之前: _emo 一确定就采集(neutral/空也采集), 槽处理异常不再吞探针(句1/5"已进hook判定未产"根因)
       if (window.__fvttTTSAiLineDiag) {
@@ -4359,7 +4362,11 @@ Hooks.on("chatMessage", (chatLog, message, chatData) => {
           if (_selSp) return _selSp;
           const cD = (quickChars && quickChars.chars || []).find(x => x.name === prof0n);
           if (cD && Array.isArray(cD.sprites) && cD.sprites.length >= 1) {
-            const _emoS = String(detectEmotion(String(message.content || chatData.content || ""), cur || null) || "neutral");
+            // 1.6.71 立绘情绪: 文本规则 → 提示词基调兜底(neutral 也兜底), 与朗读判定保持一致
+            let _emoS = String(detectEmotion(String(message.content || chatData.content || ""), cur || null) || "neutral");
+            if (!_emoS || _emoS === "neutral") {
+              try { const _stE2 = styleEmotionKey(getStylePrompt(prof0n) || ""); if (_stE2) _emoS = _stE2; } catch (e) { /* noop */ }
+            }
             const _emoList = spriteBucketForEmotion(cD.sprites, _emoS, cD.emotion_tags);
             const _rot = getSpriteRotation(prof0n + "|" + _emoS, _emoS);
             const _av = cD.sprites[_emoList[_rot % _emoList.length]];
@@ -4438,7 +4445,11 @@ Hooks.on("createChatMessage", (message, options, userId) => { (window.__fvttTTSH
       const profVn = flV.role || ((profV && profV.current) || "");
       const _selSpV = (profV && profV.chars && profV.chars[profVn] && profV.chars[profVn].selSprite) || "";
       const cDV = (quickChars && quickChars.chars || []).find(x => x.name === profVn);
-      const _emoSV = String(detectEmotion(String(message.content || ""), flV.emotion ? null : curV) || "neutral");
+      // 1.6.71 立绘情绪: 文本规则 → 提示词基调兜底(neutral 也兜底)
+      let _emoSV = String(detectEmotion(String(message.content || ""), flV.emotion ? null : curV) || "neutral");
+      if (!_emoSV || _emoSV === "neutral") {
+        try { const _stEV = styleEmotionKey(getStylePrompt(profVn) || ""); if (_stEV) _emoSV = _stEV; } catch (e) { /* noop */ }
+      }
       const _emoListV = _selSpV ? [_selSpV] : spriteBucketForEmotion((cDV && cDV.sprites) || [], _emoSV, (cDV && cDV.emotion_tags) || "");
       const _rotV = getSpriteRotation(profVn + "|" + _emoSV, _emoSV);
       // 1.6.41 spriteBucketForEmotion 返回的是索引数组, 必须再经 sprites[索引] 取真实立绘路径(否则渲染 404 audio_export/<数字>)
