@@ -4174,6 +4174,10 @@ window.runFinalTest = async function runFinalTest() {
     });
     push("- 提示词=\"" + style + "\" | 关键词" + (_kw0.speed ? ("命中语速=" + _kw0.speed) : "未命中语速") + " | 当前强度=" + Math.round(_st0 * 100) + "% → 本次 spd=" + _cur.toFixed(2) + (_kw0.split ? (" | 切分=" + _kw0.split) : "") + (_kw0.frag ? (" | 停顿frag=" + (_kw0.frag * _st0).toFixed(2)) : ""));
     push("- 强度插值表: " + _ss.join(" | ") + (_kw0.split ? " | 切分: <25% 不启用" : ""));
+    try {
+      const _sE = styleEmotionKey(style);
+      push("- 提示词→情绪基调: " + (_sE ? (_sE + " (命中提示词里的情绪词 → 该情绪决定立绘分组/参考音选择)") : "(提示词里无明确情绪词 → 情绪按台词文本规则判定)"));
+    } catch (e) { /* noop */ }
     // 1.6.69 端到端实测: 同一句固定文本, 用 "强度0%(spd=1.00)" 与 "当前强度" 各合成一次, 比较音频时长
     //   —— 时长按 1/spd 变化即证明提示词真的改变了朗读(不是只显示在报告里)
     try {
@@ -4193,16 +4197,29 @@ window.runFinalTest = async function runFinalTest() {
       } else push("- 提示词实测: 跳过(音频解析失败)");
     } catch (e) { push("- 提示词实测: 跳过(" + String((e && e.message) || e).slice(0, 50) + ")"); }
   }
+  // 1.6.70 精简(参考 Shinsekai 理念: 不做基础设施自检堆砌, 只看"实际朗读链路是否达到期望"):
+  //   已稳定项(引擎连通/合成播放/立绘切换/多模型/句首音量)不再逐条铺开, 只留 1 条实际朗读做健全性验证;
+  //   篇幅集中到当前还没解决的三件事 —— ① 提示词是否真的生效 ② 情绪是否有参考音(真换声线) ③ AI(LLM)链路
   push("");
-  push("## 三、多语种 × 多语气 × 双模型 全链实测");
+  push("## 二·B、情绪参考音(决定\"情绪是否真的换声音\")");
   push("");
-  push("(每条: 判定来源 / 情绪 / AI润色 / 立绘 / 合成 / 句首音量)");
+  try {
+    const _cc = (quickChars && quickChars.chars || []).find(x => x.name === cn) || null;
+    const _emos = (_cc && _cc.emotions) || [];
+    const _withRef = _emos.filter(e => e && (e.ref_audio_path || e.ref));
+    if (_withRef.length) {
+      push("- 角色「" + cn + "」情绪槽 " + _emos.length + " 个, 其中 **" + _withRef.length + " 个带参考音频** → 情绪差异 = 真换声线(同 Shinsekai): " + _withRef.slice(0, 8).map(e => (e.label || e.key || "")).join(" / "));
+    } else {
+      push("- ⚠ 角色「" + cn + "」**没有带参考音频的情绪槽** → 情绪不改变声线(只有文本/语速差异, 且默认零 DSP 不变调)。");
+      push("- 要像 Shinsekai 那样\"不同情绪不同声音\": 语音设置 → 情绪槽 → 给各情绪绑定该角色的样本音频。");
+    }
+  } catch (e) { push("- 情绪参考音: 读取失败"); }
+  push("");
+  push("## 三、实际朗读(按当前提示词, 1 条健全性验证)");
+  push("");
+  push("(关注: 提示词命中的情绪与立绘 / AI 润色 / 合成 / 句首音量)");
   const scenes = [
-    { label: "句1", role: "丛雨", lang: "zh", text: "今天的事情，就交给我吧。我会认真处理的。", strength: 100, manual: false },
-    { label: "句2", role: "丛雨", lang: "zh", text: "哈哈，太棒啦！我们一起去吧～！", strength: 100, manual: false },
-    { label: "句3", role: "丛雨", lang: "ja", text: "えっ？！本当ですか？！信じられない……", strength: 50, manual: false },
-    { label: "句4", role: "七海千秋", lang: "en", text: "Oh no… why did it have to end like this…", strength: 100, manual: false },
-    { label: "句5", role: "七海千秋", lang: "zh", text: "嗯…那就这样吧。", strength: 0, manual: true },
+    { label: "朗读", role: cn, lang: "zh", text: "今天的事情，就交给我吧。我会认真处理的。", strength: Math.round(styleStrengthOf(cn)), manual: false },
   ];
   const _origRole = (() => { try { return (loadVoiceProfile().current) || ""; } catch (e) { return ""; } })();
   const _origStre = (() => { try { const vp = loadVoiceProfile(); const cc = (vp.chars && vp.chars[cn]) || null; return (cc && typeof cc.styleStrength === "number") ? cc.styleStrength : 50; } catch (e) { return 50; } })();
@@ -4274,7 +4291,7 @@ window.runFinalTest = async function runFinalTest() {
   }
   push("");
   push("## 四、结论");
-  push("- 耗时: " + Math.round((Date.now() - t0) / 1000) + "s | LLM: " + (llmOk ? "AI链路(判语气+润色+选立绘)已启用" : "规则降级(无AI: 文本规则/提示词基调 + EMOTION_FX 变声)"));
+  push("- 耗时: " + Math.round((Date.now() - t0) / 1000) + "s | LLM: " + (llmOk ? "AI链路(判语气+润色+选立绘)已启用" : "规则降级(无AI: 文本规则/提示词基调; 情绪差异靠情绪参考音, 默认零 DSP 不变调)"));
   push("- 关键项: " + (fails.length ? ("⚠ 存在问题 → " + fails.join("、")) : "全部通过 ✓"));
   push("- 报告文件: engine\\final_test_report.md (模块 engine 目录下; 覆盖式写入, 始终为最近一次结果)");
   const md = L.join("\n");
