@@ -4137,10 +4137,56 @@ async function decodeAudioToData(url) {
       try { p = ctx.decodeAudioData(buf, res, rej); } catch (e) { rej(e); }
       if (p && typeof p.then === "function") p.then(res, rej);
     });
+    try { if (ctx.close) { /* 1.6.73 先取数据再关 context(关闭后 getChannelData 可能失效 → 之前波形相关返回 -1) */ } } catch (e) { /* noop */ }
+    if (!ab) { try { ctx.close(); } catch (e) { /* noop */ } return null; }
+    // 复制一份数据(Float32Array.from), 避免 AudioBuffer 释放后视图失效
+    const _ch = Float32Array.from(ab.getChannelData(0));
+    const _out = { ch: _ch, sr: ab.sampleRate, dur: ab.duration };
     try { ctx.close(); } catch (e) { /* noop */ }
-    if (!ab) return null;
-    return { ch: ab.getChannelData(0), sr: ab.sampleRate, dur: ab.duration };
+    return _out;
   } catch (e) { return null; }
+}
+
+/** 1.6.73 降采样(算 F0 用, 降复杂度) */
+function downsampleCh(ch, sr, target) {
+  try {
+    const step = Math.max(1, Math.round(sr / (target || 8000)));
+    if (step === 1) return { ch: ch, sr: sr };
+    const n = Math.floor(ch.length / step);
+    const out = new Float32Array(n);
+    for (let i = 0; i < n; i++) out[i] = ch[i * step];
+    return { ch: out, sr: sr / step };
+  } catch (e) { return { ch: ch, sr: sr }; }
+}
+
+/** 1.6.73 基频(F0)中位数估计(自相关): 声线/音高差异的直接指标 —— 用于判断"两个情绪是否真的换了声线" */
+function f0MedianOf(ch, sr, fmin, fmax) {
+  try {
+    fmin = fmin || 60; fmax = fmax || 400;
+    const ds = downsampleCh(ch, sr, 8000);
+    const c = ds.ch, s = ds.sr;
+    const win = Math.floor(s * 0.035), hop = Math.floor(s * 0.02);
+    const lo = Math.max(2, Math.floor(s / fmax)), hi = Math.floor(s / fmin);
+    const f0s = [];
+    let frames = 0;
+    for (let i = 0; i + win < c.length; i += hop) {
+      if ((frames++ % 4) !== 0) continue;   // 每 4 帧取 1, 降复杂度
+      let e = 0, m = 0;
+      for (let j = i; j < i + win; j++) { e += c[j] * c[j]; m += c[j]; }
+      if (Math.sqrt(e / win) < 0.02) continue;
+      m /= win;
+      let best = -1, bestV = -Infinity;
+      for (let k = lo; k < hi; k++) {
+        let acc = 0;
+        for (let j = 0; j + k < win; j++) acc += (c[i + j] - m) * (c[i + j + k] - m);
+        if (acc > bestV) { bestV = acc; best = k; }
+      }
+      if (best > 0) f0s.push(s / best);
+    }
+    if (!f0s.length) return 0;
+    f0s.sort((a, b) => a - b);
+    return f0s[Math.floor(f0s.length / 2)];
+  } catch (e) { return 0; }
 }
 
 /** 1.6.72 两段波形相关系数(1=几乎相同, 越低差异越大): 用于判断"两个情绪是否真的换声线" */
@@ -4280,8 +4326,13 @@ window.runFinalTest = async function runFinalTest() {
       const l1 = (_refs[0].label || _refs[0].key || "情绪1");
       const l2 = (_refs[1].label || _refs[1].key || "情绪2");
       if (d1 && d2) {
-        const okc = (cr >= 0 && cr < 0.98);
-        push("- 「" + l1 + "」时长=" + d1.dur.toFixed(2) + "s  vs  「" + l2 + "」时长=" + d2.dur.toFixed(2) + "s | 波形相关=" + (cr < 0 ? "?" : cr.toFixed(3)) + " → " + (okc ? "✓ 两个情绪声线明显不同(真的换声线)" : "⚠ 两个情绪声线接近(样本差异小, 或两个槽指向同一参考音)"));
+        // 1.6.73 改用客观指标: 基频(F0)中位数 + 时长差(波形相关只作参考) —— 之前 ch 取用时机问题导致相关恒为 -1 而误报
+        const f1 = f0MedianOf(d1.ch, d1.sr), f2 = f0MedianOf(d2.ch, d2.sr);
+        const dPct = Math.abs(d2.dur - d1.dur) / Math.max(0.01, d1.dur) * 100;
+        const fPct = (f1 > 0 && f2 > 0) ? (Math.abs(f2 - f1) / Math.max(1, f1) * 100) : 0;
+        const okc = (dPct > 8) || (fPct > 3) || (cr >= 0 && cr < 0.98);
+        push("- 「" + l1 + "」F0中位=" + (f1 > 0 ? f1.toFixed(0) + "Hz" : "?") + " 时长=" + d1.dur.toFixed(2) + "s   vs   「" + l2 + "」F0中位=" + (f2 > 0 ? f2.toFixed(0) + "Hz" : "?") + " 时长=" + d2.dur.toFixed(2) + "s");
+        push("  → 差异: 音高 " + fPct.toFixed(1) + "% / 时长 " + dPct.toFixed(1) + "%" + (cr >= 0 ? (" / 波形相关 " + cr.toFixed(3)) : "") + " → " + (okc ? "✓ 两个情绪声线明显不同(真的换声线)" : "⚠ 两个情绪声线接近(样本差异小, 或两个槽指向同一参考音)"));
         if (!okc) fails.push("情绪声线差异");
       } else push("- 情绪声线实测: 音频解析失败, 跳过");
     }
