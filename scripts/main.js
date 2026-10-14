@@ -4241,7 +4241,16 @@ window.runFinalTest = async function runFinalTest() {
   const llmOk = !!(cfg.llmEnabled && cfg.llmKey) && window.__fvttTTSLlmBroken !== true;
   push("- LLM: " + (llmOk ? "可用✓" : ((cfg.llmEnabled && cfg.llmKey) ? ("禁用 — " + String(window.__fvttTTSLlmErr || "?").slice(0, 150)) : "未配置(设置里开 AI 并填 key)")));
   push("- LLM 配置: base=" + String(cfg.llmBaseUrl || "(空)").slice(0, 50) + " | model=" + String(cfg.llmModel || "(空)") + " | key=" + maskKey(cfg.llmKey));
-  push("- 朗读提示词: " + (style || "(未填)") + " | AI润色=" + (cfg.llmPolish ? "开" : "关") + " | 服务端地址=" + String(cfg.serverUrl || ""));
+  push("- 朗读提示词: " + (style || "(未填)") + " | AI润色=" + (cfg.llmPolish ? "开" : "关"));
+  // 1.6.74 明确"合成压力在哪台机器": 本机直连=用自己的引擎; GM代理=委托给语音生成者
+  try {
+    const _su = String(cfg.serverUrl || "");
+    const _isLocal = /127\.0\.0\.1|localhost/i.test(_su);
+    const _cdTxt = (window.__fvttTTSCanDirect === true)
+      ? ("本机直连(自己合成 → 压力在本机" + (_isLocal ? ", 用本机引擎" : ", 用 " + _su) + ")")
+      : (window.__fvttTTSCanDirect === false ? "GM 代理(委托给语音生成者 → 压力在对方那台机器)" : "探测中(页面刚加载)");
+    push("- 合成方式: " + _cdTxt);
+  } catch (e) { /* noop */ }
   push("");
   push("## 二、朗读提示词(是否生效)");
   if (!style) {
