@@ -626,6 +626,8 @@ async function speak(text, { lang = null, sender = "", refAudioPath = null, prom
           diagPlay("cache", messageId, finalText);
         } else {
           const res = await _synthIt(finalText, finalLang, { spdIn: spd, ov: overrides, blobOnly: true, role: role || prof0.current });
+          // 1.6.78 归属回执: 直连=本机自己合成(与代理路径的 by 对应), 供设置面板/分配器/最终测试显示压力归属
+          try { window.__fvttTTSLastSynthBy = (game.user && game.user.name) || "本机"; } catch (e) { /* noop */ }
           blob = res.blob; audioUrl = res.audioUrl || "";
           try {
             _synthCache.set(ck, { blob, audioUrl });
@@ -841,6 +843,18 @@ function ttsDeviceChoices() {
 
 /* ===== 语音运行者: 谁在跑 TTS 服务(每客户端独立选; 跑服务的机器会广播"服务声明") ===== */
 const runnerList = new Map();   // url → {by, url, ts, gm}: 收到的服务声明(其他玩家的电脑跑着 9881)
+// 1.6.78 供 UI(语音设置/语音生成者分配器)读取"引擎机清单"(各端 60s 心跳声明) → 让"按配置指定压力给哪台电脑"看得见
+try {
+  window.__fvttTTSGetRunners = () => {
+    const a = [];
+    try {
+      runnerList.forEach((v, url) => {
+        a.push({ url: String(url), by: String((v && v.by) || ""), gm: !!(v && v.gm), ts: Number((v && v.ts) || 0), ageMs: Date.now() - Number((v && v.ts) || 0) });
+      });
+    } catch (e) { /* noop */ }
+    return a;
+  };
+} catch (e) { /* noop */ }
 function runnerChoices() {
   const out = {};
   // 主持人电脑: 有 GM 服务声明就用其地址, 否则"自动"(运行时 getCfg 动态解析 GM 地址/本机)

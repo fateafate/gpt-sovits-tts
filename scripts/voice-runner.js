@@ -86,20 +86,37 @@ export function openRunnerAssign() {
         } else {
           statusEl.textContent = l("runAssign.hint2", "全部账号（含未登录玩家）都在这里，主持人直接给每个账号选「由谁的电脑生成」——没登录的账号也可以先安排（登录即生效）。被选中账号需开着 TTS 服务并与 FVTT 服务器互通；未指定=默认引擎机（服务器/主持人那台），被指定电脑离线时会自动由默认引擎机兜底，不会断声。玩家不能自己调整。");
         }
+        // 1.6.78 读取"引擎机清单"(各端 60s 心跳声明): 标注哪些账号的电脑正跑着引擎 → 分配时不再盲选
+        let runners = [];
+        try { runners = (typeof window.__fvttTTSGetRunners === "function") ? (window.__fvttTTSGetRunners() || []) : []; } catch (e) { runners = []; }
+        const runnerBy = {};
+        for (const r of runners) { if (r && r.by && (!runnerBy[r.by] || (r.ts || 0) > (runnerBy[r.by].ts || 0))) runnerBy[r.by] = r; }
+        const _engNames = Object.keys(runnerBy);
+        try {
+          const _last = (() => { try { return String(window.__fvttTTSLastSynthBy || ""); } catch (e) { return ""; } })();
+          const _listTxt = _engNames.length
+            ? _engNames.map(n => n + "（" + String(runnerBy[n].url || "").replace(/^https?:\/\//, "") + "）").join(" / ")
+            : "无（当前没有客户端在广播引擎地址）";
+          statusEl.textContent = statusEl.textContent + "\n在线引擎机 " + _engNames.length + " 台: " + _listTxt + (_last ? ("　|　最近一次合成由「" + _last + "」执行") : "");
+          statusEl.style.whiteSpace = "pre-wrap";
+        } catch (e) { /* noop */ }
+        const engBadge = (uname) => runnerBy[uname]
+          ? `<span style="flex:0 0 auto;font-size:11px;padding:1px 6px;border-radius:8px;background:#2f6b3a;color:#fff">引擎 ${esc(String(runnerBy[uname].url || "").replace(/^https?:\/\//, ""))}</span>`
+          : `<span style="flex:0 0 auto;font-size:11px;padding:1px 6px;border-radius:8px;background:#3a3a3a;color:#999">无引擎</span>`;
         const rows = sorted.map((u) => {
           const uname = String(u.name || "");
           const cur = curMap[uname] || "";
           const tag = `<span style="flex:0 0 46px;font-size:11px;padding:1px 6px;border-radius:8px;background:${u.isGM ? "#3a6ea5" : "#5a7a5a"};color:#fff;text-align:center">${u.isGM ? esc(l("runAssign.gm", "主持")) : esc(l("runAssign.pl", "玩家"))}</span>`;
           if (!isGM) {
             return `<div style="display:flex;align-items:center;gap:10px;padding:7px 4px;border-bottom:1px solid #3c372f">
-              <span style="flex:0 0 180px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(uname)}</span>${tag}
+              <span style="flex:0 0 180px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(uname)}</span>${tag}${engBadge(uname)}
               <span style="flex:1;color:#8a8a8a">${cur ? esc(cur) : esc(l("runAssign.def", "(默认引擎机)"))}</span></div>`;
           }
           const opts = [`<option value="" ${cur ? "" : "selected"}>${esc(l("runAssign.def", "(默认引擎机)"))}</option>`]
-            .concat(sorted.map((o) => `<option value="${esc(String(o.name || ""))}" ${cur === String(o.name || "") ? "selected" : ""}>${esc(String(o.name || ""))}${o.active ? "" : esc(l("runAssign.offline", " (离线)"))}</option>`))
+            .concat(sorted.map((o) => `<option value="${esc(String(o.name || ""))}" ${cur === String(o.name || "") ? "selected" : ""}>${esc(String(o.name || ""))}${o.active ? "" : esc(l("runAssign.offline", " (离线)"))}${runnerBy[String(o.name || "")] ? " [引擎在线]" : ""}</option>`))
             .join("");
           return `<div style="display:flex;align-items:center;gap:10px;padding:7px 4px;border-bottom:1px solid #3c372f">
-            <span style="flex:0 0 180px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(uname)}">${esc(uname)}</span>${tag}
+            <span style="flex:0 0 180px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(uname)}">${esc(uname)}</span>${tag}${engBadge(uname)}
             <span style="color:#8a8a8a">→</span>
             <select class="fvtt-tts-ra-sel" data-user="${esc(uname)}" style="flex:1;min-width:0">${opts}</select></div>`;
         }).join("");

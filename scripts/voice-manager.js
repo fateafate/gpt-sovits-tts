@@ -424,6 +424,21 @@ export class VoiceManager {
       _gmMute = !!game.settings.get("gpt-sovits-tts", "gmMute");
     } catch (e) { /* noop */ }
     const aiOpts = (aiModels.length ? aiModels : VM_LLM_PRESET).map(m => `<option value="${esc(m)}" ${m === aiModel ? "selected" : ""}>${esc(m)}</option>`).join("");
+    // 1.6.78 合成来源(压力归属)显示: 让使用者一眼看到"我的语音由哪台电脑合成"
+    const _byTxt = (() => { try { return String(window.__fvttTTSLastSynthBy || ""); } catch (e) { return ""; } })();
+    const _cdMode = (() => {
+      try {
+        if (window.__fvttTTSCanDirect === true) return "本机直连（用本机引擎自己合成）";
+        if (window.__fvttTTSCanDirect === false) return "代理合成（委托给引擎机 → 压力在对方那台电脑）";
+        return "探测中（页面刚加载）";
+      } catch (e) { return ""; }
+    })();
+    const _runners = (() => { try { return (typeof window.__fvttTTSGetRunners === "function") ? (window.__fvttTTSGetRunners() || []) : []; } catch (e) { return []; } })();
+    html += `<section class="fvtt-tts-vm-sec">
+      <div class="fvtt-tts-vm-title2">🖥 ${t("vm.synthFrom", "语音合成来源（压力在哪台电脑）")}</div>
+      <div class="fvtt-tts-vm-hint">${esc(_cdMode)}${_byTxt ? ("　|　最近一次由「" + esc(_byTxt) + "」的电脑合成") : ""}${_runners.length ? ("　|　在线引擎机 " + _runners.length + " 台") : "　|　未发现在线引擎机（默认引擎机将兜底）"}</div>
+      <div class="fvtt-tts-vm-hint">${t("vm.synthFromHint", "用 👥 语音生成者分配 指定每个账号由哪台电脑合成；被指定电脑离线时自动由默认引擎机兜底，不会断声。")}</div>
+    </section>`;
     html += `<section class="fvtt-tts-vm-sec fvtt-tts-vm-sec-ai">
       <div class="fvtt-tts-vm-title2">${t("vm.aiTitle", "AI 接入 (LLM 语气判断)")} ${aiEnabled ? "✅" : "（未启用）"}</div>
       <div class="fvtt-tts-vm-hint">${t("vm.aiHint2", "在这里填写 API 网址与密钥，输入完自动检测可用模型；不填不影响朗读。")}</div>
