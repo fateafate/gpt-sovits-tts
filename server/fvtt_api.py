@@ -2922,6 +2922,26 @@ def _llm_err_text(e):
         pass
     return "HTTP Error %s: %s" % (getattr(e, "code", "?"), getattr(e, "reason", ""))
 
+def _llm_err_text_from(e, raw):
+    """1.6.76 用已读出的响应体构造错误信息(避免重复 read 得到空); 优先取 JSON 里的 message/code"""
+    try:
+        if raw:
+            try:
+                j = json.loads(raw)
+                msg = ""
+                if isinstance(j.get("error"), dict):
+                    msg = j["error"].get("message") or j["error"].get("code") or ""
+                if not msg:
+                    msg = j.get("message") or j.get("code") or ""
+                if msg:
+                    return "HTTP %s: %s" % (getattr(e, "code", "?"), str(msg)[:200])
+            except Exception:
+                pass
+            return "HTTP %s: %s" % (getattr(e, "code", "?"), raw.strip()[:200])
+    except Exception:
+        pass
+    return "HTTP Error %s: %s" % (getattr(e, "code", "?"), getattr(e, "reason", ""))
+
 def _llm_chat_call(payload, base, key, timeout=15):
     """依序尝试候选 URL(404/403 视为路径问题换下一个)与候选模型;
     模型兜底: base 含 deepseek 且当前模型不可用时自动改试 deepseek-chat / deepseek-reasoner(修"填了官方base却留着gpt模型名"的 400)
@@ -2956,9 +2976,23 @@ def _llm_chat_call(payload, base, key, timeout=15):
                         # 1.6.66 服务返回非 JSON(HTML 错误页/纯文本提示, 常见于"模型名不存在")→ 原文透传, 便于定位
                         return None, resp.status, "服务返回非 JSON 响应(前200字符): %s" % ((_raw or "").strip()[:200] or "(空响应)")
             except urllib.error.HTTPError as e:
-                last_err = _llm_err_text(e)
-                if e.code in (404, 403):
-                    continue   # 路径问题: 换下一个候选地址
+                _raw = ""
+                try:
+                    _raw = e.read().decode("utf-8", "ignore")
+                except Exception:
+                    _raw = ""
+                last_err = _llm_err_text_from(e, _raw)
+                # 1.6.76 只有"该路径返回网页(不是 API)"才换候选; 若服务已用 JSON 应答(即使 404),
+                #   说明 base 路径是对的 → 直接报错。否则会回退到不存在的路径, 把网站首页当成错误显示,
+                #   让人误以为"地址填错"(实测: /v1/chat/completions 返回 JSON 401, 而不带 /v1 的路径返回网站首页 HTML)
+                _ctype = ""
+                try:
+                    _ctype = str(e.headers.get("Content-Type") or "")
+                except Exception:
+                    _ctype = ""
+                _looks_html = ("text/html" in _ctype.lower()) or (_raw.lstrip()[:1] == "<")
+                if _looks_html and e.code in (403, 404, 405):
+                    continue   # 网页响应 → 该候选不是 API 端点, 试下一个
                 if e.code == 400 and mi < len(_models) - 1:
                     _model_maybe = True   # 400 可能是"模型不存在": 换候选模型再试
                     break

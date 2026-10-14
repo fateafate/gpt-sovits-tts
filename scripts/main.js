@@ -368,9 +368,33 @@ function getCfg() {
   try {
     if (typeof c.serverUrl === "string" && c.serverUrl.includes(":9880")) c.serverUrl = "auto";
   } catch (e) { /* noop */ }
+  // 1.6.76 统一分配来源(按配置决定压力给哪台电脑): 👥"语音生成者分配"(voiceRunnerMap: 说话者=生成者)
+  //   优先于旧的 voiceRunner/voiceAssignments。生成者账号 → 从 runnerList(各引擎机 60s 心跳)取地址;
+  //   找不到(离线) → 回落后续逻辑(默认引擎机/auto), 保证不断声。
+  let _vmApplied = false;
+  try {
+    const _rawVM = String(game.settings.get(MODULE, "voiceRunnerMap") || "");
+    if (_rawVM.trim()) {
+      const _myName = (game.user && game.user.name) || "";
+      for (const _ln of _rawVM.split(/\r?\n/)) {
+        const _i = _ln.indexOf("=");
+        if (_i < 0) continue;
+        const _who = _ln.slice(0, _i).trim();
+        const _by = _ln.slice(_i + 1).trim();
+        if (!_who || _who !== _myName) continue;
+        if (!_by) { _vmApplied = true; break; }                                   // 显式留空 = 默认引擎机(不改写地址)
+        if (_by === _myName) { c.serverUrl = "auto"; _vmApplied = true; break; }   // 指定给自己 → 用本机服务
+        let _found = "";
+        try { runnerList.forEach((v, u) => { if (!_found && v && String(v.by || "") === _by) _found = u; }); } catch (e) { /* noop */ }
+        if (_found) { c.serverUrl = _found; _vmApplied = true; }                   // 用被指定电脑广播的地址
+        break;
+      }
+    }
+  } catch (e) { /* noop */ }
   // 语音运行者解析: GM 分配表优先(主持人在设置里给每个 pl 分配电脑; 默认主持人电脑)
   //  → 非 GM 客户端动态用被分配机器广播的服务地址(找不到则保持 auto=本机)
   try {
+    if (_vmApplied) throw new Error("__vm_applied__");   // 1.6.76 已被"语音生成者分配"接管 → 跳过旧设置覆盖
     let runner = c.voiceRunner || "gm";
     try {
       let assign = game.settings.get(MODULE, "voiceAssignments");
