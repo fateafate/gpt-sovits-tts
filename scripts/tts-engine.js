@@ -328,7 +328,11 @@ export async function gptSovitsSocketProxy(payload, { engine = "gpt", timeoutMs 
     if (binary && !hasWrap) req.binary = true;   // 合成音频二进制经 base64 回传(gm-proxy binary 分支返回 b64)
     const gmSelf = !!(game && game.user && game.user.isGM);
     const r = await moduleEmit("tts-proxy", Object.assign({}, req, { engine, user: (() => { try { return (game.user && game.user.name) || ""; } catch (e) { return ""; } })() }, { timeoutMs: gmSelf ? 3000 : timeoutMs }), { timeoutMs: gmSelf ? 3000 : timeoutMs });
-    if (r && typeof r === "object") return r;
+    if (r && typeof r === "object") {
+      // 1.6.75 记录"这次由谁的电脑合成"(按语音生成者分配执行的机器), 供界面/测试报告显示压力归属
+      try { if (r.by) window.__fvttTTSLastSynthBy = String(r.by); } catch (e) { /* noop */ }
+      return r;
+    }
   } catch (e) { /* fallthrough → 直连 */ }
   return null;
 }

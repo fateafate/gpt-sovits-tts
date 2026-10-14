@@ -4246,10 +4246,11 @@ window.runFinalTest = async function runFinalTest() {
   try {
     const _su = String(cfg.serverUrl || "");
     const _isLocal = /127\.0\.0\.1|localhost/i.test(_su);
+    const _by = (() => { try { return String(window.__fvttTTSLastSynthBy || ""); } catch (e) { return ""; } })();
     const _cdTxt = (window.__fvttTTSCanDirect === true)
       ? ("本机直连(自己合成 → 压力在本机" + (_isLocal ? ", 用本机引擎" : ", 用 " + _su) + ")")
-      : (window.__fvttTTSCanDirect === false ? "GM 代理(委托给语音生成者 → 压力在对方那台机器)" : "探测中(页面刚加载)");
-    push("- 合成方式: " + _cdTxt);
+      : (window.__fvttTTSCanDirect === false ? "代理合成(委托 → 压力在对方那台机器)" : "探测中(页面刚加载)");
+    push("- 合成方式: " + _cdTxt + (_by ? (" | 最近一次由「" + _by + "」的电脑合成(按语音生成者分配)") : ""));
   } catch (e) { /* noop */ }
   push("");
   push("## 二、朗读提示词(是否生效)");

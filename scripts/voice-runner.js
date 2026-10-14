@@ -84,7 +84,7 @@ export function openRunnerAssign() {
         if (!isGM) {
           statusEl.textContent = l("runAssign.deny", "只有主持人可以修改语音生成者分配。当前分配如下：");
         } else {
-          statusEl.textContent = l("runAssign.hint2", "全部账号（含未登录玩家）都在这里，主持人直接给每个账号选「由谁的电脑生成」——没登录的账号也可以先安排（登录即生效）。被选中账号需开着 TTS 服务并与 FVTT 服务器互通，服务器自动取该账号电脑的 IP。玩家不能自己调整。");
+          statusEl.textContent = l("runAssign.hint2", "全部账号（含未登录玩家）都在这里，主持人直接给每个账号选「由谁的电脑生成」——没登录的账号也可以先安排（登录即生效）。被选中账号需开着 TTS 服务并与 FVTT 服务器互通；未指定=默认引擎机（服务器/主持人那台），被指定电脑离线时会自动由默认引擎机兜底，不会断声。玩家不能自己调整。");
         }
         const rows = sorted.map((u) => {
           const uname = String(u.name || "");

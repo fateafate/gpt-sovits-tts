@@ -123,7 +123,26 @@ async function gmTtsReport(d) {
   } catch (e) { /* noop */ }
 }
 
-/** 注册 module 事件监听: 合成执行者=引擎可达端; 写回/报告=GM 端; 任意端匹配响应(tts-engine 的 moduleEmit) */
+/** 1.6.75 读"语音生成者分配"(voiceRunnerMap, 世界设置): 该请求的作者被指定给哪个账号的电脑执行。
+ *  返回 { name } 或 null(未指定 → 默认引擎机)。语义与分配器一致: 每行 "说话者账号 = 生成者账号"。 */
+function runnerTargetFor(d) {
+  try {
+    const raw = String(game.settings.get(MOD, "voiceRunnerMap") || "");
+    if (!raw.trim()) return null;
+    const author = String((d && d.user) || "").trim();
+    if (!author) return null;
+    for (const ln of raw.split(/\r?\n/)) {
+      const i = ln.indexOf("=");
+      if (i < 0) continue;
+      const k = ln.slice(0, i).trim();
+      const v = ln.slice(i + 1).trim();
+      if (k && k === author) return v ? { name: v } : null;
+    }
+    return null;
+  } catch (e) { return null; }
+}
+
+/** 注册 module 事件监听: 合成执行者=按分配指定的电脑(未指定则引擎可达端); 写回/报告=GM 端; 任意端匹配响应 */
 export function installGmProxy() {
   try {
     if (typeof game === "undefined" || !game || !game.socket || typeof game.socket.on !== "function") return;
@@ -137,8 +156,26 @@ export function installGmProxy() {
         if (t === "tts-proxy") {
           const canExec = !!(game.user) && (game.user.isGM === true || window.__fvttTTSCanDirect === true);
           if (!canExec) return;
+          // 1.6.75 按分配定向(用户诉求: "根据配置决定压力给哪台电脑"):
+          //   ① 指定给了别人且那人在线 → 我不抢(压力按其配置, 也避免多台引擎重复劳动)
+          //   ② 指定给了别人但那人离线 → 我(=GM/引擎机)兜底执行, 保证不断声
+          //   ③ 指定的就是自己 / 未指定 → 我执行
+          try {
+            const _want = runnerTargetFor(data);
+            if (_want && _want.name) {
+              const myName = String((game.user && game.user.name) || "");
+              const tu = (game.users && typeof game.users.getName === "function") ? game.users.getName(_want.name) : null;
+              const targetOnline = !!(tu && tu.active);
+              if (_want.name !== myName && targetOnline) return;   // 让给被指定的那台电脑
+            }
+          } catch (e) { /* noop */ }
           gmTtsProxy(data).then((r) => {
-            try { game.socket.emit("module." + MOD, { __type: "tts-proxy-resp", __rid: String(data.__rid || ""), result: r || null }); } catch (e) { /* noop */ }
+            try {
+              game.socket.emit("module." + MOD, {
+                __type: "tts-proxy-resp", __rid: String(data.__rid || ""),
+                result: Object.assign({}, r || {}, { by: String((game.user && game.user.name) || "") }),   // 1.6.75 告诉发起端"这次由谁的电脑合成"
+              });
+            } catch (e) { /* noop */ }
           }).catch(() => { /* noop */ });
           return;
         }
