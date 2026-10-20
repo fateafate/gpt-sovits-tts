@@ -4279,6 +4279,18 @@ window.runFinalTest = async function runFinalTest() {
   const llmOk = !!(cfg.llmEnabled && cfg.llmKey) && window.__fvttTTSLlmBroken !== true;
   push("- LLM: " + (llmOk ? "可用✓" : ((cfg.llmEnabled && cfg.llmKey) ? ("禁用 — " + String(window.__fvttTTSLlmErr || "?").slice(0, 150)) : "未配置(设置里开 AI 并填 key)")));
   push("- LLM 配置: base=" + String(cfg.llmBaseUrl || "(空)").slice(0, 50) + " | model=" + String(cfg.llmModel || "(空)") + " | key=" + maskKey(cfg.llmKey));
+  // 1.6.79 AI 调用统计(引擎侧真实计数): 直接回答"到底有没有调动 AI / 为什么服务商没花费"
+  try {
+    const _rs = await svcRequest(cfg.serverUrl, "GET", "/llm/stats", null, { timeoutMs: 8000, retries: 0 });
+    const _sj = (_rs && typeof _rs.json === "function") ? await _rs.json().catch(() => ({})) : {};
+    const _st = (_sj && _sj.stats) || null;
+    if (_st) {
+      push("- AI 调用统计(引擎侧): 累计 " + _st.calls + " 次（成功 " + _st.ok + " / 失败 " + _st.fail + "）"
+        + (_st.last_at ? (" | 最近一次 " + new Date(_st.last_at * 1000).toLocaleTimeString("zh-CN") + " model=" + String(_st.last_model || "")) : "")
+        + (_st.last_err ? (" | 最近失败: " + String(_st.last_err).slice(0, 150)) : ""));
+      if (!_st.calls) push("  ⚠ 引擎从未收到 AI 请求 → 客户端在探测/调用前就跳过了（LLM 被标记不可用 / 未启用 / 未填 key）。失败请求(401/模型不存在)不会产生花费。");
+    } else push("- AI 调用统计: 引擎未返回统计(可能是旧引擎)");
+  } catch (e) { push("- AI 调用统计: 查询失败(" + String((e && e.message) || e).slice(0, 60) + ")"); }
   push("- 朗读提示词: " + (style || "(未填)") + " | AI润色=" + (cfg.llmPolish ? "开" : "关"));
   // 1.6.74 明确"合成压力在哪台机器": 本机直连=用自己的引擎; GM代理=委托给语音生成者
   try {

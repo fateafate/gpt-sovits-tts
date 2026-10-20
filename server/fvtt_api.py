@@ -2942,7 +2942,39 @@ def _llm_err_text_from(e, raw):
         pass
     return "HTTP Error %s: %s" % (getattr(e, "code", "?"), getattr(e, "reason", ""))
 
+# 1.6.79 AI 调用统计(确定性证据): 直接回答"到底有没有调动 AI、结果如何、为什么没花费"
+#   calls=引擎收到的 LLM 请求次数; ok/fail; last_err=最近失败原因(401/模型不存在/非JSON...)
+_LLM_STATS = {"calls": 0, "ok": 0, "fail": 0, "last_err": "", "last_at": 0, "last_model": "", "last_base": ""}
+
+def _llm_stat(ok, err="", model="", base=""):
+    try:
+        _LLM_STATS["calls"] = int(_LLM_STATS.get("calls", 0)) + 1
+        if ok:
+            _LLM_STATS["ok"] = int(_LLM_STATS.get("ok", 0)) + 1
+        else:
+            _LLM_STATS["fail"] = int(_LLM_STATS.get("fail", 0)) + 1
+            _LLM_STATS["last_err"] = str(err or "")[:300]
+        _LLM_STATS["last_at"] = int(time.time())
+        _LLM_STATS["last_model"] = str(model or "")
+        _LLM_STATS["last_base"] = str(base or "")
+    except Exception:
+        pass
+
 def _llm_chat_call(payload, base, key, timeout=15):
+    """统计包装(1.6.79): 统一记录每次 AI 调用是否发出/成功/失败原因"""
+    try:
+        r = _llm_chat_call_inner(payload, base, key, timeout)
+    except Exception as e:
+        _llm_stat(False, "异常: %s" % e, (payload or {}).get("model"), base)
+        raise
+    try:
+        data = r[0] if r else None
+        _llm_stat(bool(data is not None), (r[2] if (r and len(r) > 2) else ""), (payload or {}).get("model"), base)
+    except Exception:
+        pass
+    return r
+
+def _llm_chat_call_inner(payload, base, key, timeout=15):
     """依序尝试候选 URL(404/403 视为路径问题换下一个)与候选模型;
     模型兜底: base 含 deepseek 且当前模型不可用时自动改试 deepseek-chat / deepseek-reasoner(修"填了官方base却留着gpt模型名"的 400)
     返回 (data|None, status|None, err|None); payload["model"] 可能被更新为实际成功的模型名"""
@@ -3002,6 +3034,14 @@ def _llm_chat_call(payload, base, key, timeout=15):
         if not _model_maybe:
             break
     return None, None, last_err
+
+@APP.get("/llm/stats")
+async def llm_stats_endpoint():
+    """1.6.79 AI 调用统计: calls/ok/fail + 最近失败原因 + 最近模型/base(回答"有没有真的调用 AI")"""
+    try:
+        return {"ok": True, "stats": dict(_LLM_STATS)}
+    except Exception as e:
+        return {"ok": False, "message": str(e)}
 
 @APP.post("/llm")
 async def llm_endpoint(request: Request):
