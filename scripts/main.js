@@ -4326,6 +4326,64 @@ window.runFinalTest = async function runFinalTest() {
     push("- 合成方式: " + _cdTxt + (_by ? (" | 最近一次由「" + _by + "」的电脑合成(按语音生成者分配)") : ""));
   } catch (e) { /* noop */ }
   push("");
+  // 1.6.81 AI / Key 专项测试: 验证 key 有效性、base 端点、当前模型可用性, 并在当前模型不可用时自动找可用模型
+  push("## 一·A、AI / Key 专项测试");
+  push("");
+  try {
+    if (!cfg.llmEnabled) push("- AI 开关: ✗ 未启用（语音设置 → AI 接入 → 填好后点「保存 AI 配置」）");
+    else if (!cfg.llmKey) push("- 密钥: ✗ 未填写（语音设置 → AI 接入 → 密钥）");
+    else {
+      push("- 配置: base=" + String(cfg.llmBaseUrl || "(空)") + " | model=" + String(cfg.llmModel || "(空)") + " | key=" + maskKey(cfg.llmKey));
+      // ① 模型列表(同时验证 base 端点 + key 有效性)
+      let _models = [];
+      try {
+        const _mr = await svcRequest(cfg.serverUrl, "POST", "/llm/models", { base: cfg.llmBaseUrl, key: cfg.llmKey }, { timeoutMs: 20000, retries: 0 });
+        const _mj = (_mr && typeof _mr.json === "function") ? await _mr.json().catch(() => ({})) : {};
+        if (_mr && _mr.ok && _mj && _mj.ok) {
+          _models = (_mj.models || []).slice(0, 8);
+          push("- 模型列表: ✓ key 有效（服务返回 " + (_mj.models || []).length + " 个模型: " + _models.slice(0, 6).join(", ") + (_models.length > 6 ? " …" : "") + "）");
+        } else {
+          const _m = String((_mj && _mj.message) || ("http " + (_mr && _mr.status))).slice(0, 170);
+          push("- 模型列表: ✗ " + _m);
+          if (/401|invalid api key|unauthorized|authentication/i.test(_m)) push("  → **密钥无效/过期**（服务商不会扣费）");
+          else if (/非 JSON|<!doctype|html/i.test(_m)) push("  → **base 地址错误**（该路径不是 API 端点）");
+        }
+      } catch (e) { push("- 模型列表: ✗ 请求失败 " + String((e && e.message) || e).slice(0, 90)); }
+      // ② 当前模型实测(真实 chat 请求)
+      let _curOk = false, _curMsg = "";
+      try {
+        const _pr = await (typeof window.probeModelUsable === "function" ? window.probeModelUsable(cfg.llmModel) : Promise.resolve(null));
+        _curOk = !!(_pr && _pr.ok);
+        _curMsg = String((_pr && _pr.reason) || "");
+        push("- 当前模型实测（" + String(cfg.llmModel || "?") + "）: " + (_curOk ? "✓ 可用（AI 判语气/润色/选立绘会生效）" : ("✗ " + _curMsg.slice(0, 170))));
+      } catch (e) { push("- 当前模型实测: ✗ " + String((e && e.message) || e).slice(0, 90)); }
+      // ③ 当前模型不可用 → 从服务商列表里自动找可用模型
+      if (!_curOk && _models.length) {
+        const _cand = _models.slice(0, 3);
+        const _marks = [];
+        let _first = "";
+        for (const _m2 of _cand) {
+          try {
+            const _p2 = await (typeof window.probeModelUsable === "function" ? window.probeModelUsable(_m2) : Promise.resolve(null));
+            if (_p2 && _p2.ok) { _marks.push(_m2 + " ✓"); if (!_first) _first = _m2; }
+            else _marks.push(_m2 + " ✗");
+          } catch (e) { _marks.push(_m2 + " ✗"); }
+        }
+        push("- 自动找可用模型: " + _marks.join(" / ") + (_first ? (" → **建议改用 " + _first + "**（语音设置 → AI 接入 → 模型下拉）") : " → 没有可用模型（key 可能无额度/无权限）"));
+      }
+      // ④ 引擎侧调用统计(1.6.79)
+      try {
+        const _sr2 = await svcRequest(cfg.serverUrl, "GET", "/llm/stats", null, { timeoutMs: 8000, retries: 0 });
+        const _sj2 = (_sr2 && typeof _sr2.json === "function") ? await _sr2.json().catch(() => ({})) : {};
+        const _st2 = (_sj2 && _sj2.stats) || null;
+        if (_st2) push("- 引擎侧统计: 累计 " + _st2.calls + " 次（成功 " + _st2.ok + " / 失败 " + _st2.fail + "）" + (_st2.last_err ? (" | 最近失败: " + String(_st2.last_err).slice(0, 130)) : ""));
+      } catch (e) { /* noop */ }
+      // ⑤ 结论
+      push("- **AI 结论**: " + (_curOk ? "✓ AI 链路可用" : (_models.length ? "✗ 当前模型不可用，但 key 有效 → 换一个可用模型即可" : "✗ 无法调用（先确认 key 有效、base 正确）")));
+      if (!_curOk) fails.push("AI/Key");
+    }
+  } catch (e) { push("- AI/Key 测试异常: " + String((e && e.message) || e).slice(0, 90)); }
+  push("");
   push("## 一·B、引擎机自检(部署专用 TTS 机时用)");
   try {
     const _sc = await (typeof window.runEngineSelfCheck === "function" ? window.runEngineSelfCheck({ silent: true }) : Promise.resolve(null));
