@@ -418,8 +418,11 @@ function getCfg() {
     const shBase = game.settings.get(MODULE, "aiSharedBase") || "";
     const shKey = game.settings.get(MODULE, "aiSharedKey") || "";
     const shModel = game.settings.get(MODULE, "aiSharedModel") || "";
-    if (shBase) c.llmBaseUrl = shBase;
-    if (shKey) c.llmKey = shKey;
+    // 1.6.84 共享配置只覆盖"非 GM"(分发给玩家用); GM 自己的本机配置优先 —
+    //   否则 GM 在语音设置里改了 base/key 会被共享值覆盖, 表现为"改了不生效 / 无法保存/无法改变地址"
+    const _isGmNow = !!(game.user && game.user.isGM);
+    if (shBase && !_isGmNow) c.llmBaseUrl = shBase;
+    if (shKey && !_isGmNow) c.llmKey = shKey;
     // 模型不强制覆盖: 每个玩家可各自选不同模型(支持多模型同时运行)。仅当玩家本地无模型缓存时, 用共享列表填充下拉
     const shModels = String(game.settings.get(MODULE, "aiSharedModels") || "").split(",").map(s => s.trim()).filter(Boolean);
     if (shModels.length && (!c.llmModels || !c.llmModels.length)) c.llmModels = shModels;

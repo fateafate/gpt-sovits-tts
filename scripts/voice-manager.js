@@ -910,7 +910,16 @@ function safeAssignments() {
           }
         } catch (e2) { /* noop */ }
         try { window.__fvttTTSLlmBroken = false; window.__fvttTTSLlmErr = ""; } catch (e2) { /* noop */ }
-        const _okMsg = "✓ " + t("vm.aiSaved", "AI 配置已保存并开启") + (_syncedShared ? "（已同步世界共享配置）" : "");
+        // 1.6.84 读回验证: 确认真的写入(排除权限/类型导致的静默失败), 并提示当前生效值
+        let _rbTxt = "";
+        try {
+          const _rbB = String(game.settings.get("gpt-sovits-tts", "llmBaseUrl") || "");
+          const _rbK = String(game.settings.get("gpt-sovits-tts", "llmKey") || "");
+          if (_rbB !== _b2) _rbTxt += " | ⚠ base 读回不一致(实际存: " + (_rbB || "空") + ")";
+          if (_rbK !== _k2) _rbTxt += " | ⚠ key 读回不一致";
+          if (!_rbTxt) _rbTxt = " | ✓ 已确认写入";
+        } catch (e2) { _rbTxt = " | (读回校验异常)"; }
+        const _okMsg = "✓ " + t("vm.aiSaved", "AI 配置已保存并开启") + (_syncedShared ? "（已同步世界共享配置）" : "") + _rbTxt;
         if (aiStatus) aiStatus.textContent = _okMsg;
         try { ui.notifications.info(_okMsg); } catch (e2) { /* noop */ }
       } catch (err) {
