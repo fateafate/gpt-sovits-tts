@@ -418,11 +418,13 @@ export class VoiceManager {
     let html = "";
     // AI 接入 (LLM 语气判断, 可选): 直接在面板顶部填写网址+密钥, 输入完自动检测模型并填充下拉
     let aiBase = "", aiKeySet = false, aiKeyVal = "", aiEnabled = false, aiModel = "", aiModels = [], _cfgTextLang = "", _gmMute = false;
+    let _shBaseV = "", _shKeyV = "", _shModelV = "";   // 1.6.82 世界共享配置(会覆盖本机值, 需在 UI 明示)
     try {
       // AI 接入区显示: GM 分发的世界共享配置优先(pl 只读, 面板如实反映共享生效状态)
       const _shB = game.settings.get("gpt-sovits-tts", "aiSharedBase") || "";
       const _shK = game.settings.get("gpt-sovits-tts", "aiSharedKey") || "";
       const _shM = game.settings.get("gpt-sovits-tts", "aiSharedModel") || "";
+      _shBaseV = _shB; _shKeyV = _shK; _shModelV = _shM;
       aiBase = _shB || game.settings.get("gpt-sovits-tts", "llmBaseUrl") || "";
       aiKeySet = !!(_shK || game.settings.get("gpt-sovits-tts", "llmKey"));
       // 1.6.68 修 ReferenceError: aiKey is not defined —— 旧代码在"显示密钥"开启后重渲染时引用了不存在的 aiKey,
@@ -453,6 +455,7 @@ export class VoiceManager {
     html += `<section class="fvtt-tts-vm-sec fvtt-tts-vm-sec-ai">
       <div class="fvtt-tts-vm-title2">${t("vm.aiTitle", "AI 接入 (LLM 语气判断)")} ${aiEnabled ? "✅" : "（未启用）"}</div>
       <div class="fvtt-tts-vm-hint">${t("vm.aiHint2", "在这里填写 API 网址与密钥，输入完自动检测可用模型；不填不影响朗读。")}</div>
+      ${(_shBaseV || _shKeyV || _shModelV) ? `<div class="fvtt-tts-vm-hint" style="color:#e0b060">⚠ 当前生效的是「世界共享 AI 配置」（会覆盖本机填写）${isGM ? "：点下面按钮可清除共享，或直接保存（会同步更新共享）" : "：由主持人统一设置，如需修改请联系主持人"}。</div>${isGM ? '<div class="fvtt-tts-vm-row"><button type="button" class="fvtt-tts-vm-btn vm-ai-clear-shared">🧹 清除世界共享配置（改用本机设置）</button></div>' : ""}` : ""}
       <label class="fvtt-tts-vm-row"><span>${t("vm.aiBase", "API 地址")}</span>
         <input class="fvtt-tts-vm-ai-base" value="${esc(aiBase)}" placeholder="https://api.deepseek.com/v1"></label>
       <label class="fvtt-tts-vm-row"><span>${t("vm.aiKey", "密钥")}</span>
@@ -885,12 +888,48 @@ function safeAssignments() {
     });
     if (aiSaveBtn) aiSaveBtn.addEventListener("click", async () => {
       try {
-        await game.settings.set("gpt-sovits-tts", "llmBaseUrl", (aiBaseInp ? aiBaseInp.value.trim() : "") || "https://api.openai.com/v1");
-        await game.settings.set("gpt-sovits-tts", "llmKey", aiKeyInp ? aiKeyInp.value.trim() : "");
+        const _b2 = (aiBaseInp ? aiBaseInp.value.trim() : "") || "https://api.openai.com/v1";
+        const _k2 = aiKeyInp ? aiKeyInp.value.trim() : "";
+        const _m2 = aiModelSel ? aiModelSel.value : "";
+        await game.settings.set("gpt-sovits-tts", "llmBaseUrl", _b2);
+        await game.settings.set("gpt-sovits-tts", "llmKey", _k2);
         await game.settings.set("gpt-sovits-tts", "llmEnabled", true);
-        await game.settings.set("gpt-sovits-tts", "llmModel", aiModelSel ? aiModelSel.value : "");
-        if (aiStatus) aiStatus.textContent = "✓ " + t("vm.aiSaved", "AI 配置已保存并开启");
-      } catch (err) { if (aiStatus) aiStatus.textContent = t("vm.aiSaveFail", "保存失败") + ": " + (err.message || err); }
+        await game.settings.set("gpt-sovits-tts", "llmModel", _m2);
+        // 1.6.82 若存在世界共享配置, 同步更新它 —— 否则共享值会覆盖本机值, 表现为"改了不生效/无法改变地址"
+        let _syncedShared = false;
+        try {
+          if (game.user && game.user.isGM) {
+            const _hasS = !!(game.settings.get("gpt-sovits-tts", "aiSharedBase") || game.settings.get("gpt-sovits-tts", "aiSharedKey") || game.settings.get("gpt-sovits-tts", "aiSharedModel"));
+            if (_hasS) {
+              await game.settings.set("gpt-sovits-tts", "aiSharedBase", _b2);
+              await game.settings.set("gpt-sovits-tts", "aiSharedKey", _k2);
+              await game.settings.set("gpt-sovits-tts", "aiSharedModel", _m2);
+              _syncedShared = true;
+            }
+          }
+        } catch (e2) { /* noop */ }
+        try { window.__fvttTTSLlmBroken = false; window.__fvttTTSLlmErr = ""; } catch (e2) { /* noop */ }
+        const _okMsg = "✓ " + t("vm.aiSaved", "AI 配置已保存并开启") + (_syncedShared ? "（已同步世界共享配置）" : "");
+        if (aiStatus) aiStatus.textContent = _okMsg;
+        try { ui.notifications.info(_okMsg); } catch (e2) { /* noop */ }
+      } catch (err) {
+        const _er = t("vm.aiSaveFail", "保存失败") + ": " + String((err && err.message) || err);
+        if (aiStatus) aiStatus.textContent = _er;
+        try { ui.notifications.error(_er); } catch (e2) { /* noop */ }
+      }
+    });
+    // 1.6.82 清除世界共享 AI 配置(共享优先会覆盖本机; 清除后本机设置生效)
+    const _clearSharedBtn = body.querySelector(".vm-ai-clear-shared");
+    if (_clearSharedBtn) _clearSharedBtn.addEventListener("click", async () => {
+      try {
+        if (!(game.user && game.user.isGM)) { ui.notifications.warn("仅主持人可清除共享配置"); return; }
+        await game.settings.set("gpt-sovits-tts", "aiSharedBase", "");
+        await game.settings.set("gpt-sovits-tts", "aiSharedKey", "");
+        await game.settings.set("gpt-sovits-tts", "aiSharedModel", "");
+        try { window.__fvttTTSLlmBroken = false; window.__fvttTTSLlmErr = ""; } catch (e2) { /* noop */ }
+        ui.notifications.info("已清除世界共享 AI 配置 → 现在使用本机填写的 base/key");
+        try { this._renderBody(); } catch (e2) { /* noop */ }
+      } catch (e) { ui.notifications.error("清除失败: " + String((e && e.message) || e)); }
     });
     if (aiModelSel) aiModelSel.addEventListener("change", () => {
       try { game.settings.set("gpt-sovits-tts", "llmModel", aiModelSel.value || ""); } catch (e) { /* noop */ }
