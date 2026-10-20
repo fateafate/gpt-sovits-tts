@@ -275,7 +275,8 @@ export class VoiceManager {
       <div class="fvtt-tts-vm-body"></div>
       <footer class="fvtt-tts-vm-foot">
         <button type="button" class="fvtt-tts-vm-back" style="display:none">${t("vm.back", "返回")}</button>
-        <button type="button" class="fvtt-tts-vm-finaltest" title="最终测试(一键全链路): 引擎连通 → LLM诊断 → 提示词强度 → 合成 → 句首音量(实测音频包络) → 立绘切换 → 多语种×多语气×双模型 → AI判语气/润色/选立绘 → 手动选立绘优先; 跑完自动生成报告文件 engine\final_test_report.md">🏁 最终测试</button>
+        <button type="button" class="fvtt-tts-vm-finaltest" title="最终测试(一键全链路): 引擎连通 → LLM诊断 → 引擎自检 → 提示词强度 → 合成 → 句首音量(实测音频包络) → 情绪参考音/声线实测 → AI判语气/润色/选立绘; 跑完自动生成报告文件 engine\final_test_report.md">🏁 最终测试</button>
+        <button type="button" class="fvtt-tts-vm-selfcheck" title="引擎机自检(仅主持人): CUDA/显存 · 激活角色模型齐全 · 参考音合规(时长/采样率) · ffmpeg · 角色包清单 · 磁盘空间 —— 部署专用 TTS 机时一键排查">🔧 引擎自检</button>
         <span class="fvtt-tts-vm-spacer" style="flex:1"></span>
         <button type="button" class="fvtt-tts-vm-test">${t("vm.test", "试听")}</button>
         <button type="button" class="fvtt-tts-vm-save">${t("vm.save", "保存")}</button>
@@ -283,6 +284,16 @@ export class VoiceManager {
         <button type="button" class="fvtt-tts-vm-runassign" title="${t("vm.runAssignTitle", "给每个账号指定语音由谁的电脑生成(仅主持人)")}">👥 ${t("vm.runAssign", "语音生成者分配")}</button>` : ""}
       </footer>`;
     this.el.querySelector(".fvtt-tts-vm-close").addEventListener("click", () => this.close());
+    // 1.6.80 引擎机自检按钮(部署专用 TTS 机时一键排查)
+    const _scBtn = this.el.querySelector(".fvtt-tts-vm-selfcheck");
+    if (_scBtn) _scBtn.addEventListener("click", async () => {
+      try {
+        if (!(game.user && game.user.isGM)) { ui.notifications.warn("引擎自检仅主持人可用"); return; }
+        ui.notifications.info("引擎机自检中…（CUDA/模型/参考音/ffmpeg/角色包/磁盘）");
+        const sc = await (typeof window.runEngineSelfCheck === "function" ? window.runEngineSelfCheck() : null);
+        if (!sc) ui.notifications.error("自检函数未就绪, 请刷新后重试");
+      } catch (e) { ui.notifications.error("自检失败: " + String((e && e.message) || e).slice(0, 90)); }
+    });
     const _ftBtn = this.el.querySelector(".fvtt-tts-vm-finaltest");
     if (_ftBtn) _ftBtn.addEventListener("click", async () => {
       try {

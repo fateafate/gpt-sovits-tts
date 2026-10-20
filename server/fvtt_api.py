@@ -3257,6 +3257,116 @@ async def diag_endpoint(request: Request):
     return {"ok": True, "saved": _saved}
 
 
+# 1.6.80 引擎机自检(部署专用 TTS 机时一键排查)
+@APP.get("/selfcheck")
+async def selfcheck_endpoint():
+    """CUDA/显存 · 激活角色模型齐全 · 参考音合规(存在/时长/采样率) · ffmpeg · 角色包清单 · 磁盘空间"""
+    items = []
+    def add(name, ok, detail):
+        items.append({"name": str(name), "ok": bool(ok), "detail": str(detail or "")[:400]})
+    # ① 服务/端口
+    try:
+        add("服务端口", True, "已在 %s 监听(本端点有响应)" % getattr(args, "port", 9881))
+    except Exception as e:
+        add("服务端口", False, str(e))
+    # ② CUDA / 推理设备
+    try:
+        _dev = str(tts_config.device)
+        _cuda = bool(HW_INFO.get("cuda"))
+        _ok = _cuda and ("cuda" in _dev)
+        add("CUDA/设备", _ok,
+            ("GPU=%s 显存=%.1fGB(空闲%.1fGB) 推理设备=%s half=%s" % (
+                HW_INFO.get("gpu_name") or "?", HW_INFO.get("gpu_mem_total_gb") or 0,
+                HW_INFO.get("gpu_mem_free_gb") or 0, _dev, getattr(tts_config, "is_half", "?")))
+            if _cuda else ("未检测到 CUDA → 当前 CPU 推理(%s), 合成会明显变慢" % _dev))
+    except Exception as e:
+        add("CUDA/设备", False, str(e))
+    # ③ 激活角色模型齐全 + ④ 参考音合规
+    try:
+        _char = str(getattr(args, "char", "") or "")
+        add("激活角色", bool(_char), _char or "(未指定 --char)")
+        _root = os.path.dirname(os.path.abspath(_char)) if _char else ""
+        _cfg = {}
+        if _char and os.path.isfile(_char):
+            try:
+                with open(_char, "r", encoding="utf-8") as _f:
+                    _cfg = _yaml.safe_load(_f) or {}
+            except Exception:
+                _cfg = {}
+        def _abs(rel):
+            rel = str(rel or "")
+            if not rel:
+                return ""
+            return rel if os.path.isabs(rel) else os.path.normpath(os.path.join(_root, rel))
+        # 1.6.80 参考音来源: 顶层 refer_audio_path 优先; 没有则取第一个带 ref 的情绪槽(七海这类角色参考音挂在情绪槽上)
+        _ref_top = str(_cfg.get("refer_audio_path") or "")
+        _ref_slot = ""
+        try:
+            for _k, _v in (_cfg.get("emotions") or {}).items():
+                if isinstance(_v, dict) and (_v.get("ref_audio_path") or _v.get("ref")):
+                    _ref_slot = str(_v.get("ref_audio_path") or _v.get("ref"))
+                    break
+        except Exception:
+            pass
+        _ref_use = _ref_top or _ref_slot
+        if not _cfg:
+            add("模型文件", False, "无法读取 character.yaml（文件缺失 / 格式错误 / yaml 解析失败）")
+        else:
+            _miss = []
+            for _label, _rel in (("GPT权重", _cfg.get("gpt_model_path")), ("SoVITS权重", _cfg.get("sovits_model_path")), ("参考音", _ref_use)):
+                _full = _abs(_rel)
+                if _rel and not os.path.isfile(_full):
+                    _miss.append("%s 缺失(%s)" % (_label, _rel))
+            add("模型文件", not _miss, ("齐备: GPT权重 / SoVITS权重 / 参考音%s" % ("" if _ref_top else "(来自情绪槽)")) if not _miss else "; ".join(_miss))
+        try:
+            _rf = _abs(_ref_use)
+            if _rf and os.path.isfile(_rf):
+                _a, _sr = sf.read(_rf, dtype="float32")
+                _sec = len(_a) / float(_sr or 1)
+                _okref = (3.0 <= _sec <= 10.0)
+                add("参考音合规", _okref, "时长 %.2fs(建议 3~10s) 采样率 %d%s" % (_sec, _sr, "" if _okref else " → 可能合成效果差或被拒"))
+            else:
+                add("参考音合规", False, "参考音文件不存在(顶层 refer_audio_path 与情绪槽 ref 均为空或文件缺失)")
+        except Exception as e:
+            add("参考音合规", False, "读取失败: %s" % e)
+    except Exception as e:
+        add("激活角色/模型", False, str(e))
+    # ⑤ ffmpeg(情绪后处理)
+    try:
+        _ff = os.path.join(os.getcwd(), "runtime", "ffmpeg.exe")
+        add("ffmpeg", os.path.isfile(_ff), _ff if os.path.isfile(_ff) else "未找到 runtime/ffmpeg.exe(情绪DSP不可用, 不影响基础合成)")
+    except Exception as e:
+        add("ffmpeg", False, str(e))
+    # ⑥ 角色包清单
+    try:
+        _cd = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "engine", "fvtt_chars"))
+        _chars = []
+        if os.path.isdir(_cd):
+            for _n in sorted(os.listdir(_cd)):
+                _p2 = os.path.join(_cd, _n)
+                # 1.6.80 只统计真正的角色目录(含 character.yaml), 过滤 imports/tmp_ref/models/.tmp_imports 等非角色目录
+                if not os.path.isdir(_p2):
+                    continue
+                if not os.path.isfile(os.path.join(_p2, "character.yaml")):
+                    continue
+                _chars.append(_n)
+        add("角色包", bool(_chars), ("共 %d 个可用角色: %s%s" % (len(_chars), " / ".join(_chars[:12]), " ..." if len(_chars) > 12 else "")) if _chars else "fvtt_chars 下未发现角色包(需要 `角色名/character.yaml` 结构)")
+    except Exception as e:
+        add("角色包", False, str(e))
+    # ⑦ 磁盘空间
+    try:
+        _du = os.disk_usage(os.getcwd()) if hasattr(os, "disk_usage") else None
+        if _du is None:
+            import shutil as _sh
+            _du = _sh.disk_usage(os.getcwd())
+        add("磁盘空间", _du.free > 2 * 1024 ** 3, "剩余 %.1fGB / 共 %.1fGB" % (_du.free / 1024 ** 3, _du.total / 1024 ** 3))
+    except Exception as e:
+        add("磁盘空间", False, str(e))
+    _bad = [i["name"] for i in items if not i["ok"]]
+    return {"ok": len(_bad) == 0, "items": items, "failed": _bad,
+            "hw": HW_INFO, "args": {"port": getattr(args, "port", ""), "char": getattr(args, "char", "")}}
+
+
 @APP.post("/selftest")
 async def selftest_endpoint(request: Request):
     """内置自检(诊断用): 聚合服务端状态 + 客户端上报 → 写 selftest_report.json

@@ -4242,6 +4242,29 @@ function waveCorr(x, y) {
   } catch (e) { return -1; }
 }
 
+// 1.6.80 引擎机自检(部署专用 TTS 机时一键排查): CUDA/显存 · 模型齐全 · 参考音合规 · ffmpeg · 角色包 · 磁盘
+window.runEngineSelfCheck = async function runEngineSelfCheck(opts) {
+  const cfg = getCfg();
+  const out = { ok: false, items: [], text: "" };
+  try {
+    const r = await svcRequest(cfg.serverUrl, "GET", "/selfcheck", null, { timeoutMs: 20000, retries: 0 });
+    const j = (r && typeof r.json === "function") ? await r.json().catch(() => ({})) : {};
+    out.items = (j && j.items) || [];
+    out.ok = !!(j && j.ok);
+    const lines = ["[引擎机自检] 地址=" + String(cfg.serverUrl || "") + " | 结论=" + (out.ok ? "全部通过 ✓" : ("存在问题: " + ((j && j.failed) || []).join("、")))];
+    for (const it of out.items) lines.push((it.ok ? "✓ " : "✗ ") + it.name + ": " + it.detail);
+    out.text = lines.join("\n");
+    try { console.warn("[gpt-sovits-tts]" + out.text); } catch (e) { /* noop */ }
+    try { if (!(opts && opts.silent === true)) ui.notifications[out.ok ? "info" : "warn"](out.text.split("\n")[0]); } catch (e) { /* noop */ }
+    try { await svcRequest(cfg.serverUrl, "POST", "/diag", { type: "engine-selfcheck", report: out.text }, { timeoutMs: 10000, retries: 0 }); } catch (e) { /* noop */ }
+  } catch (e) {
+    out.text = "[引擎机自检] 失败: " + String((e && e.message) || e).slice(0, 140) + "（引擎未启动或不可达）";
+    try { console.warn("[gpt-sovits-tts]" + out.text); } catch (e2) { /* noop */ }
+    try { if (!(opts && opts.silent === true)) ui.notifications.error("引擎自检失败: 引擎未启动或不可达"); } catch (e2) { /* noop */ }
+  }
+  return out;
+};
+
 // 1.6.64 最终测试: 一键跑全链路 → 自动生成报告文件(engine/final_test_report.md), 可直接发给作者查看
 //  覆盖: 引擎连通 / LLM 诊断 / 提示词强度插值 / 合成播放 / 句首音量(实测音频包络) / 立绘切换 /
 //        多语种×多语气×双模型 / AI 判语气+润色+选立绘 / 手动选立绘优先
@@ -4302,6 +4325,15 @@ window.runFinalTest = async function runFinalTest() {
       : (window.__fvttTTSCanDirect === false ? "代理合成(委托 → 压力在对方那台机器)" : "探测中(页面刚加载)");
     push("- 合成方式: " + _cdTxt + (_by ? (" | 最近一次由「" + _by + "」的电脑合成(按语音生成者分配)") : ""));
   } catch (e) { /* noop */ }
+  push("");
+  push("## 一·B、引擎机自检(部署专用 TTS 机时用)");
+  try {
+    const _sc = await (typeof window.runEngineSelfCheck === "function" ? window.runEngineSelfCheck({ silent: true }) : Promise.resolve(null));
+    if (_sc && _sc.items && _sc.items.length) {
+      for (const _it of _sc.items) push("- " + (_it.ok ? "✓ " : "✗ ") + _it.name + ": " + _it.detail);
+      if (!_sc.ok) fails.push("引擎自检");
+    } else push("- 未返回自检结果(引擎不可达或旧版引擎)");
+  } catch (e) { push("- 引擎自检异常: " + String((e && e.message) || e).slice(0, 60)); }
   push("");
   push("## 二、朗读提示词(是否生效)");
   if (!style) {
