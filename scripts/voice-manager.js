@@ -467,6 +467,7 @@ export class VoiceManager {
         <button type="button" class="fvtt-tts-vm-btn vm-ai-detect">⚡ ${t("vm.aiDetect", "自动检测模型")}</button>
         <button type="button" class="fvtt-tts-vm-btn vm-ai-preload">🚀 ${t("vm.aiPreload", "预加载 AI")}</button>
         <button type="button" class="fvtt-tts-vm-btn vm-ai-save">💾 ${t("vm.aiSave", "保存 AI 配置")}</button>
+        <button type="button" class="fvtt-tts-vm-btn vm-ai-diag" title="显示本机设置/世界共享/实际生效值, 一眼看出哪层覆盖了哪层">🩺 AI 配置诊断</button>
       </div>
       <div class="fvtt-tts-vm-ai-status">${aiEnabled ? "" : t("vm.aiSaveHint", "填好后点保存开启")}</div>
       <div class="fvtt-tts-vm-row fvtt-tts-vm-ai-share">${
@@ -917,6 +918,52 @@ function safeAssignments() {
         if (aiStatus) aiStatus.textContent = _er;
         try { ui.notifications.error(_er); } catch (e2) { /* noop */ }
       }
+    });
+    // 1.6.83 AI 配置诊断: 显示 本机设置 / 世界共享 / 实际生效值 —— 一眼看出"为什么改了不生效"
+    const _aiDiagBtn = body.querySelector(".vm-ai-diag");
+    if (_aiDiagBtn) _aiDiagBtn.addEventListener("click", () => {
+      try {
+        const g = (k) => { try { return game.settings.get("gpt-sovits-tts", k); } catch (e) { return "(读取失败)"; } };
+        const mask = (v) => { const s = String(v || ""); return s ? (s.slice(0, 4) + "…" + s.slice(-4)) : "(空)"; };
+        const shB = String(g("aiSharedBase") || "");
+        const shK = String(g("aiSharedKey") || "");
+        const shM = String(g("aiSharedModel") || "");
+        const lB = String(g("llmBaseUrl") || "");
+        const lK = String(g("llmKey") || "");
+        const lM = String(g("llmModel") || "");
+        const effB = shB || lB;
+        const effK = shK || lK;
+        const rows = [
+          "【本机设置(llmBaseUrl/llmKey/llmModel/llmEnabled)】",
+          "  base=" + (lB || "(空)"),
+          "  key=" + mask(lK),
+          "  enabled=" + String(g("llmEnabled")),
+          "  model=" + (lM || "(空)"),
+          "",
+          "【世界共享(aiSharedBase/aiSharedKey/aiSharedModel)】",
+          "  base=" + (shB || "(空)"),
+          "  key=" + mask(shK),
+          "  model=" + (shM || "(空)"),
+          "",
+          "【实际生效(合成/判定时用)】",
+          "  base=" + (effB || "(空)"),
+          "  key=" + mask(effK),
+          "  model=" + (lM || "(空)"),
+          "",
+          "【覆盖来源】" + ((shB || shK || shM) ? "世界共享配置（会覆盖本机填写）" : "本机设置（无共享覆盖）"),
+          "",
+          "若本机 base 已改但实际生效仍是旧值 → 就是共享在覆盖：点 💾 保存（会同步共享）或 🧹 清除世界共享配置。",
+        ];
+        const txt = rows.join("\n");
+        try { console.warn("[gpt-sovits-tts][AI配置诊断]\n" + txt); } catch (e) { /* noop */ }
+        try {
+          const w = document.createElement("div");
+          w.style.cssText = "position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center";
+          w.innerHTML = `<div style="background:#2a251f;border:1px solid #6a5f4f;border-radius:8px;max-width:92vw;max-height:84vh;overflow:auto;padding:14px 18px;color:#e8dcc0;font-size:13px;line-height:1.75;white-space:pre-wrap;font-family:Consolas,monospace">${esc(txt)}<div style="margin-top:12px;text-align:right"><button type="button" class="fvtt-tts-diag-x" style="background:#3a342c;border:1px solid #5a5246;border-radius:4px;padding:4px 14px;color:#ddd;cursor:pointer">关闭</button></div></div>`;
+          w.addEventListener("click", (ev) => { if (ev.target === w || (ev.target && ev.target.classList && ev.target.classList.contains("fvtt-tts-diag-x"))) w.remove(); });
+          document.body.appendChild(w);
+        } catch (e) { ui.notifications.info("诊断已输出到 F12 控制台"); }
+      } catch (e) { ui.notifications.error("诊断失败: " + String((e && e.message) || e)); }
     });
     // 1.6.82 清除世界共享 AI 配置(共享优先会覆盖本机; 清除后本机设置生效)
     const _clearSharedBtn = body.querySelector(".vm-ai-clear-shared");
