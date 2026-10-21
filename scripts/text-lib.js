@@ -89,13 +89,16 @@ export function localizeNumbers(text, lang) {
 /* ---------- 整句翻译(可选): MyMemory 免费 API, 失败回退原文 ---------- */
 const _transCache = new Map();
 let _transBusy = new Map();
+let _transCoolUntil = 0;   // 1.6.87 免费翻译 API 限流(429)冷却截止时间: 冷却期内跳过翻译(降级原文), 避免刷 429
 
 async function _mymemory(text, from, to) {
+  if (Date.now() < _transCoolUntil) return null;   // 1.6.87 冷却中: 直接降级
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 10000);
   try {
     const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=${from}|${to}`;
     const r = await fetch(url, { signal: ctrl.signal });
+    if (r.status === 429) { _transCoolUntil = Date.now() + 60000; return null; }   // 1.6.87 限流 → 冷却 60s
     if (!r.ok) return null;
     const j = await r.json();
     const t = j && j.responseData && j.responseData.translatedText;

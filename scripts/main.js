@@ -962,7 +962,10 @@ function evaluateMessage(message) {
     const _isItemHtml = /item-card|spell-card|dnd5e__item|dnd5e\.item|card-header[^>]*(spell|item)|item-summary|spell-summary|item-description|spell-description/i.test(rawContent);
     if (_isItemStyle || _hasItemFlag || _isItemHtml) return null;
   } catch (e) { /* noop */ }
-  // v12+ 悄悄话: 不再用 CONST.CHAT_MESSAGE_STYLES.WHISPER(已废弃), 直接看 message.whisper 收件人数组
+  // 1.6.87 跳过模块自身生成的报告/诊断文本(把自检/测试报告贴到聊天框时不应被朗读/翻译)
+  try {
+    if (/^\s*\[(引擎机自检|最终测试|AI测试|AI提示词测试报告|使用测试报告|gpt-sovits-tts)/.test(rawContent)) return null;
+  } catch (e) { /* noop */ }
   const isWhisper = (Array.isArray(message.whisper) && message.whisper.length > 0) || style === "whisper";
   if (isWhisper && cfg.skipWhispers) return null;
 
@@ -4607,7 +4610,7 @@ function aiJudgeEmotionNow(text, role) {
         base: cfg.llmBaseUrl || "https://api.openai.com/v1", key: cfg.llmKey, model: cfg.llmModel || "gpt-4o-mini",
         text: String(text || "").slice(0, 1200), role: role || prof.current || "", setting: (qcC && qcC.setting) || "", emotions: emos,
         style: getStylePrompt(role || prof.current || "") || "",   // 1.6.47 朗读风格作LLM判语气参考(Shinsekai式: 风格=给AI决定这句子语气)
-      }, { timeoutMs: 4000, retries: 0 });   // 1.6.48 判语气4s超时不重试(外部LLM慢时快速降级规则/风格词, 不拖慢朗读)
+      }, { timeoutMs: 10000, retries: 0 });   // 1.6.87 判语气超时 4s→10s: DeepSeek 等外部 LLM 首字常需 3~6s, 4s 会一直超时降级; 仍不重试, 失败照旧降级规则
       const j = r.jsonSafe ? r.jsonSafe() : (r.json || {});
       if (j && j.ok && j.emotion) return String(j.emotion);
     } catch (e) { /* noop */ }
