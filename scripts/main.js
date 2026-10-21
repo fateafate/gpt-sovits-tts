@@ -953,6 +953,15 @@ function evaluateMessage(message) {
   if (style === CHAT_STYLES.OOC && cfg.skipOoc) return null;
   // 1.6.39 跳过模组机制消息: D&D 短休/长休(type=rest, 无掷骰时rolls为空, skipRolls拦不住) — 不再读"谁执行了短休"
   if (style === "rest" || /(短休|长休|short rest|long rest)/i.test(rawContent)) return null;
+  // 1.6.85 跳过 D&D 物品/法术/系统描述卡(如"神莓术""蛮力药水""魔法物品"的说明文本) — 这些不是角色说的话, 不该朗读
+  try {
+    const _fl0 = message.flags || {};
+    const _d5 = _fl0.dnd5e || {};
+    const _isItemStyle = (style === "item" || style === "spell" || style === "usage");
+    const _hasItemFlag = !!(_d5.itemData || _d5.item || _d5.use || _d5.itemUses || _d5.itemUse);
+    const _isItemHtml = /item-card|spell-card|dnd5e__item|dnd5e\.item|card-header[^>]*(spell|item)|item-summary|spell-summary|item-description|spell-description/i.test(rawContent);
+    if (_isItemStyle || _hasItemFlag || _isItemHtml) return null;
+  } catch (e) { /* noop */ }
   // v12+ 悄悄话: 不再用 CONST.CHAT_MESSAGE_STYLES.WHISPER(已废弃), 直接看 message.whisper 收件人数组
   const isWhisper = (Array.isArray(message.whisper) && message.whisper.length > 0) || style === "whisper";
   if (isWhisper && cfg.skipWhispers) return null;

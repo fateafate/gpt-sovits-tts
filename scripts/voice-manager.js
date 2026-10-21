@@ -432,11 +432,20 @@ export class VoiceManager {
       if (this._aiKeyShown) { try { aiKeyVal = _shK || game.settings.get("gpt-sovits-tts", "llmKey") || ""; } catch (e2) { aiKeyVal = ""; } }
       aiEnabled = !!(_shB || _shK || game.settings.get("gpt-sovits-tts", "llmEnabled"));
       aiModel = _shM || game.settings.get("gpt-sovits-tts", "llmModel") || "";
-      aiModels = this._aiModels || [];
+      // 1.6.86 模型下拉选项必须持久化: 优先内存(刚检测的) → 否则读设置 llmModels(刷新后仍在) → 否则预设。
+      //   旧逻辑只读 this._aiModels(内存), 刷新页面后为空 → 下拉只剩预设 → 保存时选中值丢失 → 表现为"模型保存不了"
+      try {
+        const _savedModels = game.settings.get("gpt-sovits-tts", "llmModels");
+        aiModels = (Array.isArray(this._aiModels) && this._aiModels.length)
+          ? this._aiModels.slice()
+          : (Array.isArray(_savedModels) ? _savedModels.slice() : []);
+      } catch (e2) { aiModels = (Array.isArray(this._aiModels) ? this._aiModels.slice() : []); }
       _cfgTextLang = game.settings.get("gpt-sovits-tts", "textLang") || "auto";
       _gmMute = !!game.settings.get("gpt-sovits-tts", "gmMute");
     } catch (e) { /* noop */ }
-    const aiOpts = (aiModels.length ? aiModels : VM_LLM_PRESET).map(m => `<option value="${esc(m)}" ${m === aiModel ? "selected" : ""}>${esc(m)}</option>`).join("");
+    // 1.6.86 下拉列表: 检测到的/保存过的模型 + 当前选中的模型(确保它一定在列表里) + 预设兜底; 去重保序
+    const _aiModelList = [...new Set([...(aiModels || []), ...(aiModel ? [aiModel] : []), ...VM_LLM_PRESET])];
+    const aiOpts = _aiModelList.map(m => `<option value="${esc(m)}" ${m === aiModel ? "selected" : ""}>${esc(m)}</option>`).join("");
     // 1.6.78 合成来源(压力归属)显示: 让使用者一眼看到"我的语音由哪台电脑合成"
     const _byTxt = (() => { try { return String(window.__fvttTTSLastSynthBy || ""); } catch (e) { return ""; } })();
     const _cdMode = (() => {
@@ -891,7 +900,7 @@ function safeAssignments() {
       try {
         const _b2 = (aiBaseInp ? aiBaseInp.value.trim() : "") || "https://api.openai.com/v1";
         const _k2 = aiKeyInp ? aiKeyInp.value.trim() : "";
-        const _m2 = aiModelSel ? aiModelSel.value : "";
+        const _m2 = (aiModelSel && aiModelSel.value) ? aiModelSel.value : (() => { try { return String(game.settings.get("gpt-sovits-tts", "llmModel") || ""); } catch (e) { return ""; } })();   // 1.6.86 空值保护: 不清空已保存模型
         await game.settings.set("gpt-sovits-tts", "llmBaseUrl", _b2);
         await game.settings.set("gpt-sovits-tts", "llmKey", _k2);
         await game.settings.set("gpt-sovits-tts", "llmEnabled", true);
