@@ -5421,7 +5421,7 @@ function applyEmotionAvatar(message, html) {
       const lst = (window.__fvttTTSSpriteWhy = window.__fvttTTSSpriteWhy || []);
       lst.push({ ts: Date.now(), mid: (message && message.id) || "", reason: String(r) });
       while (lst.length > 20) lst.shift();
-      if (window.__fvttTTSSpriteVerbose) console.warn("[gpt-sovits-tts][立绘] 未插入: " + r);
+      if (window.__fvttTTSSpriteVerbose || window.__fvttTTSSpriteDiag) console.warn("[gpt-sovits-tts][立绘] 未插入: " + r);
     } catch (e) { /* noop */ }
     return undefined;
   };
