@@ -2652,7 +2652,8 @@ function attachTyping() {
   //   现在只用 triggerMode 判定(typing/both = 打字即读), commands 只用于命令解析, 与本功能无关。
   const _typingOn0 = (cfg.triggerMode === "typing" || cfg.triggerMode === "both");
   if (!_typingOn0 && !cfg.commands) return;
-  const ta = document.getElementById("chat-message");
+  // 1.6.129: 输入框兜底用 findChatTextarea()(v13 分离窗口/不同版本 DOM 结构差异), 不再只认 #chat-message
+  const ta = document.getElementById("chat-message") || findChatTextarea();
   if (!ta || ta.dataset.fvttTtsAttached) return;
   ta.dataset.fvttTtsAttached = "1";
   ta.addEventListener("input", () => {
@@ -2660,7 +2661,7 @@ function attachTyping() {
     if (c.triggerMode !== "typing" && c.triggerMode !== "both") return;
     clearTimeout(typingTimer);
     typingTimer = setTimeout(() => {
-      const el = document.getElementById("chat-message");
+      const el = document.getElementById("chat-message") || findChatTextarea();
       if (!el) return;
       const text = el.value.replace(/\s+/g, " ").trim();
       if (!text || text.startsWith("/")) return;
@@ -4966,7 +4967,8 @@ window.runFinalTest = async function runFinalTest() {
       while (w < 60 && !(Number(window.__fvttTTSLastSpeakAt || 0) > _tBefore)) { await new Promise(r => setTimeout(r, 200)); w++; }
       const _okK = Number(window.__fvttTTSLastSpeakAt || 0) > _tBefore;
       push("- **K 打字停顿朗读**（真实 input + 防抖）: " + (_okK ? "✓ 触发了朗读" : "✗ 未触发") + "（" + (w * 0.2).toFixed(1) + "s 内）"
-        + (getCfg().enabled ? "" : " | 朗读总开关=关"));
+        + (getCfg().enabled ? "" : " | 朗读总开关=关")
+        + (_okK ? "" : " | 输入框=" + ((ta2.id || ta2.tagName) + " 已挂监听=" + (ta2.dataset.fvttTtsAttached ? "是" : "否") + " 防抖=" + getCfg().typingDebounce + "ms")));
       if (!_okK) fails.push("K打字朗读");
       try { ta2.value = ""; } catch (e) { /* noop */ }
       try {
