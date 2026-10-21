@@ -4341,7 +4341,7 @@ window.runFinalTest = async function runFinalTest() {
   // 1.6.89 主持人提示词(世界级): 显示是否配置, 便于确认 AI 注入内容
   try {
     const _gmP = String(cfg.gmPrompt || "");
-    push("- 主持人提示词(世界级): " + (_gmP ? ("已配置 " + _gmP.length + " 字: " + _gmP.slice(0, 60) + (_gmP.length > 60 ? "…" : "")) : "(未填 · 不注入)"));
+    push("- 语气提示(主持人 · 只影响朗读语气): " + (_gmP ? ("已配置 " + _gmP.length + " 字: " + _gmP.slice(0, 60) + (_gmP.length > 60 ? "…" : "")) : "(未填 · 不注入)"));
   } catch (e) { /* noop */ }
   // 1.6.74 明确"合成压力在哪台机器": 本机直连=用自己的引擎; GM代理=委托给语音生成者
   try {

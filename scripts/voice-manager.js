@@ -488,11 +488,11 @@ export class VoiceManager {
           : `<span class="fvtt-tts-vm-hint">${t("vm.aiSharedNote", "AI 配置由主持人提供（只读，无需填写）")}</span>`
       }</div></section>
     <section class="fvtt-tts-vm-sec">
-      <div class="fvtt-tts-vm-title2">📜 ${t("vm.gmPromptTitle", "主持人提示词（世界级 · 注入所有 AI 判断）")}</div>
-      <div class="fvtt-tts-vm-hint">${t("vm.gmPromptHint", "写给 AI 的全局设定：世界背景、朗读风格、用词禁忌等。与「角色设定」「朗读提示词」一起注入 AI 判语气/润色/选立绘。留空则不注入。")}</div>
-      <textarea class="fvtt-tts-vm-gmprompt" rows="4" ${isGM ? "" : "readonly"} placeholder="${esc(t("vm.gmPromptPh", "例：\n世界设定：弹丸论破学园的日常…\n朗读风格：所有角色说话偏冷静克制，不用网络流行语\n称呼规则：称玩家为「同学」"))}">${esc(_gmPromptVal)}</textarea>
+      <div class="fvtt-tts-vm-title2">📜 ${t("vm.gmPromptTitle", "语气提示（主持人设定 · 只影响朗读语气）")}</div>
+      <div class="fvtt-tts-vm-hint">${t("vm.gmPromptHint", "只填「朗读语气 / 表演方式」，例如「用愤怒的语气」「压低声音、带威胁感」「轻快活泼」「缓慢而温柔」。它只影响每句话的语气，不会改变台词内容；不要写世界观、剧情或角色设定。留空则不注入。")}</div>
+      <textarea class="fvtt-tts-vm-gmprompt" rows="4" ${isGM ? "" : "readonly"} placeholder="${esc(t("vm.gmPromptPh", "例：\n用愤怒、压着火气的语气说话\n压低声音，带明显威胁感\n轻快活泼，语速稍快\n缓慢而温柔，句尾放轻"))}">${esc(_gmPromptVal)}</textarea>
       <div class="fvtt-tts-vm-row">
-        ${isGM ? `<button type="button" class="fvtt-tts-vm-btn vm-gmprompt-save">💾 ${t("vm.gmPromptSave", "保存主持人提示词")}</button>` : `<span class="fvtt-tts-vm-hint">${t("vm.gmPromptReadonly", "由主持人统一设置（只读）")}</span>`}
+        ${isGM ? `<button type="button" class="fvtt-tts-vm-btn vm-gmprompt-save">💾 ${t("vm.gmPromptSave", "保存语气提示")}</button>` : `<span class="fvtt-tts-vm-hint">${t("vm.gmPromptReadonly", "由主持人统一设置（只读）")}</span>`}
         <span class="fvtt-tts-vm-ai-status vm-gmprompt-status"></span>
       </div>
     </section>
@@ -1018,6 +1018,12 @@ function safeAssignments() {
         if (!(game.user && game.user.isGM)) { ui.notifications.warn("仅主持人可修改主持人提示词"); return; }
         const _v = String(_gmPromptTa.value || "").slice(0, 2000);
         await game.settings.set("gpt-sovits-tts", "gmPrompt", _v);
+        // 1.6.92 轻量提醒: 这里只该填"语气", 若写成世界观/剧情设定会误导 AI
+        try {
+          if (/(世界设定|世界观|剧情设定|角色设定|设定是|背景是|故事发生)/.test(_v)) {
+            ui.notifications.warn("提醒：这里只填「朗读语气/表演方式」（如「用愤怒的语气」）。世界观/剧情设定不会改变朗读语气，建议删掉。");
+          }
+        } catch (e2) { /* noop */ }
         const _st = body.querySelector(".vm-gmprompt-status");
         if (_st) _st.textContent = "✓ 已保存（" + _v.length + " 字）";
         try { ui.notifications.info("主持人提示词已保存（" + _v.length + " 字），下一句起生效"); } catch (e2) { /* noop */ }

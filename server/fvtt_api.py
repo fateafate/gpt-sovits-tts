@@ -3071,7 +3071,7 @@ async def llm_endpoint(request: Request):
     option_lines = "\n".join("- %s (%s)" % (k, v) for k, v in emo_map.items())
     _gm_line = ""
     if gm_prompt:
-        _gm_line = "【主持人提示词(世界设定/朗读规则 · 全局约束, 所有判断与润色必须遵守)】\n%s\n\n" % gm_prompt
+        _gm_line = "【主持人语气指令(只影响这句话的朗读语气与表演方式; 这不是世界观设定, 不要据此编造、扩写或改变台词内容)】\n%s\n\n" % gm_prompt
     _role_line = ""
     if role or setting:
         _role_line = "你是 %s 的声音语气分析助手。角色提示词: %s\n" % (role or "该角色", setting or "无")
@@ -3186,7 +3186,7 @@ async def llm_polish_endpoint(request: Request):
         return JSONResponse(status_code=400, content={"ok": False, "message": "api key 未配置, 请在模块设置里填写后使用"})
     if not text:
         return JSONResponse(status_code=400, content={"ok": False, "message": "text required"})
-    _gm_polish_line = ("【主持人提示词(世界设定/朗读规则 · 全局约束, 必须遵守)】\n%s\n\n" % gm_prompt) if gm_prompt else ""
+    _gm_polish_line = ("【主持人语气指令(只影响这句话的朗读语气与表演方式; 这不是世界观设定, 不要据此编造、扩写或改变台词内容)】\n%s\n\n" % gm_prompt) if gm_prompt else ""
     sys_prompt = (
         _gm_polish_line + "你是台词润色助手。用户给你一句台词, 你需要把它润色成更能表达[%s]情绪的版本。"
         "硬性要求(违反即失败): 1) **逐字保留原台词的全部信息** — 严禁删除、替换、缩写、改写任何实词/数字/专有名词/称呼, 严禁改变句序句式, 严禁新增原句没有的事实信息; "
@@ -3721,7 +3721,7 @@ async def llm_assess_endpoint(request: Request):
             sprite_lines = "该角色可用立绘编号表(编号: 情绪/表情标注), 按台词语气情绪选最合适的一张:\n%s\n" % "\n".join("  %d: %s" % (i, l or "(未标注)") for i, l in valid[:40])
             sprite_map = {i: l for i, l in valid}
     option_lines = "\n".join("- %s (%s)" % (k, v) for k, v in emo_map.items())
-    _gm_assess_line = ("【主持人提示词(世界设定/朗读规则 · 全局约束, 必须遵守)】\n%s\n\n" % gm_prompt) if gm_prompt else ""
+    _gm_assess_line = ("【主持人语气指令(只影响这句话的朗读语气与表演方式; 这不是世界观设定, 不要据此编造、扩写或改变台词内容)】\n%s\n\n" % gm_prompt) if gm_prompt else ""
     sys_prompt = (
         _gm_assess_line + "你是语气分析+台词润色+立绘选择助手(%s)。任务：根据台词内容、角色性格及其所在对话上下文，判断说话者语气，并%s，同时为这句话选择最合适的立绘。\n"
         "%s"

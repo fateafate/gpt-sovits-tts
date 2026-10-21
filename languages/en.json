@@ -55,7 +55,7 @@
     "speedFactor": { "name": "Speech Speed", "hint": "0.5 - 2.0, 1.0 is normal." },
     "styleStrength": { "name": "Reading Prompt Strength", "hint": "0%: prompt does not change speed/pause; 100%: fully applies. Also adjustable per character." },
     "emotionFxStrength": { "name": "Emotion FX Strength (DSP)", "hint": "0% (recommended, same as Shinsekai): no pitch/tempo processing at all — emotion comes from the character's emotion reference audio (most natural). Higher values add slight speed/volume only (never pitch). Keep 0 if voices sound odd." },
-    "gmPrompt": { "name": "GM Prompt (world-level)", "hint": "Global instructions for the AI (world setting / reading style / wording rules). Injected into all AI calls (emotion / polish / sprite) together with character setting and reading prompt. Empty = not injected. Editable in the voice settings panel." },
+    "gmPrompt": { "name": "Tone Prompt (GM)", "hint": "Only describe the reading tone / delivery (e.g. 'angry, holding back', 'low voice with threat', 'light and lively'). It affects the tone of each line only and never changes the text — do NOT put world/story settings here. Empty = not injected. Also editable in the voice settings panel." },
     "volume": { "name": "Volume", "hint": "0 - 1." },
     "queueMode": {
       "name": "Playback Mode",
