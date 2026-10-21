@@ -3181,6 +3181,7 @@ async def llm_polish_endpoint(request: Request):
     context = str(body.get("context") or "").strip()[:2000]
     emotion = str(body.get("emotion") or "").strip()
     emotion_label = str(body.get("emotion_label") or emotion or "").strip()
+    gm_prompt = str(body.get("gm_prompt") or "").strip()[:2000]   # 1.6.89 主持人提示词(世界级全局约束) — 本端点无 setting/style 行, 需单独定义
     if not key:
         return JSONResponse(status_code=400, content={"ok": False, "message": "api key 未配置, 请在模块设置里填写后使用"})
     if not text:
