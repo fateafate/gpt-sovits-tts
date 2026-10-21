@@ -70,7 +70,7 @@
     },
     "triggerMode": {
       "name": "Trigger Mode",
-      "hint": "send = speak on send; typing = speak after a pause while typing (no send needed); both = both (no duplicate when already spoken during typing); manual = only commands/macros/replay button.",
+      "hint": "send = speak on send; typing = speak after a pause while typing (local preview, no send needed); both = both (speaks once more on send, for everyone else in the room); manual = only commands/macros/replay button.",
       "send": "On send",
       "typing": "While typing",
       "both": "Send + typing",
