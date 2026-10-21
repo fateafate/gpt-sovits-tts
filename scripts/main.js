@@ -5195,8 +5195,16 @@ Hooks.on("createChatMessage", (message) => {
         } catch (e2) { /* noop */ }
         const _emoList = spriteBucketForEmotion(cD.sprites, _eLabel, cD.emotion_tags);
         const _rot = getSpriteRotation(_roleN + "|" + _eLabel + "|ai", _eLabel);
+        if (!Array.isArray(_emoList) || !_emoList.length) return;
         const _av = cD.sprites[_emoList[_rot % _emoList.length]];
-        await message.update({ flags: { [MODULE]: { ..._fl, emotion: _e, avatar: _av } } }).catch(() => {});
+        if (!_av) return;
+        // 1.6.101 写回改为点路径 + 只写本次字段: 原先用 create 时的 _fl 快照整体覆盖 flags,
+        //   与 speak() 稍后写回的 audioUrl/audioData 竞争, 可能把音频写回冲掉(表现为"有声音但没立绘")
+        const _upd = {};
+        _upd[`flags.${MODULE}.emotion`] = _e;
+        _upd[`flags.${MODULE}.avatar`] = _av;
+        _upd[`flags.${MODULE}.aiSprite`] = _av;
+        await message.update(_upd).catch(() => {});
         try { if (message.element) applyEmotionAvatar(message, message.element); } catch (e2) { /* noop */ }
       } catch (e) { /* noop */ }
     })();
@@ -5407,13 +5415,23 @@ function _modulePath(au) {
 
 // 情绪→立绘 / 角色立绘: 消息带角色时, 在内容前显示该角色的立绘(语气槽立绘优先); 无角色不显示
 function applyEmotionAvatar(message, html) {
+  // 1.6.101 诊断: 记录"为什么没插立绘"(F12 执行 await fvttTTSDiag() 可看到; 全流程 catch 静默是排查黑洞)
+  const _why = (r) => {
+    try {
+      const lst = (window.__fvttTTSSpriteWhy = window.__fvttTTSSpriteWhy || []);
+      lst.push({ ts: Date.now(), mid: (message && message.id) || "", reason: String(r) });
+      while (lst.length > 20) lst.shift();
+      if (window.__fvttTTSSpriteVerbose) console.warn("[gpt-sovits-tts][立绘] 未插入: " + r);
+    } catch (e) { /* noop */ }
+    return undefined;
+  };
   try {
     const cfgM = getCfg();
     // 立绘展示方式: 仅指示物/都不显示 → 消息内不插图
-    if (cfgM.portraitMode !== "message" && cfgM.portraitMode !== "both") return;
+    if (cfgM.portraitMode !== "message" && cfgM.portraitMode !== "both") return _why("展示方式=" + cfgM.portraitMode + "(需 message/both)");
     const fl = message && message.flags ? (message.flags[MODULE] || null) : null;
     const el = html && (typeof html.querySelector === "function") ? html : null;
-    if (!el) return;
+    if (!el) return _why("无消息元素");
     // 立绘跟随朗读(1.6.6): 只有"实际合成/播放了语音"的消息才插立绘 — 纯文本/旁白/动作消息不插。
     // 判定: 消息 flags 已带音频(写回完成) 或 本端已播过该消息(playedIds / 已播 src)。
     // 新消息合成前渲染 → 无音频不插; 写回后 updateChatMessage 播放路径补插。
@@ -5428,7 +5446,7 @@ function applyEmotionAvatar(message, html) {
         return false;
       } catch (e) { return false; }
     })();
-    if (!hasAudio && !playedHere) return;
+    if (!hasAudio && !playedHere) return _why("未朗读(无音频flags且本机未播)");
     // 消息无角色 flags(AI 选角色失败/旧消息/直接内置框发送) → 用当前绑定角色兜底,
     // 保证"开启插图"一定有图可显(玩家端各自显示自己绑定的角色立绘)
     let role = (fl && fl.role) || "";
@@ -5463,12 +5481,37 @@ function applyEmotionAvatar(message, html) {
         if (pv && pv.avatar) av = pv.avatar;
       } catch (e) { /* noop */ }
     }
-    if (!av) return;   // 角色都没有立绘 → 不显示
+    // 1.6.101 最后兜底: 角色有立绘库但情绪槽/角色头像都没写 → 直接用立绘库第一张
+    //   (此前这种情况整条消息"只有语音没有立绘", 且没有任何提示, 用户无法判断是配置问题还是 bug)
+    if (!av && c && Array.isArray(c.sprites) && c.sprites.length) av = c.sprites[0];
+    if (!av) return _why("角色无任何立绘 role=" + (role || "(空)") + " 命中角色=" + (c ? "是" : "否") + " 立绘数=" + ((c && c.sprites && c.sprites.length) || 0));   // 角色都没有立绘 → 不显示
+    // 1.6.101 候选链 + 加载失败自动换下一张: 消息里固化的路径可能是旧目录/别的机器的绝对地址(404),
+    //   此前只写一个 src, 404 就整条消息"没有立绘/头像"且毫无提示; 现在逐级回退到语气槽立绘/角色头像/立绘库
+    const _cands = [];
+    const _pushC = (v) => { const s2 = String(v || "").trim(); if (s2 && _cands.indexOf(s2) < 0) _cands.push(s2); };
+    _pushC(av);
+    try {
+      if (fl) { _pushC(fl.selSprite); _pushC(fl.aiSprite); _pushC(fl.avatar); _pushC(fl.slotAvatar); }
+      if (slot && slot.avatar) _pushC(slot.avatar);
+      if (c) {
+        try { const _fe = (c.emotions || []).find(e => e && e.avatar); if (_fe) _pushC(_fe.avatar); } catch (e) { /* noop */ }
+        _pushC(c.avatar);
+        if (Array.isArray(c.sprites) && c.sprites.length) _pushC(c.sprites[0]);
+      }
+    } catch (e) { /* noop */ }
     const body = el.querySelector(".message-content") || el;
     // 同一消息只插一次
     if (body.querySelector(".fvtt-tts-emotion-avatar")) return;
     const img = document.createElement("img");
-    img.src = toAvatarUrl(av);
+    let _ci = 0;
+    img.src = toAvatarUrl(_cands[_ci] || av);
+    img.onerror = () => {
+      // 当前候选加载失败 → 换下一个; 全部失败 → 移除并记录原因(不再静默"什么都没有")
+      _ci++;
+      if (_ci < _cands.length) { img.src = toAvatarUrl(_cands[_ci]); return; }
+      try { img.remove(); } catch (e) { /* noop */ }
+      _why("立绘全部加载失败(" + _cands.length + "个候选) 首个=" + String(av).slice(-60));
+    };
     img.className = "fvtt-tts-emotion-avatar";
     img.alt = role || "";
     img.title = role || "";
@@ -5483,13 +5526,77 @@ function applyEmotionAvatar(message, html) {
       if (himg && av) {
         try {
           if (!himg.dataset.fvttOrigSrc) himg.dataset.fvttOrigSrc = himg.getAttribute("src") || "";   // 记住原始玩家头像(切"都不显示"时可恢复)
-          const _avAbs = toAvatarUrl(av);
+          const _avAbs = img.getAttribute("src") || toAvatarUrl(av);   // 1.6.101 用最终生效(含回退后)的那张, 避免头部头像 404
           if (himg.getAttribute("src") !== _avAbs) himg.setAttribute("src", _avAbs);
         } catch (e) { /* noop */ }
       }
     } catch (e) { /* noop */ }
   } catch (e) { /* noop */ }
 }
+
+// 1.6.101 立绘/头像诊断(作者排查用, 不改变任何行为): 在浏览器 F12 控制台执行
+//   await fvttTTSDiag()      → 打印模块版本/展示方式/角色数据/最近消息的 flags 与 DOM/未插原因
+//   结果同时写入剪贴板, 直接粘贴给作者即可定位"为什么没有立绘"
+window.fvttTTSDiag = async function fvttTTSDiag(n = 6) {
+  const L = [];
+  const P = (s) => { L.push(String(s)); };
+  try {
+    const cfgD = getCfg();
+    const mod = game.modules.get(MODULE);
+    const mv = (mod && (mod.version || (mod._source && mod._source.version) || (mod.data && mod.data.version))) || "?";
+    P("=== gpt-sovits-tts 立绘诊断 ===");
+    P("模块版本=" + mv + " | Foundry=" + String(game.version || (game.release && game.release.version) || "?") + " | 用户=" + (game.user && game.user.name) + "(GM=" + !!(game.user && game.user.isGM) + ")");
+    P("钩子已注册=" + JSON.stringify(window.__fvttTTSHooks || {}) + " | 可直连引擎=" + String(window.__fvttTTSCanDirect));
+    P("展示方式 portraitMode=" + cfgD.portraitMode + " | 立绘尺寸=" + cfgD.portraitSize + " | 引擎=" + cfgD.serverUrl + " | AI=" + (cfgD.llmEnabled ? "开" : "关") + (cfgD.llmKey ? "" : "(无key)"));
+    let qc = quickChars;
+    if (!qc || !Array.isArray(qc.chars) || !qc.chars.length) {
+      try { qc = await loadQuickChars({ force: true }); } catch (e) { /* noop */ }
+    }
+    const chars = (qc && qc.chars) || [];
+    P("角色数据: 来源=" + String((qc && qc._src) || "direct") + " | 角色数=" + chars.length);
+    chars.slice(0, 8).forEach(c => {
+      const et = String(c.emotion_tags || "").split(/\n+/).filter(l => /(立绘|sprite)/i.test(l)).length;
+      P("  · " + c.name + " | 立绘库=" + ((c.sprites || []).length) + " | 角色头像=" + (c.avatar || "(空)") + " | 情绪槽=" + ((c.emotions || []).length) + " | 标注行=" + et);
+    });
+    try {
+      const cs = getComputedStyle(document.body);
+      P("CSS 尺寸变量: 消息立绘=" + (cs.getPropertyValue("--fvtt-tts-portrait-size") || "(空)") + " 头部头像=" + (cs.getPropertyValue("--fvtt-tts-header-avatar-size") || "(空)"));
+    } catch (e) { /* noop */ }
+    try { P("本机当前角色=" + (loadVoiceProfile().current || "(未选)")); } catch (e) { /* noop */ }
+    const msgs = Array.from(game.messages.contents).slice(-Math.max(1, n));
+    P("--- 最近 " + msgs.length + " 条消息 ---");
+    msgs.forEach(m => {
+      const f = (m.flags && m.flags[MODULE]) || {};
+      let domHas = "未渲染", src = "", w = -1;
+      try {
+        const el = document.querySelector('.message[data-message-id="' + m.id + '"]');
+        if (el) {
+          const im = el.querySelector(".fvtt-tts-emotion-avatar");
+          domHas = im ? "有" : "无";
+          if (im) { src = im.getAttribute("src") || ""; w = im.naturalWidth || 0; }
+        }
+      } catch (e) { /* noop */ }
+      P("· " + String(m.content || "").replace(/\s+/g, " ").slice(0, 18)
+        + " | role=" + (f.role || "-") + " emo=" + (f.emotion || "-")
+        + " av=" + (f.avatar || "-") + " sel=" + (f.selSprite || "-") + " ai=" + (f.aiSprite || "-")
+        + " 音频=" + (f.audioData ? "内嵌" : (f.audioUrl ? "url" : "无")) + " 模块发送=" + (f.fromModSend ? "是" : "否")
+        + " | DOM立绘=" + domHas + (src ? " src=" + src.slice(-52) + " 加载宽=" + w : ""));
+    });
+    const why = (window.__fvttTTSSpriteWhy || []).slice(-10);
+    P("--- 未插立绘原因(最近 " + why.length + " 条) ---");
+    why.forEach(r => P("· " + r.reason + " | mid=" + (r.mid || "-")));
+    const dl = (window.__fvttTTSSpriteDiagList || []).slice(-8);
+    if (dl.length) {
+      P("--- 立绘判定(最近) ---");
+      dl.forEach(r => P("· 角色=" + r.role + " 情绪=" + r.emo + " 候选=" + r.cands + " 选中=" + r.av));
+    }
+    P("=== 结束(结果已尝试复制到剪贴板) ===");
+  } catch (e) { P("诊断异常: " + String((e && e.message) || e)); }
+  const txt = L.join("\n");
+  try { console.log("%c" + txt, "font-family:monospace"); } catch (e) { try { console.log(txt); } catch (e2) { /* noop */ } }
+  try { if (navigator.clipboard && navigator.clipboard.writeText) await navigator.clipboard.writeText(txt); } catch (e) { /* noop */ }
+  return txt;
+};
 
 // 无角色(默认音色)消息: AI 从角色列表选最像说话者的角色 → 更新 flags → 立绘随角色显示
 async function maybePickAvatarRole(message) {

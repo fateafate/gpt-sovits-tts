@@ -277,6 +277,7 @@ export class VoiceManager {
         <button type="button" class="fvtt-tts-vm-back" style="display:none">${t("vm.back", "返回")}</button>
         <button type="button" class="fvtt-tts-vm-finaltest" title="最终测试(一键全链路): 引擎连通 → LLM诊断 → 引擎自检 → 提示词强度 → 合成 → 句首音量(实测音频包络) → 情绪参考音/声线实测 → AI判语气/润色/选立绘; 跑完自动生成报告文件 engine\final_test_report.md">🏁 最终测试</button>
         <button type="button" class="fvtt-tts-vm-selfcheck" title="引擎机自检(仅主持人): CUDA/显存 · 激活角色模型齐全 · 参考音合规(时长/采样率) · ffmpeg · 角色包清单 · 磁盘空间 —— 部署专用 TTS 机时一键排查">🔧 引擎自检</button>
+        <button type="button" class="fvtt-tts-vm-avdiag" title="立绘诊断: 检查「为什么消息里没有立绘/头像」—— 展示方式 · 角色立绘库是否拉到 · 最近消息的 flags 与页面 DOM · 未插入原因。结果可一键复制发给作者">🩺 立绘诊断</button>
         <span class="fvtt-tts-vm-spacer" style="flex:1"></span>
         <button type="button" class="fvtt-tts-vm-test">${t("vm.test", "试听")}</button>
         <button type="button" class="fvtt-tts-vm-save">${t("vm.save", "保存")}</button>
@@ -293,6 +294,21 @@ export class VoiceManager {
         const sc = await (typeof window.runEngineSelfCheck === "function" ? window.runEngineSelfCheck() : null);
         if (!sc) ui.notifications.error("自检函数未就绪, 请刷新后重试");
       } catch (e) { ui.notifications.error("自检失败: " + String((e && e.message) || e).slice(0, 90)); }
+    });
+    // 1.6.101 立绘诊断按钮: 一键生成"为什么没有立绘/头像"的诊断文本(可复制)
+    const _adBtn = this.el.querySelector(".fvtt-tts-vm-avdiag");
+    if (_adBtn) _adBtn.addEventListener("click", async () => {
+      try {
+        ui.notifications.info("立绘诊断中…(读取展示方式/角色立绘库/最近消息 flags 与页面 DOM)");
+        const txt = (typeof window.fvttTTSDiag === "function") ? await window.fvttTTSDiag(8) : "";
+        if (!txt) { ui.notifications.error("诊断函数未就绪, 请刷新后重试"); return; }
+        new Dialog({
+          title: "🩺 立绘诊断(点文本框 Ctrl+A 全选 → Ctrl+C 复制, 发给作者即可定位)",
+          content: `<textarea readonly style="width:100%;height:420px;font-family:monospace;font-size:12px;white-space:pre;resize:vertical">${esc(txt)}</textarea>`,
+          buttons: { ok: { label: "关闭" } },
+          default: "ok",
+        }).render(true);
+      } catch (e) { ui.notifications.error("立绘诊断失败: " + String((e && e.message) || e).slice(0, 90)); }
     });
     const _ftBtn = this.el.querySelector(".fvtt-tts-vm-finaltest");
     if (_ftBtn) _ftBtn.addEventListener("click", async () => {
