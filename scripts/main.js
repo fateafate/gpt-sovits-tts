@@ -62,6 +62,8 @@ const SETTINGS = [
   ["sttAutoSpeak",  { type: Boolean, scope: "client", default: false,           name: "settings.sttAutoSpeak.name",  hint: "settings.sttAutoSpeak.hint" }],
   ["emotionSpeed",  { type: Boolean, scope: "client", default: true,            name: "settings.emotionSpeed.name",  hint: "settings.emotionSpeed.hint" }],
   ["translate",     { type: Boolean, scope: "client", default: false,           name: "settings.translate.name",      hint: "settings.translate.hint" }],
+  // 1.6.89 主持人提示词(世界级): 世界设定/朗读风格/用词禁忌, 注入所有 AI 调用(判语气/润色/选立绘/风格翻译)
+  ["gmPrompt",      { type: String,  scope: "world",  restricted: true, default: "", name: "settings.gmPrompt.name", hint: "settings.gmPrompt.hint" }],
   ["sttDevice",     { type: String,  scope: "client", default: "",               name: "settings.sttDevice.name",      hint: "settings.sttDevice.hint", choices: () => ttsDeviceChoices() }],
   ["hudTheme",      { type: String,  scope: "client", default: "dark",           choices: { dark: "settings.hudTheme.dark", pink: "settings.hudTheme.pink" }, name: "settings.hudTheme.name", hint: "settings.hudTheme.hint" }],
   ["gmMute",        { type: Boolean, scope: "world", default: false, restricted: true, name: "settings.gmMute.name", hint: "settings.gmMute.hint" }],
@@ -596,7 +598,7 @@ async function speak(text, { lang = null, sender = "", refAudioPath = null, prom
         if (!llmStyleHit) {
           try {
             const qcC = (quickChars && quickChars.chars || []).find(x => x.name === (prof0.current || ""));
-            const r = await svcRequest(cfg.serverUrl, "POST", "/llm/style", { base: cfg.llmBaseUrl || "https://api.openai.com/v1", key: cfg.llmKey, model: cfg.llmModel || "gpt-4o-mini", text: finalText, style: stylePrompt, role: prof0.current || "", setting: (qcC && qcC.setting) || "" }, { timeoutMs: 60000 });
+            const r = await svcRequest(cfg.serverUrl, "POST", "/llm/style", { base: cfg.llmBaseUrl || "https://api.openai.com/v1", key: cfg.llmKey, model: cfg.llmModel || "gpt-4o-mini", text: finalText, style: stylePrompt, role: prof0.current || "", setting: (qcC && qcC.setting) || "", gm_prompt: (cfg.gmPrompt || "") }, { timeoutMs: 60000 });
             const j = await r.json().catch(() => ({}));
             if (r.ok && j.ok) {
               llmStyleHit = { speed_factor: j.speed_factor, split: j.split };
@@ -1774,6 +1776,7 @@ async function judgeEmotionByLLM(text, charName, context) {
         text: String(text || ""),
         context: context || "",
         emotions: slots.map(s => ({ key: s.key, label: s.label })),
+        gm_prompt: (cfg.gmPrompt || ""),   // 1.6.89 主持人提示词(世界设定/朗读规则)
       }, { timeoutMs: 70000 });
     const j = await r.json().catch(() => ({}));
     if (!r.ok || !j.ok) {
@@ -1901,6 +1904,7 @@ async function polishTextByLLM(text, emotion, emotionLabel, context) {
         context: context || "",
         emotion: String(emotion || ""),
         emotion_label: String(emotionLabel || emotion || ""),
+        gm_prompt: (cfg.gmPrompt || ""),   // 1.6.89 主持人提示词(润色时同样遵守世界设定)
       }, { timeoutMs: 70000 });
     const j = await r.json().catch(() => ({}));
     if (!r.ok || !j.ok || !j.text) {
@@ -2023,6 +2027,7 @@ async function judgeAndPolishByLLM(text, charName, wantPolish, context) {
             setting: (c && c.setting) || "",
             sprites: buildSpriteList(c),   // 1.6.53 立绘编号表给AI: AI 按语气情绪选立绘(手动选立绘仍优先)
             style: (typeof getStylePrompt === "function" ? (getStylePrompt(charName || "") || "") : ""),   // 1.6.52 朗读提示词交给AI: 判语气+润色都参考它(Shinsekai式)
+            gm_prompt: (cfg.gmPrompt || ""),   // 1.6.89 主持人提示词(世界设定/朗读规则, 判语气+润色+选立绘全部遵守)
             polish: !!wantPolish,
           }, { timeoutMs: 70000 });
         const j = await r.json().catch(() => ({}));
@@ -4333,6 +4338,11 @@ window.runFinalTest = async function runFinalTest() {
     } else push("- AI 调用统计: 引擎未返回统计(可能是旧引擎)");
   } catch (e) { push("- AI 调用统计: 查询失败(" + String((e && e.message) || e).slice(0, 60) + ")"); }
   push("- 朗读提示词: " + (style || "(未填)") + " | AI润色=" + (cfg.llmPolish ? "开" : "关"));
+  // 1.6.89 主持人提示词(世界级): 显示是否配置, 便于确认 AI 注入内容
+  try {
+    const _gmP = String(cfg.gmPrompt || "");
+    push("- 主持人提示词(世界级): " + (_gmP ? ("已配置 " + _gmP.length + " 字: " + _gmP.slice(0, 60) + (_gmP.length > 60 ? "…" : "")) : "(未填 · 不注入)"));
+  } catch (e) { /* noop */ }
   // 1.6.74 明确"合成压力在哪台机器": 本机直连=用自己的引擎; GM代理=委托给语音生成者
   try {
     const _su = String(cfg.serverUrl || "");
@@ -4613,6 +4623,7 @@ function aiJudgeEmotionNow(text, role) {
         base: cfg.llmBaseUrl || "https://api.openai.com/v1", key: cfg.llmKey, model: cfg.llmModel || "gpt-4o-mini",
         text: String(text || "").slice(0, 1200), role: role || prof.current || "", setting: (qcC && qcC.setting) || "", emotions: emos,
         style: getStylePrompt(role || prof.current || "") || "",   // 1.6.47 朗读风格作LLM判语气参考(Shinsekai式: 风格=给AI决定这句子语气)
+        gm_prompt: (cfg.gmPrompt || ""),   // 1.6.89 主持人提示词(世界设定/朗读规则)
       }, { timeoutMs: 10000, retries: 0 });   // 1.6.87 判语气超时 4s→10s: DeepSeek 等外部 LLM 首字常需 3~6s, 4s 会一直超时降级; 仍不重试, 失败照旧降级规则
       const j = r.jsonSafe ? r.jsonSafe() : (r.json || {});
       if (j && j.ok && j.emotion) return String(j.emotion);

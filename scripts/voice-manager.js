@@ -419,6 +419,8 @@ export class VoiceManager {
     // AI 接入 (LLM 语气判断, 可选): 直接在面板顶部填写网址+密钥, 输入完自动检测模型并填充下拉
     let aiBase = "", aiKeySet = false, aiKeyVal = "", aiEnabled = false, aiModel = "", aiModels = [], _cfgTextLang = "", _gmMute = false;
     let _shBaseV = "", _shKeyV = "", _shModelV = "";   // 1.6.82 世界共享配置(会覆盖本机值, 需在 UI 明示)
+    // 1.6.89 主持人提示词(世界级): 世界设定/朗读规则 → 注入所有 AI 调用
+    const _gmPromptVal = (() => { try { return String(game.settings.get("gpt-sovits-tts", "gmPrompt") || ""); } catch (e) { return ""; } })();
     try {
       // AI 接入区显示: GM 分发的世界共享配置优先(pl 只读, 面板如实反映共享生效状态)
       const _shB = game.settings.get("gpt-sovits-tts", "aiSharedBase") || "";
@@ -485,6 +487,15 @@ export class VoiceManager {
              <button type="button" class="fvtt-tts-vm-btn vm-ai-share-clear">🗑 ${t("vm.aiShareClear", "一键收回所有玩家配置")}</button>`
           : `<span class="fvtt-tts-vm-hint">${t("vm.aiSharedNote", "AI 配置由主持人提供（只读，无需填写）")}</span>`
       }</div></section>
+    <section class="fvtt-tts-vm-sec">
+      <div class="fvtt-tts-vm-title2">📜 ${t("vm.gmPromptTitle", "主持人提示词（世界级 · 注入所有 AI 判断）")}</div>
+      <div class="fvtt-tts-vm-hint">${t("vm.gmPromptHint", "写给 AI 的全局设定：世界背景、朗读风格、用词禁忌等。与「角色设定」「朗读提示词」一起注入 AI 判语气/润色/选立绘。留空则不注入。")}</div>
+      <textarea class="fvtt-tts-vm-gmprompt" rows="4" ${isGM ? "" : "readonly"} placeholder="${esc(t("vm.gmPromptPh", "例：\n世界设定：弹丸论破学园的日常…\n朗读风格：所有角色说话偏冷静克制，不用网络流行语\n称呼规则：称玩家为「同学」"))}">${esc(_gmPromptVal)}</textarea>
+      <div class="fvtt-tts-vm-row">
+        ${isGM ? `<button type="button" class="fvtt-tts-vm-btn vm-gmprompt-save">💾 ${t("vm.gmPromptSave", "保存主持人提示词")}</button>` : `<span class="fvtt-tts-vm-hint">${t("vm.gmPromptReadonly", "由主持人统一设置（只读）")}</span>`}
+        <span class="fvtt-tts-vm-ai-status vm-gmprompt-status"></span>
+      </div>
+    </section>
     <section class="fvtt-tts-vm-sec">
       <div class="fvtt-tts-vm-title2">🔇 ${t("vm.gmMuteTitle", "全局静音")}</div>
       ${(() => { const _gmMuteState = _gmMute ? t("vm.gmMuteOn", "已静音") : t("vm.gmMuteOff", "正常");
@@ -998,6 +1009,20 @@ function safeAssignments() {
     });
     if (aiModelSel) aiModelSel.addEventListener("change", () => {
       try { game.settings.set("gpt-sovits-tts", "llmModel", aiModelSel.value || ""); } catch (e) { /* noop */ }
+    });
+    // 1.6.89 主持人提示词保存(仅 GM; world 设置, 注入所有 AI 调用: 判语气/润色/选立绘/风格翻译)
+    const _gmPromptTa = body.querySelector(".fvtt-tts-vm-gmprompt");
+    const _gmPromptSaveBtn = body.querySelector(".vm-gmprompt-save");
+    if (_gmPromptSaveBtn && _gmPromptTa) _gmPromptSaveBtn.addEventListener("click", async () => {
+      try {
+        if (!(game.user && game.user.isGM)) { ui.notifications.warn("仅主持人可修改主持人提示词"); return; }
+        const _v = String(_gmPromptTa.value || "").slice(0, 2000);
+        await game.settings.set("gpt-sovits-tts", "gmPrompt", _v);
+        const _st = body.querySelector(".vm-gmprompt-status");
+        if (_st) _st.textContent = "✓ 已保存（" + _v.length + " 字）";
+        try { ui.notifications.info("主持人提示词已保存（" + _v.length + " 字），下一句起生效"); } catch (e2) { /* noop */ }
+        try { window.__fvttTTSLlmBroken = false; } catch (e2) { /* noop */ }
+      } catch (e) { ui.notifications.error("保存失败: " + String((e && e.message) || e)); }
     });
     // 朗读语言(自动翻译目标): 面板内直接切换
     const vmLang = body.querySelector(".fvtt-tts-vm-lang");
