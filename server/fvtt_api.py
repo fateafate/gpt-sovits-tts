@@ -3955,11 +3955,12 @@ async def llm_assess_endpoint(request: Request):
         "1) emotion 必须是上面选项里的 key 之一；\n"
         "2) polish 逐字保留原台词信息：只许在句首/句尾加语气词(呀/呢/哦/啦/嘛)与标点(……、！、？、——)，严禁删改实词/数字/专名/称呼、严禁改句序、严禁新增事实；去标点后字数差异≤10%%；做不到就原样返回；\n"
         "3) 判断顺序：①【主持人语气指令】优先 ②台词本身与角色性格 ③上下文仅辅助；\n"
-        "5) 只输出一个 JSON 对象: {\"emotion\":\"key\",\"polish\":\"...\"%s}，不要解释、不要 markdown。" % (",\"sprite\":编号" if _has_sprite else "")
+        "输出格式：只输出一行 `情绪key|润色后的台词`（竖线分隔；不要 JSON、不要引号、不要解释、不要 markdown）；不需要润色就输出 `情绪key|` %s。" % (("立绘编号规则见上，sprite 只用于日志" if _has_sprite else ""))
     )
     sys_prompt = (
         _gm_assess_line
-        + ("角色：%s" % (role_name or "未知")) + ("　设定：%s" % setting if setting else "") + "\n"
+        + "【输出规则(最高优先)】不要思考、不要分析、不要解释、不要写推理过程，第一行就直接给答案行：`情绪key|润色后的台词`（竖线分隔）；不需要润色就写 `情绪key|`。\n"
+        + ("角色：%s" % (role_name or "未知")) + ("\u3000设定：%s" % setting if setting else "") + "\n"
         + ("朗读提示词（语气与润色优先贴合它）：%s\n" % style if style else "")
         + ("可用语气：" + "、".join("%s(%s)" % (k, str(v)[:10]) for k, v in emo_map.items()) + "\n")
         + (sprite_lines if _has_sprite else "")
@@ -3982,41 +3983,57 @@ async def llm_assess_endpoint(request: Request):
         "temperature": 0.2,
         "max_tokens": _max_out,
     }
-    # 1.6.119 先试 JSON 模式(OpenAI 兼容): 模型直接吐 JSON, 不再输出"We need answer only JSON"这类思考文字
-    _payload_json = dict(payload)
-    _payload_json["response_format"] = {"type": "json_object"}
-    data, _llm_status, llm_err = await asyncio.to_thread(_llm_chat_call, _payload_json, base, key, 25)
-    if data is None:
-        # 有些中转站不支持 response_format → 退回普通模式再试一次
-        try:
-            with open(os.path.join(os.path.dirname(__file__), "tts-requests.log"), "a", encoding="utf-8") as _lf:
-                _lf.write("[%s] [llm-assess] json_mode 失败, 退回普通模式: %s\n" % (time.strftime("%H:%M:%S"), str(llm_err or "")[:120]))
-        except Exception:
-            pass
-        data, _llm_status, llm_err = await asyncio.to_thread(_llm_chat_call, payload, base, key, 25)
+    # 1.6.120 单行协议不需要 response_format; 预算按"思考前缀 + 一行结果"给足(推理模型常先写 ~150 token 思考)
+    # 1.6.121 不再用"小上限"省 token(那会截断答案 → 更费): 给足预算, 靠提示词让对方少写废话
+    #   润色: 至少 900(推理型模型常先写 300~600 token 思考, 答案本身很短); 只判语气: 至少 200
+    _max_out = max(_max_out, 900 if want_polish else 200)
+    payload["max_tokens"] = _max_out
+    data, _llm_status, llm_err = await asyncio.to_thread(_llm_chat_call, payload, base, key, 25)
     if data is None:
         return JSONResponse(status_code=200, content={"ok": False, "message": "LLM 请求失败(无AI语气, 语音不受影响): %s" % (llm_err or "unknown")})
     content = ""
     emo = ""
     polish = ""
     sprite = 0
+    _reasoning_only = False   # 1.6.120: True = 模型把 answer 也塞进 reasoning_content(推理模型 + 预算被打光)
     try:
         msg = (data.get("choices") or [{}])[0].get("message", {}) or {}
         content = str(msg.get("content") or "").strip()
         if not content:
             content = str(msg.get("reasoning_content") or "")
+            _reasoning_only = bool(content)
     except Exception:
         content = ""
+    # 1.6.120 单行协议优先: 推理型模型会先输出思考文字, 取「最后一行含竖线的行」最稳
+    try:
+        _lines = [l.strip() for l in str(content or '').splitlines() if l.strip()]
+        _best = None
+        for _ln in _lines:
+            if '|' not in _ln:
+                continue
+            _a, _b = _ln.split('|', 1)
+            _a = _a.strip(chr(96) + chr(34) + chr(39) + chr(32) + chr(0x3000))
+            _b = _b.strip(chr(96) + chr(34) + chr(39))
+            if _a in emo_map:
+                _best = (_a, _b)   # 继续找: 保留最后一条合法答案行
+        if _best:
+            emo, polish = _best
+    except Exception:
+        pass
     # 容错: 剥离 markdown 代码块后尝试 JSON
     content = re.sub(r"^```(?:json)?\s*", "", content, flags=re.IGNORECASE)
     content = re.sub(r"\s*```$", "", content, flags=re.IGNORECASE)
-    m = re.search(r"\{.*\}", content, re.DOTALL)
+    m = re.search(r"\{[^{}]*\}", content, re.DOTALL)   # 只匹配扁平 JSON, 避免思考文字里的花括号
     if m:
         try:
             parsed = json.loads(m.group(0))
             if isinstance(parsed, dict):
-                emo = str(parsed.get("emotion") or "").strip().lower()
-                polish = str(parsed.get("polish") or "").strip()
+                _je = str(parsed.get("emotion") or "").strip().lower()
+                _jp = str(parsed.get("polish") or "").strip()
+                if _je in emo_map:
+                    emo = _je
+                    if _jp:
+                        polish = _jp
                 try:
                     _sp = int(parsed.get("sprite") or 0)
                     if _sp in sprite_map:
@@ -4039,7 +4056,34 @@ async def llm_assess_endpoint(request: Request):
         if len(t) > 1:
             polish = t[:2000]
     _usage = data.get("usage") if isinstance(data, dict) else None
-    return {"ok": True, "emotion": emo, "polish": polish[:2000] if polish else "", "sprite": sprite, "raw": content[:80], "usage": _usage or {}}
+    # 1.6.120 润色校验(服务端也做一次, 与客户端 polishIsSafe 对齐): 去标点后字数差异 > 20% 视为改写过大, 丢弃
+    try:
+        if polish:
+            _punc = "[\\s\\u3000，。！？、；：,.!?;:~…—\\-（）()「」『』\"']+"
+            _strip = lambda z: re.sub(_punc, "", str(z or ""))
+            _a0, _b0 = _strip(text), _strip(polish)
+            if _a0 and (len(_b0) == 0 or abs(len(_b0) - len(_a0)) / float(len(_a0)) > 0.2):
+                polish = ""
+    except Exception:
+        pass
+    # 1.6.121 仅作信息标记(模型思考较多/答案在 reasoning 通道), **不再用它关闭润色** ——
+    #   润色属于"重要消耗", 不能被砍; 省 token 靠"减少调用次数 + 提示词少废话"
+    #   判据: 没解析出正式答案 + content 很长
+    try:
+        if (not _reasoning_only) and want_polish and (not polish) and isinstance(content, str) and len(content) > 100:
+            _reasoning_only = True
+    except Exception:
+        pass
+    if _reasoning_only:
+        try:
+            with open(os.path.join(os.path.dirname(__file__), "tts-requests.log"), "a", encoding="utf-8") as _lf:
+                _lf.write("[%s] [llm-assess] reasoning-only(推理模型预算用尽, content 为空) emo=%s polish_len=%d\n" % (
+                    time.strftime("%H:%M:%S"), emo, len(polish)))
+        except Exception:
+            pass
+    return {"ok": True, "emotion": emo, "polish": polish[:2000] if polish else "", "sprite": sprite,
+            "reasoning_only": _reasoning_only,
+            "raw": (content[:120] if isinstance(content, str) else ""), "usage": _usage or {}}
 
 
 if __name__ == "__main__":

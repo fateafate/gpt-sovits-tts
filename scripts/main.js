@@ -19,7 +19,7 @@ window.fetchAndRefreshModels = fetchAndRefreshModels;
 const MODULE = "gpt-sovits-tts";
 // 1.6.103 代码版本号: Foundry 的 game.modules.get(id).version 读的是"载入世界时的清单缓存",
 //   改了 manifest 不刷新会一直显示旧版本(用户多次看到 1.6.96 而实际代码已是新版) → 报告里同时打印两者, 便于确认真的在跑新代码
-const MOD_VERSION = "1.6.119";
+const MOD_VERSION = "1.6.121";
 const CHAT_STYLES = (typeof CONST !== "undefined" && (CONST.CHAT_MESSAGE_STYLES || CONST.CHAT_MESSAGE_TYPES)) || {};
 
 /* ============ 设置定义 ============ */
@@ -2320,6 +2320,7 @@ async function judgeAndPolishByLLM(text, charName, wantPolish, context) {
             // 1.6.117 立绘改由"情绪槽自带的图"决定(slot.avatar), 不再让 AI 从 20+ 张里挑 → 省 200~400 token/次;
             //   仅当角色没有情绪槽立绘时才回退成"发立绘表让 AI 选"(老角色兼容)
             sprites: _needSpriteList ? buildSpriteList(c) : [],
+            // 1.6.121 润色是"重要消耗", 不因模型类型而关闭; 省 token 靠减少调用次数与提示词约束
             style: (typeof getStylePrompt === "function" ? (getStylePrompt(charName || "") || "") : ""),   // 1.6.52 朗读提示词交给AI: 判语气+润色都参考它(Shinsekai式)
             gm_prompt: (cfg.gmPrompt || ""),   // 1.6.89 主持人提示词(世界设定/朗读规则, 判语气+润色+选立绘全部遵守)
             polish: !!wantPolish,
@@ -2330,8 +2331,17 @@ async function judgeAndPolishByLLM(text, charName, wantPolish, context) {
           let _pol = String(j.polish || "").trim();
           if (_pol && !polishIsSafe(text, _pol)) {
             try { console.debug("[gpt-sovits-tts] AI 润色被安全校验拒绝(改动过大), 使用原台词"); } catch (e) { /* noop */ }
+            try { window.__fvttTTSPolishRejected = (Number(window.__fvttTTSPolishRejected || 0) + 1); } catch (e) { /* noop */ }
             _pol = "";
           }
+          // 1.6.121 推理型模型(思考文字占预算)只记录次数, 不关闭润色
+          try {
+            if (j && j.reasoning_only === true) {
+              window.__fvttTTSPolishUnsupported = false;
+              window.__fvttTTSReasoningHeavy = (Number(window.__fvttTTSReasoningHeavy || 0) + 1);
+              try { console.debug("[gpt-sovits-tts] 本句答案来自模型思考通道(该模型偏推理型)；润色保持开启。若长期拿不到润色, 建议换非推理模型(如 deepseek-chat / gpt-4o-mini)。"); } catch (e2) { /* noop */ }
+            }
+          } catch (e2) { /* noop */ }
           try {
             const _u = j && j.usage || {};
             const _in = Number(_u.prompt_tokens || _u.input_tokens || 0) || (_tokEstimate(String(text || "")) + 320);
@@ -4663,7 +4673,8 @@ window.runFinalTest = async function runFinalTest() {
   push("# GPT-SoVITS TTS 最终测试报告");
   push("");
   push("- 时间: " + new Date().toLocaleString("zh-CN") + " | 执行者: " + opName + " | 当前角色: " + cn + " | 代码版本: " + MOD_VERSION + "(清单缓存显示 " + verTxt + ")");
-  push("- 测试脚本: **v4**(模块 " + MOD_VERSION + " 内置) | 覆盖: 〇改动自检 · 环境与配置 · AI/Key · 语气提示 · 朗读提示词(强度) · 情绪参考音 · **多场景实测(6 条)** · 立绘实物 · 语气送达 · 代理合成 · 白名单/按钮/去重 · 需求对照");
+  push("- 版本断言: 代码版本=" + MOD_VERSION + " | Foundry 清单缓存=" + verTxt + (String(verTxt) === String(MOD_VERSION) ? " ✓ 一致" : "（清单缓存落后属正常，只要下面的版本断言 ✓ 且工具栏出现 🩺 立绘诊断，就是在跑新代码）"));
+  push("- 测试脚本: **v5**(模块 " + MOD_VERSION + " 内置) | 覆盖: 〇改动自检 · 环境与配置 · AI/Key · 语气提示 · 朗读提示词(强度) · 情绪参考音 · **多场景实测(6 条)** · 立绘实物 · 语气送达 · 代理合成 · 白名单/按钮/去重 · 需求对照");
   push("  (v4: 把 1.6.96~1.6.111 所有未经实测的改动都拉进判定 —— 多场景语气/立绘、情绪占比 0=自动、四滑块 0=自动、代理合成、白名单、AI 去重、崩溃上报; 任一项不符都会进失败清单)");
   push("");
   push("## 一、环境与配置");
@@ -5173,6 +5184,65 @@ window.runFinalTest = async function runFinalTest() {
     }
   } catch (e) { push("- 语气送达检查异常: " + String((e && e.message) || e).slice(0, 70)); }
   push("");
+  // 1.6.121 三·I: "省 token 机制"实测 —— 直接看引擎侧调用计数, 不靠感觉
+  push("");
+  push("## 三·I、AI 省 token 机制实测(每句只 1 次调用 / 快路径 0 次)");
+  push("");
+  try {
+    const _statCalls = async () => {
+      try {
+        const r = await svcRequest(cfg.serverUrl, "GET", "/llm/stats", null, { timeoutMs: 8000, retries: 0 });
+        const j = (r && typeof r.json === "function") ? await r.json().catch(() => ({})) : {};
+        return (j && j.stats) || null;
+      } catch (e) { return null; }
+    };
+    const _send = async (text) => {
+      const m = await ChatMessage.create({ content: text, speaker: { alias: cn }, flags: { [MOD]: { fromModSend: true, role: cn, lang: "zh", emotion: "", speed: 0, emotionMix: 0, emotionMod: 0 } } });
+      if (m && m.id) _testMsgIds.push(m.id);
+      let w = 0;
+      let aud = "";
+      while (w < 200) {
+        try {
+          const mm = game.messages.get(m.id);
+          const f = mm && mm.flags && mm.flags[MOD];
+          if (f && f.audioUrl) { aud = String(f.audioUrl); break; }
+        } catch (e) { /* noop */ }
+        await new Promise(r => setTimeout(r, 200)); w++;
+      }
+      return { id: m && m.id, audio: !!aud };
+    };
+    const _s0 = await _statCalls();
+    const _c0 = Number((_s0 && _s0.calls) || 0);
+    const _r1 = await _send("省 token 机制测试：正常模式。");
+    const _s1 = await _statCalls();
+    const _d1 = Number((_s1 && _s1.calls) || 0) - _c0;
+    push("- 正常模式发 1 句: 引擎收到 AI 调用 **" + Math.max(0, _d1) + " 次**（期望 1；0=命中 30 分钟缓存；≥2=仍有重复判定）" + (_r1.audio ? " | 合成 ✓" : " | 合成 ✗"));
+    if (_d1 >= 2) fails.push("每句只调1次AI");
+    if (_r1.audio === false) fails.push("省token测试合成");
+    // 零 token 快路径: 临时关闭 AI 润色 + 提示词已能定情绪 → 应 0 次调用
+    let _pol0 = null;
+    try { _pol0 = getCfg().llmPolish; } catch (e) { /* noop */ }
+    try { await game.settings.set(MODULE, "llmPolish", false); } catch (e) { /* noop */ }
+    await new Promise(r => setTimeout(r, 300));
+    const _sty0 = (() => { try { return getStylePrompt(cn) || ""; } catch (e) { return ""; } })();
+    let _se = "";
+    try { _se = styleEmotionKey(_sty0); } catch (e) { /* noop */ }
+    if (!_se) {
+      push("- 快路径: 跳过（当前朗读提示词不能确定情绪：\"" + _sty0.slice(0, 14) + "\"）");
+    } else {
+      const _c1 = Number((_s1 && _s1.calls) || 0);
+      const _r2 = await _send("省 token 机制测试：零 token 快路径。");
+      const _s2 = await _statCalls();
+      const _d2 = Number((_s2 && _s2.calls) || 0) - _c1;
+      push("- 关掉 AI 润色 + 提示词已定情绪（" + _se + "）再发 1 句: 引擎收到 AI 调用 **" + Math.max(0, _d2) + " 次**（期望 0；1=快路径没生效）" + (_r2.audio ? " | 合成 ✓" : " | 合成 ✗"));
+      if (_d2 > 0) fails.push("零token快路径");
+      if (!_r2.audio) fails.push("快路径合成");
+    }
+    try { if (_pol0 !== null) await game.settings.set(MODULE, "llmPolish", _pol0); } catch (e) { /* noop */ }
+    const _s3 = await _statCalls();
+    if (_s3) push("- 引擎侧 token: 累计输入 " + (_s3.in_tokens || 0) + " · 输出 " + (_s3.out_tokens || 0) + "（最近一次 " + (_s3.last_in || 0) + "/" + (_s3.last_out || 0) + "）");
+  } catch (e) { push("- 省 token 实测异常: " + String((e && e.message) || e).slice(0, 80)); }
+
   // 1.6.112 三·D: 玩家端代理合成(玩家说话时的链路) —— GM 端直接调用代理核心做实测
   push("");
   _mark("语气送达");
@@ -5318,6 +5388,7 @@ window.runFinalTest = async function runFinalTest() {
     _req.push(["提示词强度可影响语速(0% 与 50% 对比)", _strengthOk === null ? "未测" : _strengthOk]);
     _req.push(["AI 判语气/润色/选立绘链路可用", !!llmOk]);
     _req.push(["AI 润色在多场景里真实生效", _rows.some(r => r.polish)]);
+    try { if (Number(window.__fvttTTSPolishRejected || 0) > 0) push("- 注: 有 " + window.__fvttTTSPolishRejected + " 次 AI 润色因「改写过大」被安全校验丢弃（属保护机制，不是失败）"); } catch (e) { /* noop */ }
     _req.push(["关键词情绪(害羞/愤怒/温柔/悲伤)能被识别", _rows.length > 0 && _rows.filter(r => r.emo).length >= _rows.length - 1]);
     _req.push(["玩家端代理合成可用(玩家/iPad 也能有声)", !fails.some(f => String(f).indexOf("代理合成") >= 0)]);
     _req.push(["非模块发送框消息不朗读(白名单)", !fails.some(f => String(f) === "朗读白名单")]);
@@ -6286,6 +6357,8 @@ window.fvttTTSDiag = async function fvttTTSDiag(n = 6) {
       P("CSS 尺寸变量: 消息立绘=" + (cs.getPropertyValue("--fvtt-tts-portrait-size") || "(空)") + " 头部头像=" + (cs.getPropertyValue("--fvtt-tts-header-avatar-size") || "(空)"));
     } catch (e) { /* noop */ }
     try { P("本机当前角色=" + (loadVoiceProfile().current || "(未选)")); } catch (e) { /* noop */ }
+    // 1.6.120 润色能力(推理模型会自动关闭)
+    try { P("AI 润色: " + (getCfg().llmPolish ? "开启" : "关闭") + (Number(window.__fvttTTSReasoningHeavy || 0) > 0 ? ("（本会话有 " + window.__fvttTTSReasoningHeavy + " 次答案来自思考通道：模型偏推理型，建议换 deepseek-chat / gpt-4o-mini 以更省）") : "")); } catch (e) { /* noop */ }
     // 1.6.118 情绪参考音体检: 多少槽短于 3 秒(短样本靠引擎重复拼接兜底, 音质不如原生 3~10 秒)
     try {
       const _rf = await svcRequest(getCfg().serverUrl, "GET", "/refs?role=" + encodeURIComponent(cn || ""), null, { timeoutMs: 12000, retries: 0 });
