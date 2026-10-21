@@ -473,6 +473,49 @@ def _boost_head(arr, sr, ms=80, start_gain=1.4):
     return arr
 
 
+def _ensure_ref_len(path, min_s=3.0, max_s=10.0):
+    """1.6.115 参考音时长兜底: GPT-SoVITS 要求参考音 3~10 秒。
+    情绪参考音经常只有 1~2 秒 → 以前 `_prepare_ref(allow_short)` 补静音到 3 秒, 随后 `_trim_lead_silence`
+    又把静音裁掉 → 时长掉回 <3 秒 → 引擎直接报 400 "参考音频在3~10秒范围外"。
+    现在改为**重复拼接**(保留原韵律, 不用静音凑), 超过 10 秒则截断。"""
+    if not path or not os.path.isfile(path):
+        return path
+    try:
+        data, sr = sf.read(path, dtype="float32")
+        if data is None or len(data) == 0:
+            return path
+        if data.ndim > 1:
+            data = np.mean(data, axis=1)
+        sr = int(sr or 0)
+        if sr <= 0:
+            return path
+        dur = len(data) / float(sr)
+        if (dur >= min_s - 0.02) and (dur <= max_s + 0.02):
+            return path          # 已在 3~10 秒内, 不动
+        if dur <= 0.15:
+            return path          # 太短(几乎无内容), 交给上层决定
+        if dur < min_s:
+            reps = int(min_s / dur) + 1
+            data = np.tile(data, reps)
+        if len(data) > int(max_s * sr):
+            data = data[:int(max_s * sr)]
+        # 拼接后加 10ms 淡入/淡出, 避免接缝处爆音
+        try:
+            _n = int(0.01 * sr)
+            if _n > 1 and len(data) > (2 * _n):
+                _ramp = np.linspace(0.0, 1.0, _n, dtype="float32")
+                data = data.copy()
+                data[:_n] *= _ramp
+                data[-_n:] *= _ramp[::-1]
+        except Exception:
+            pass
+        out = os.path.join(os.path.dirname(path), os.path.basename(path).replace(".wav", "") + ".len%d-%d.wav" % (int(min_s), int(max_s)))
+        sf.write(out, data, sr)
+        return out
+    except Exception:
+        return path
+
+
 def _trim_lead_silence(path, max_trim_s=0.35, thresh=0.005):
     """裁剪参考音频开头静音(情绪样本通常开头起音弱 → 合成开头跟着弱):
     裁掉开头振幅≤thresh 的静音段(最多 max_trim_s 秒), 让参考段开头直接有语音能量."""
@@ -1661,6 +1704,20 @@ async def tts_handle(req: dict):
         _vram = float(HW_INFO.get("gpu_mem_total_gb", 0) or 0)
         _bs = 6 if _vram >= 14 else (3 if _vram >= 8 else (2 if _vram >= 4 else 1))
     req["batch_size"] = _bs
+
+    # 1.6.115 最终参考音时长兜底(必须在 check_params 之前): 情绪参考音常 1~2 秒,
+    #   裁静音后会掉出 3~10 秒范围 → check_params 直接 400 "参考音频在3~10秒范围外"。
+    try:
+        _before = str(req.get("ref_audio_path") or "")
+        req["ref_audio_path"] = _ensure_ref_len(req.get("ref_audio_path"))
+        if str(req.get("ref_audio_path") or "") != _before:
+            try:
+                with open(os.path.join(os.path.dirname(__file__), "tts-requests.log"), "a", encoding="utf-8") as _lf:
+                    _lf.write("[%s] [tts-len] 参考音时长兜底(重复拼接) -> %s\n" % (time.strftime("%H:%M:%S"), str(req.get("ref_audio_path")).split("\\")[-1]))
+            except Exception:
+                pass
+    except Exception:
+        pass
 
     check_res = check_params(req)
     if check_res is not None:

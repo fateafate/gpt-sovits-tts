@@ -19,7 +19,7 @@ window.fetchAndRefreshModels = fetchAndRefreshModels;
 const MODULE = "gpt-sovits-tts";
 // 1.6.103 代码版本号: Foundry 的 game.modules.get(id).version 读的是"载入世界时的清单缓存",
 //   改了 manifest 不刷新会一直显示旧版本(用户多次看到 1.6.96 而实际代码已是新版) → 报告里同时打印两者, 便于确认真的在跑新代码
-const MOD_VERSION = "1.6.114";
+const MOD_VERSION = "1.6.115";
 const CHAT_STYLES = (typeof CONST !== "undefined" && (CONST.CHAT_MESSAGE_STYLES || CONST.CHAT_MESSAGE_TYPES)) || {};
 
 /* ============ 设置定义 ============ */
@@ -650,6 +650,24 @@ async function speak(text, { lang = null, sender = "", refAudioPath = null, prom
     }
   } catch (e) { /* 保底 */ }
 
+  // 1.6.115 合成兜底: 若引擎因"参考音时长不合格(3~10s)"等 400 拒绝, 自动去掉情绪参考音重试一次
+  //   (情绪样本太短的角色仍能有声音; 只是这一句退回默认音色, 不再整句失败)
+  const _synthSafe = async (txt2, lang2, opts2) => {
+    try {
+      return await _synthIt(txt2, lang2, opts2);
+    } catch (e1) {
+      const _m = String((e1 && e1.message) || e1);
+      const _ov = opts2 && opts2.ov;
+      if (!(_ov && Array.isArray(_ov.auxRefAudioPaths) && _ov.auxRefAudioPaths.length)) throw e1;
+      if (!/参考音|400|Bad Request|3~10/i.test(_m)) throw e1;
+      try { console.warn("[gpt-sovits-tts] 情绪参考音被引擎拒绝(时长/格式), 本句自动退化为默认参考音:", _m.slice(0, 120)); } catch (e2) { /* noop */ }
+      const _ov2 = { ..._ov };
+      delete _ov2.auxRefAudioPaths;
+      delete _ov2.emotionMix;
+      return await _synthIt(txt2, lang2, { ...opts2, ov: _ov2, emotionFallback: true });
+    }
+  };
+
   // ---- 1.6.109 「情绪占比 0」陷阱: 情绪槽音频就是这句话的语气本身 ----
   //   以前 profile/flags 里若存着 emotionMix=0(情绪占比滑到 0%), 引擎按"纯默认"把 aux 丢掉 →
   //   引擎日志里能看到 aux 有值但 mix=0, 用户听到的就是"和朗读提示词完全无关的声音"。
@@ -688,7 +706,7 @@ async function speak(text, { lang = null, sender = "", refAudioPath = null, prom
           blob = cc.blob; audioUrl = cc.audioUrl || "";
           diagPlay("cache", messageId, finalText);
         } else {
-          const res = await _synthIt(finalText, finalLang, { spdIn: spd, ov: overrides, blobOnly: true, role: role || prof0.current });
+          const res = await _synthSafe(finalText, finalLang, { spdIn: spd, ov: overrides, blobOnly: true, role: role || prof0.current });
           // 1.6.78 归属回执: 直连=本机自己合成(与代理路径的 by 对应), 供设置面板/分配器/最终测试显示压力归属
           try { window.__fvttTTSLastSynthBy = (game.user && game.user.name) || "本机"; } catch (e) { /* noop */ }
           blob = res.blob; audioUrl = res.audioUrl || "";
@@ -788,7 +806,7 @@ async function speak(text, { lang = null, sender = "", refAudioPath = null, prom
           // 是广播不可达时的同通道兜底(pl 端收到消息后走同一 AudioHelper 播放)。不再自定义 socket 广播。
         } catch (e) { /* 广播兜底: 仅本地播放 */ }
       } else {
-        const res = await _synthIt(finalText, finalLang, { spdIn: spd, ov: overrides, blobOnly: false, role: role || prof0.current });
+        const res = await _synthSafe(finalText, finalLang, { spdIn: spd, ov: overrides, blobOnly: false, role: role || prof0.current });
         // 官方文件路径优先(相对 /modules/... + push 广播全家官方通道); 无落盘才 blob/dataURI
         const mpx = (() => { try { return _modulePath(res.audioUrl || ""); } catch (e) { return ""; } })();
         const url = mpx || res.dataUri || res.url;
@@ -5129,6 +5147,34 @@ window.runFinalTest = async function runFinalTest() {
     }
   } catch (e) { push("- ⚠ /watchdog 查询失败(引擎可能是旧版本) → 重启引擎后可测；本次跳过"); }
 
+  // 1.6.115 三·G: 短情绪参考音兜底(实测曾因"参考音不在 3~10 秒"整句 400 失败)
+  push("");
+  push("## 三·G、短情绪参考音实测(情绪样本不足 3 秒时不致命)");
+  push("");
+  try {
+    const _cG = (quickChars && quickChars.chars || []).find(x => x.name === cn) || null;
+    const _slotsG = ((_cG && _cG.emotions) || []).filter(e => e && e.ref_audio_path);
+    const _probeSlot = _slotsG.find(e => /生气|鼓起脸颊/.test(String(e.label || ""))) || _slotsG[0] || null;
+    if (!_probeSlot) {
+      push("- 该角色没有带参考音的情绪槽 → 跳过");
+    } else {
+      const _auxG = ["fvtt_chars/" + cn + "/" + _probeSlot.ref_audio_path];
+      push("- 用情绪槽「" + String(_probeSlot.label || _probeSlot.key) + "」的参考音 + 占比 1 直接合成一句(不等聊天链路)");
+      try {
+        const _rG = await gptSovitsSynth("短参考音兜底验证。", "zh", {
+          serverUrl: cfg.serverUrl, speedFactor: 1.0, mediaType: "mp3", asBlob: true, role: cn,
+          overrides: { auxRefAudioPaths: _auxG, emotionMix: 1.0, emotion: String(_probeSlot.key || "") },
+        });
+        const _szG = (_rG && _rG.blob) ? _rG.blob.size : 0;
+        push("- 合成结果: " + (_szG > 1000 ? ("✓ 成功 " + Math.round(_szG / 1024) + "KB") : "✗ 失败/空音频"));
+        if (!(_szG > 1000)) fails.push("短参考音合成");
+      } catch (e) {
+        push("- ✗ 合成失败: " + String((e && e.message) || e).slice(0, 120));
+        fails.push("短参考音合成");
+      }
+      push("- 说明: 引擎会把不足 3 秒的情绪样本重复拼接到 3~10 秒再用; 客户端再兜底一次(被拒则本句退化为默认音色, 不出错)");
+    }
+  } catch (e) { push("- 短参考音实测异常: " + String((e && e.message) || e).slice(0, 70)); }
   _mark("代理/白名单"); push("## 四、结论");
   push("- 测试脚本: v4(代码版本 " + MOD_VERSION + ", 清单缓存 " + verTxt + ") | 耗时: " + Math.round((Date.now() - t0) / 1000) + "s | LLM: " + (llmOk ? "AI链路(判语气+润色+选立绘)已启用" : "规则降级(无AI: 文本规则/提示词基调; 情绪差异靠情绪参考音, 默认零 DSP 不变调)"));
   push("- 关键项: " + (fails.length ? ("⚠ 存在问题 → " + fails.join("、")) : "全部通过 ✓"));
