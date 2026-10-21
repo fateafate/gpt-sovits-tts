@@ -19,7 +19,7 @@ window.fetchAndRefreshModels = fetchAndRefreshModels;
 const MODULE = "gpt-sovits-tts";
 // 1.6.103 代码版本号: Foundry 的 game.modules.get(id).version 读的是"载入世界时的清单缓存",
 //   改了 manifest 不刷新会一直显示旧版本(用户多次看到 1.6.96 而实际代码已是新版) → 报告里同时打印两者, 便于确认真的在跑新代码
-const MOD_VERSION = "1.6.108";
+const MOD_VERSION = "1.6.109";
 const CHAT_STYLES = (typeof CONST !== "undefined" && (CONST.CHAT_MESSAGE_STYLES || CONST.CHAT_MESSAGE_TYPES)) || {};
 
 /* ============ 设置定义 ============ */
@@ -627,6 +627,29 @@ async function speak(text, { lang = null, sender = "", refAudioPath = null, prom
     }
   } catch (e) { /* 保底 */ }
 
+  // ---- 1.6.109 「情绪占比 0」陷阱: 情绪槽音频就是这句话的语气本身 ----
+  //   以前 profile/flags 里若存着 emotionMix=0(情绪占比滑到 0%), 引擎按"纯默认"把 aux 丢掉 →
+  //   引擎日志里能看到 aux 有值但 mix=0, 用户听到的就是"和朗读提示词完全无关的声音"。
+  //   现在: 有情绪参考音而占比 <=0(或未设) → 按 1.0 用它(Shinsekai 语义: 该情绪的参考音就是这段话的参考音)。
+  try {
+    if (overrides && Array.isArray(overrides.auxRefAudioPaths) && overrides.auxRefAudioPaths.length
+        && !(typeof overrides.emotionMix === "number" && overrides.emotionMix > 0)) {
+      overrides.emotionMix = 1.0;
+      try { console.debug("[gpt-sovits-tts] 情绪参考音存在但情绪占比<=0 → 按 1.0 使用参考音(否则语气会被引擎丢弃)"); } catch (e2) { /* noop */ }
+    }
+  } catch (e) { /* noop */ }
+  // 1.6.109 把"这次真正送给引擎的语气参数"暴露出来: 最终测试/诊断据此判断
+  //   「AI 选中的语气到底有没有送到引擎」(以前日志里 aux 有值但 mix=0 → 引擎丢弃, 用户听到"没变化")
+  try {
+    window.__fvttTTSLastSynthParams = {
+      emotion: String((overrides && overrides.emotion) || ""),
+      aux: ((overrides && overrides.auxRefAudioPaths) || []).slice(0, 2),
+      mix: (overrides && typeof overrides.emotionMix === "number") ? overrides.emotionMix : null,
+      spd: spd,
+      ref: String((overrides && overrides.refAudioPath) || ""),
+    };
+  } catch (e) { /* noop */ }
+
   let item = null;
   if (cfg.engine === "gptsovits") {
     try {
@@ -714,7 +737,9 @@ async function speak(text, { lang = null, sender = "", refAudioPath = null, prom
                 if (_pvCtx.promptText) _upd.promptText = _pvCtx.promptText;
                 if (_pvCtx.promptLang) _upd.promptLang = _pvCtx.promptLang;
                 if (_pvCtx.auxRef) _upd.auxRef = _pvCtx.auxRef;
-                if (typeof _pvCtx.emotionMix === "number") _upd.emotionMix = _pvCtx.emotionMix;
+                // 1.6.109 写回"实际生效"的占比(overrides 里可能已被纠正成 1.0): 否则重播/他端还会按 0 丢掉语气
+                const _effMix = (overrides && typeof overrides.emotionMix === "number") ? overrides.emotionMix : _pvCtx.emotionMix;
+                if (typeof _effMix === "number") _upd.emotionMix = _effMix;
                 if (_pvCtx.emotion) _upd.emotion = normalizeEmotionKey(_pvCtx.emotion);   // 1.6.30 标准化(槽 key→joy/sad/...), 他端兜底合成调制才认
               }
             } catch (e) { /* noop */ }
@@ -1139,8 +1164,24 @@ async function maybeSpeak(message) {
           overrides.auxRefAudioPaths = [`fvtt_chars/${roleN}/${slot.ref_audio_path}`];   // 主参考为基础 + 情绪参考叠加
           if (slot.prompt_text) overrides.promptText = slot.prompt_text;
           if (slot.prompt_lang) overrides.promptLang = slot.prompt_lang;
-          if (typeof overrides.emotionMix !== "number") overrides.emotionMix = 1.0;   // 1.6.65 严格 Shinsekai: 情绪槽音频作唯一参考(不再融合, 避免两个参考音混出怪音色)
+          // 1.6.109 占比<=0 视为"未设置"(以前 0 会让引擎丢掉情绪参考音 → 听起来跟提示词无关)
+          if (!(typeof overrides.emotionMix === "number" && overrides.emotionMix > 0)) overrides.emotionMix = 1.0;
           console.debug(`[gpt-sovits-tts] 自动语气朗读: ${_emo}${(cfg.llmEnabled && cfg.llmKey && window.__fvttTTSLlmBroken !== true) ? "(AI)" : "(规则/风格)"} 台词保持原文`);   // 1.6.50 降级路径同样换情绪参考音
+          // 1.6.109 立绘跟"选中的情绪槽"走(对标 Shinsekai: 立绘 N ↔ 情绪 N ↔ 参考音 N 是同一条线)
+          //   以前这里只换声音, 立绘由另一套"语义分桶"决定 → 会出现"害羞的声音 + 中性的立绘"这种错配
+          try {
+            if (!(flA && flA.selSprite) && message && message.flags && message.flags[MODULE]) {
+              const _ccS = (quickChars && quickChars.chars || []).find(x => x.name === roleN);
+              const _ordS = Math.max(0, ((_ccS && _ccS.emotions) || []).findIndex(e => e && e.key === slot.key));
+              const _spS = String(slot.avatar || ((_ccS && _ccS.sprites && _ccS.sprites[_ordS]) || ""));
+              if (_spS) {
+                const _nfSp = { ...(message.flags[MODULE]) };
+                _nfSp.aiSprite = _spS;
+                _nfSp.slotAvatar = String(slot.avatar || "");
+                safeMsgWrite(message, { flags: { [MODULE]: _nfSp } });
+              }
+            }
+          } catch (e2) { /* noop */ }
           // 记录语气到消息 flags → 重播缓存 miss 时用同一语气重新合成(声音与第一次一致)
           try {
             if (message && message.flags && message.flags[MODULE]) {
@@ -1160,6 +1201,9 @@ async function maybeSpeak(message) {
         overrides = overrides || {};
         if (typeof overrides.emotionMix !== "number") overrides.emotionMix = 1.0;   // 1.6.65 严格 Shinsekai: 情绪参考音作唯一参考
       }
+      // 1.6.109 手动选了语气槽时同理: 占比 0 会让引擎丢掉这条参考音(声音又变回默认)
+      if (overrides && Array.isArray(overrides.auxRefAudioPaths) && overrides.auxRefAudioPaths.length
+          && !(typeof overrides.emotionMix === "number" && overrides.emotionMix > 0)) overrides.emotionMix = 1.0;
       console.debug(`[gpt-sovits-tts] 已选语气 ${flA.emotion} (台词保持原文)`);
     }
   } catch (e) { /* AI 失败沿用原设置 */ }
@@ -4097,6 +4141,7 @@ function spriteBucketForEmotion(sprites, emotion, emotionTags) {
       sad: ["sad", "cry", "crying", "tear", "泪", "哭", "伤心", "悲", "难过", "泣"],
       surprised: ["surprised", "shock", "wow", "惊", "惊讶", "震惊"],
       fear: ["fear", "scared", "afraid", "horror", "怕", "恐惧"],
+      shy: ["害羞", "脸红", "羞", "shy"],   // 1.6.109
       calm: ["calm", "serene", "gentle", "平静", "温柔", "娴静"],
       neutral: ["neutral", "normal", "平静", "普通"]
     };
@@ -4127,6 +4172,7 @@ function emoTagWords(emo) {
   if (em === "angry") return ["生气", "怒", "训斥", "厌恶", "恶心", "敌意", "防守", "生闷气", "骂", "警告", "阻止", "制止", "埋怨", "嘟嘴", "冷漠", "鼓起脸颊"];
   if (em === "surprised") return ["震惊", "惊讶", "惊", "愣", "疑惑", "好奇", "歪头"];
   if (em === "fear") return ["害怕", "恐惧", "怕", "惊吓", "颤抖", "冷汗", "毛骨悚然", "发抖", "不安", "担心"];
+  if (em === "shy") return ["害羞", "脸红", "羞", "含羞", "害臊", "羞答答"];   // 1.6.109
   if (em === "calm") return ["平静", "温柔", "娴静", "说话", "闭眼", "吐槽", "看着你", "想事情", "反问", "调侃", "指点", "引导", "陈述", "解释", "指向", "果断", "仔细", "眺望", "沉思", "中性"];
   return ["平静", "说话", "看着你", "闭眼", "中性"];
 }
@@ -4140,6 +4186,7 @@ function normalizeEmotionKey(key) {
   if (/(怒|生气|狂暴|气愤|恼|可恶|angry|rage|mad)/.test(k)) return "angry";
   if (/(惊|愣|surprised|shock|wow)/.test(k)) return "surprised";
   if (/(怕|恐惧|fear|scared|horror|害怕|哆嗦)/.test(k)) return "fear";
+  if (/(害羞|羞涩|娇羞|含羞|害臊|脸红|shy)/.test(k)) return "shy";   // 1.6.109: 情绪槽匹配也要认"害羞，脸红"
   if (/(平静|温柔|calm|neutral|正常|冷|无语)/.test(k)) return "neutral";
   return k || "neutral";
 }
@@ -4188,6 +4235,8 @@ function styleEmotionKey(style) {
       [/害怕|恐惧|恐慌/, "fear"],
       [/惊讶|吃惊|震惊/, "surprised"],
       [/难过|悲伤|哭/, "sad"],
+      [/害羞|羞涩|娇羞|含羞|害臊|脸红|羞答答/, "shy"],   // 1.6.109 七海/多数角色都有"害羞，脸红"槽, 以前提示词写"害羞"完全不生效
+      [/疑惑|困惑|不解|纳闷/, "surprised"],
       [/温柔|轻柔|舒缓|慵懒|软|温和|平静|优美|甜/, "joy"],
     ];
     for (let i = 0; i < _stMap.length; i++) { if (_stMap[i][0].test(s)) return _stMap[i][1]; }
@@ -4870,8 +4919,30 @@ window.runFinalTest = async function runFinalTest() {
       push("- 提示: 任何时候想单独复查, 用 语音设置 → 底部「🩺 立绘诊断」或在 F12 执行 `await fvttTTSDiag()`");
     }
   } catch (e) { push("- 立绘/头像实测异常: " + String((e && e.message) || e).slice(0, 80)); fails.push("立绘实测"); }
+  // 1.6.109 三·C: 语气到底有没有送到引擎(决定"听起来跟提示词无关"的那一环)
+  _mark("立绘实测");
   push("");
-  _mark("立绘实测"); push("## 四、结论");
+  push("## 三·C、语气是否真的送到引擎(AI/提示词 选中的情绪 → 参考音)");
+  push("");
+  try {
+    const _sp = window.__fvttTTSLastSynthParams || null;
+    if (!_sp) {
+      push("- ⚠ 没抓到最近一次合成参数(可能本句走的是缓存/预加载) → 跳过");
+    } else {
+      const _emoTxt = String(_sp.emotion || "(未设)");
+      const _slotC = (() => { try { return findEmotionSlot(_emoTxt, cn); } catch (e) { return null; } })();
+      push("- 送给引擎: 情绪=" + _emoTxt + (_slotC ? ("（槽 " + (_slotC.key || "") + " " + String(_slotC.label || "").slice(0, 14) + "）") : "（无对应情绪槽）")
+        + " | 情绪参考音=" + ((_sp.aux && _sp.aux.length) ? String(_sp.aux[0]).slice(-40) : "(无)")
+        + " | 情绪占比=" + (_sp.mix == null ? "(未传)" : _sp.mix) + " | 语速=" + Number(_sp.spd || 1).toFixed(2));
+      if (_slotC && _slotC.ref_audio_path) {
+        if (!(_sp.aux && _sp.aux.length)) { push("  ✗ 选中了情绪槽却没送情绪参考音 → 声音不会变(链路 bug)"); fails.push("情绪参考音"); }
+        else if (!(_sp.mix > 0)) { push("  ✗ 情绪占比=" + _sp.mix + " → 引擎会按「纯默认」丢弃情绪参考音(声音不变)"); fails.push("情绪占比"); }
+        else push("  ✓ 情绪参考音已随请求送达(占比 " + _sp.mix + " → 引擎用该槽音频作参考)");
+      } else push("  · 本句情绪无对应情绪槽 → 只靠语速/提示词影响, 不是 bug");
+    }
+  } catch (e) { push("- 语气送达检查异常: " + String((e && e.message) || e).slice(0, 70)); }
+  push("");
+  _mark("语气送达"); push("## 四、结论");
   push("- 测试脚本: v3(代码版本 " + MOD_VERSION + ", 清单缓存 " + verTxt + ") | 耗时: " + Math.round((Date.now() - t0) / 1000) + "s | LLM: " + (llmOk ? "AI链路(判语气+润色+选立绘)已启用" : "规则降级(无AI: 文本规则/提示词基调; 情绪差异靠情绪参考音, 默认零 DSP 不变调)"));
   push("- 关键项: " + (fails.length ? ("⚠ 存在问题 → " + fails.join("、")) : "全部通过 ✓"));
   // 1.6.104 耗时明细(哪一段慢一目了然): 上次 475s 就靠这个定位到"AI 探测重试 + 首次合成排队"
