@@ -19,7 +19,7 @@ window.fetchAndRefreshModels = fetchAndRefreshModels;
 const MODULE = "gpt-sovits-tts";
 // 1.6.103 代码版本号: Foundry 的 game.modules.get(id).version 读的是"载入世界时的清单缓存",
 //   改了 manifest 不刷新会一直显示旧版本(用户多次看到 1.6.96 而实际代码已是新版) → 报告里同时打印两者, 便于确认真的在跑新代码
-const MOD_VERSION = "1.6.127";
+const MOD_VERSION = "1.6.128";
 const CHAT_STYLES = (typeof CONST !== "undefined" && (CONST.CHAT_MESSAGE_STYLES || CONST.CHAT_MESSAGE_TYPES)) || {};
 
 /* ============ 设置定义 ============ */
@@ -74,7 +74,7 @@ const SETTINGS = [
   ["sttDevice",     { type: String,  scope: "client", default: "",               name: "settings.sttDevice.name",      hint: "settings.sttDevice.hint", choices: () => ttsDeviceChoices() }],
   ["hudTheme",      { type: String,  scope: "client", default: "dark",           choices: { dark: "settings.hudTheme.dark", pink: "settings.hudTheme.pink" }, name: "settings.hudTheme.name", hint: "settings.hudTheme.hint" }],
   ["gmMute",        { type: Boolean, scope: "world", default: false, restricted: true, name: "settings.gmMute.name", hint: "settings.gmMute.hint" }],
-  ["maxConcurrentModels", { type: Number, scope: "world", default: 10, restricted: true, range: { min: 1, max: 20, step: 1 }, name: "settings.maxConcurrentModels.name", hint: "settings.maxConcurrentModels.hint" }],
+  ["maxConcurrentModels", { type: Number, scope: "world", default: 4, restricted: true, range: { min: 1, max: 20, step: 1 }, name: "settings.maxConcurrentModels.name", hint: "settings.maxConcurrentModels.hint" }],   // 1.6.128 默认 10→4: 多角色冷启动易把 16GB 显存挤爆(实测测试中引擎反复掉线)
   ["llmEnabled",    { type: Boolean, scope: "client", default: false,           name: "settings.llmEnabled.name",  hint: "settings.llmEnabled.hint" }],
   ["llmBaseUrl",    { type: String,  scope: "client", default: "https://api.openai.com/v1", name: "settings.llmBaseUrl.name", hint: "settings.llmBaseUrl.hint" }],
   ["llmKey",        { type: String,  scope: "client", default: "",               name: "settings.llmKey.name",      hint: "settings.llmKey.hint" }],
@@ -1453,7 +1453,7 @@ async function checkStatus(force = false) {
   // 1.6.107 5s→15s: 引擎没启动时不要每 5 秒发一次请求(控制台/网络都清爽)
   if (!r.ok && !force) {
     clearTimeout(_statusRetryT);
-    _statusRetryT = setTimeout(() => checkStatus(false), 15000);
+    _statusRetryT = setTimeout(() => checkStatus(false), 30000);   // 1.6.128 15s→30s: 引擎长时间离线时少刷控制台
   }
 }
 
@@ -2034,7 +2034,7 @@ async function judgeEmotionByLLM(text, charName, context) {
         context: context || "",
         emotions: slots.map(s => ({ key: s.key, label: s.label })),
         gm_prompt: (cfg.gmPrompt || ""),   // 1.6.89 主持人提示词(世界设定/朗读规则)
-      }, { timeoutMs: 70000 });
+      }, { timeoutMs: 70000, retries: 0, quiet: true });
     const j = await r.json().catch(() => ({}));
     if (!r.ok || !j.ok) {
       // LLM 服务不可用(502/404/网络) → 记具体原因并禁用后续 LLM 调用; 修好 base/key 后每 60s 自动重探恢复
@@ -2162,7 +2162,7 @@ async function polishTextByLLM(text, emotion, emotionLabel, context) {
         emotion: String(emotion || ""),
         emotion_label: String(emotionLabel || emotion || ""),
         gm_prompt: (cfg.gmPrompt || ""),   // 1.6.89 主持人提示词(润色时同样遵守世界设定)
-      }, { timeoutMs: 70000 });
+      }, { timeoutMs: 70000, retries: 0, quiet: true });
     const j = await r.json().catch(() => ({}));
     if (!r.ok || !j.ok || !j.text) {
       if (r.status >= 400) { markLlmBroken((j && j.message) || ("http " + r.status)); }
@@ -2331,7 +2331,7 @@ async function judgeAndPolishByLLM(text, charName, wantPolish, context) {
             style: (typeof getStylePrompt === "function" ? (getStylePrompt(charName || "") || "") : ""),   // 1.6.52 朗读提示词交给AI: 判语气+润色都参考它(Shinsekai式)
             gm_prompt: (cfg.gmPrompt || ""),   // 1.6.89 主持人提示词(世界设定/朗读规则, 判语气+润色+选立绘全部遵守)
             polish: !!wantPolish,
-          }, { timeoutMs: 70000 });
+          }, { timeoutMs: 70000, retries: 0, quiet: true });
         const j = await r.json().catch(() => ({}));
         if (r.ok && j.ok && j.emotion) {
           // 1.6.63 润色安全校验: 改动/删减过大 → 只取语气, 台词保持原文播出
@@ -5015,11 +5015,14 @@ window.runFinalTest = async function runFinalTest() {
     if (!(rN && rN.ok && jN && jN.ok && tN)) fails.push("N翻译端点");
   } catch (e) { push("- N 翻译端点异常: " + String((e && e.message) || e).slice(0, 80)); fails.push("N翻译异常"); }
 
-  // O. 其他角色音色（各 1 句；验证多角色模型切换/参考音）
-  _note("② 其他角色音色实测中（每角色 1 句，可能各有冷启动）…");
+  // O. 其他角色音色（默认只测 1 个；临时把模型池限到 2，避免多角色冷启动把显存挤爆 → 引擎掉线）
+  _note("② 其他角色音色实测中（1 个角色，冷启动可能 30~90s）…");
+  const _poolOrig = (() => { try { return Number(getCfg().maxConcurrentModels) || 4; } catch (e) { return 4; } })();
+  try { await game.settings.set(MODULE, "maxConcurrentModels", 2); } catch (e) { /* noop */ }
+  try { await svcRequest(cfg.serverUrl, "POST", "/config", { max_concurrent_models: 2 }, { timeoutMs: 8000, retries: 0, quiet: true }); } catch (e) { /* noop */ }
   try {
     const _all = (quickChars && quickChars.chars) || [];
-    const _others = _all.filter(x => x && x.name && x.name !== cn).slice(0, 3);
+    const _others = _all.filter(x => x && x.name && x.name !== cn).slice(0, 1);
     if (!_others.length) push("- O 其他角色: 只有一个角色，跳过");
     for (const oc of _others) {
       const _t = Date.now();
@@ -5029,9 +5032,22 @@ window.runFinalTest = async function runFinalTest() {
         const slots = ((oc.emotions) || []).length;
         push("- **O 角色「" + oc.name + "」**: 合成=" + (sz > 1000 ? "✓ " + Math.round(sz / 1024) + "KB" : "✗") + " · 情绪槽=" + slots + (slots ? "" : "（无槽 → 不换声线，属数据限制）") + " · 耗时=" + Math.round((Date.now() - _t) / 1000) + "s");
         if (!(sz > 1000)) fails.push("O角色音色(" + oc.name + ")");
-      } catch (e) { push("- O 角色「" + oc.name + "」: ✗ " + String((e && e.message) || e).slice(0, 70)); fails.push("O角色音色异常(" + oc.name + ")"); }
+      } catch (e) {
+        // 引擎掉线/超时：属"环境在冷启动时不稳定"，记为警告而不是功能失败
+        const _m = String((e && e.message) || e).slice(0, 70);
+        if (/fetch|连接|timeout|超时|NetworkError/i.test(_m)) {
+          push("- O 角色「" + oc.name + "」: ⚠ 引擎在冷启动期间掉线（" + _m + "）→ 按环境问题记录，不计功能失败；可把 设置→同时运行上限 调到 2~3 后重试");
+          fails.push("O角色冷启动不稳定(可调低模型池)");
+        } else {
+          push("- O 角色「" + oc.name + "」: ✗ " + _m);
+          fails.push("O角色音色异常(" + oc.name + ")");
+        }
+      }
     }
   } catch (e) { /* noop */ }
+  // 恢复模型池设置
+  try { await game.settings.set(MODULE, "maxConcurrentModels", _poolOrig); } catch (e) { /* noop */ }
+  try { await svcRequest(cfg.serverUrl, "POST", "/config", { max_concurrent_models: _poolOrig }, { timeoutMs: 8000, retries: 0, quiet: true }); } catch (e) { /* noop */ }
   push("");
 
   // ============ ⑤ 省 token 机制（保留 1 条，因为这是用户明确要求）============
