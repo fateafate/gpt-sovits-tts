@@ -61,7 +61,7 @@ const SETTINGS = [
   ["sttAutoSend",   { type: Boolean, scope: "client", default: true,            name: "settings.sttAutoSend.name",   hint: "settings.sttAutoSend.hint" }],
   ["sttAutoSpeak",  { type: Boolean, scope: "client", default: false,           name: "settings.sttAutoSpeak.name",  hint: "settings.sttAutoSpeak.hint" }],
   ["emotionSpeed",  { type: Boolean, scope: "client", default: true,            name: "settings.emotionSpeed.name",  hint: "settings.emotionSpeed.hint" }],
-  ["translate",     { type: Boolean, scope: "client", default: true,            name: "settings.translate.name",      hint: "settings.translate.hint" }],
+  ["translate",     { type: Boolean, scope: "client", default: false,           name: "settings.translate.name",      hint: "settings.translate.hint" }],
   ["sttDevice",     { type: String,  scope: "client", default: "",               name: "settings.sttDevice.name",      hint: "settings.sttDevice.hint", choices: () => ttsDeviceChoices() }],
   ["hudTheme",      { type: String,  scope: "client", default: "dark",           choices: { dark: "settings.hudTheme.dark", pink: "settings.hudTheme.pink" }, name: "settings.hudTheme.name", hint: "settings.hudTheme.hint" }],
   ["gmMute",        { type: Boolean, scope: "world", default: false, restricted: true, name: "settings.gmMute.name", hint: "settings.gmMute.hint" }],
@@ -496,11 +496,14 @@ async function speak(text, { lang = null, sender = "", refAudioPath = null, prom
   let finalLang = finalLang0;
   let finalText = t;
   try {
-    const r = await prepareTextForLang(t, finalLang0, { translate: cfg.translate });
+    // 1.6.88 语言为 auto 时永不翻译(引擎会按文本语言自动识别) —— 避免中文台词被免费翻译 API 拖去翻译成角色语言后 429
+    const _trNeed = !!(cfg.translate && String(finalLang0 || "auto").toLowerCase() !== "auto");
+    const r = await prepareTextForLang(t, finalLang0, { translate: _trNeed });
     finalText = r.text;
-    if (cfg.translate && r.lang && r.lang !== finalLang0) {
+    if (_trNeed && r.lang && r.lang !== finalLang0) {
       finalLang = r.lang;
-      notifyOnce(_L("errors.transFallback", `翻译失败，已按原文语言朗读`), "info");
+      // 1.6.88 翻译失败/限流改为静默降级(不再每次弹通知刷屏), 仅调试输出
+      try { console.debug("[gpt-sovits-tts] 翻译未成功(可能限流), 已按原文语言朗读: " + r.lang); } catch (e2) { /* noop */ }
     }
   } catch (e) { /* 保留原文 */ }
   // 台词括号剥离(照搬成品软件 remove_parentheses): （动作描写）(笑) *叹气* 不朗读, 只读正文
