@@ -4412,6 +4412,63 @@ window.runFinalTest = async function runFinalTest() {
     }
   } catch (e) { push("- AI/Key 测试异常: " + String((e && e.message) || e).slice(0, 90)); }
   push("");
+  // 1.6.95 语气提示实测: 证明「单句语气提示是否真的影响 AI 判定」+「AI 是否真的被调用」
+  push("### 语气提示实测（是否生效 / 是否真的调动 AI）");
+  push("");
+  try {
+    const _gmP = String(cfg.gmPrompt || "").trim();
+    push("- 当前语气提示: " + (_gmP || "(未填 · 不注入)"));
+    if (!(cfg.llmEnabled && cfg.llmKey)) {
+      push("- 跳过: LLM 未配置/未启用（语气提示只在 AI 可用时生效）");
+    } else {
+      const _statBefore = await (async () => {
+        try {
+          const r = await svcRequest(cfg.serverUrl, "GET", "/llm/stats", null, { timeoutMs: 8000, retries: 0 });
+          const j = (r && typeof r.json === "function") ? await r.json().catch(() => ({})) : {};
+          return (j && j.stats) || null;
+        } catch (e) { return null; }
+      })();
+      const _txtG = "今天的事情，就交给我吧。";
+      const _emosG = [{ key: "angry", label: "生气" }, { key: "calm", label: "平静" }, { key: "joy", label: "开心" }];
+      const _callG = async (prompt) => {
+        try {
+          const r = await svcRequest(cfg.serverUrl, "POST", "/llm", {
+            base: cfg.llmBaseUrl || "https://api.openai.com/v1", key: cfg.llmKey, model: cfg.llmModel || "gpt-4o-mini",
+            text: _txtG, emotions: _emosG, gm_prompt: String(prompt || ""), debug: true,
+          }, { timeoutMs: 20000, retries: 0 });
+          const j = (r && typeof r.json === "function") ? await r.json().catch(() => ({})) : {};
+          const dbg = String((j && j.debug_prompt) || "");
+          return { ok: !!(r && r.ok && j && j.ok), emotion: String((j && j.emotion) || ""), injected: /主持人语气指令/.test(dbg) };
+        } catch (e) { return { ok: false, emotion: "", injected: false, err: String((e && e.message) || e) }; }
+      };
+      const _testP = _gmP || "用愤怒、压着火气的语气说话";   // 未填时用示例做对照
+      const _base0 = await _callG("");
+      const _withP = await _callG(_testP);
+      push("- 对照(同一句「" + _txtG.slice(0, 10) + "…」· 选项 生气/平静/开心):");
+      push("   · 无语气提示 → 情绪=" + (_base0.emotion || "(失败)"));
+      push("   · 有语气提示「" + _testP.slice(0, 18) + "」→ 情绪=" + (_withP.emotion || "(失败)") + " | 指令已注入=" + (_withP.injected ? "✓" : "✗"));
+      const _changed = !!(_base0.emotion && _withP.emotion && _base0.emotion !== _withP.emotion);
+      push("   → " + (_changed
+        ? ("✓ 语气提示改变了 AI 判定（" + _base0.emotion + " → " + _withP.emotion + "）")
+        : (_withP.injected
+          ? "⚠ 指令已注入但判定未变（该台词/选项可能本就偏此语气，可换更强的语气词再测）"
+          : "⚠ 未检测到指令注入（确认已重载世界、引擎为 1.6.94+）")));
+      if (!_withP.ok) fails.push("语气提示实测");
+      const _statAfter = await (async () => {
+        try {
+          const r = await svcRequest(cfg.serverUrl, "GET", "/llm/stats", null, { timeoutMs: 8000, retries: 0 });
+          const j = (r && typeof r.json === "function") ? await r.json().catch(() => ({})) : {};
+          return (j && j.stats) || null;
+        } catch (e) { return null; }
+      })();
+      const _dc = (_statBefore && _statAfter) ? (Number(_statAfter.calls) - Number(_statBefore.calls)) : null;
+      push("- AI 真实调用: " + (_dc === null
+        ? "(统计不可用)"
+        : ("本次实测期间引擎收到 " + _dc + " 次 LLM 请求 " + (_dc >= 2 ? "✓ 确实调动了 AI" : "⚠ 少于预期(应≥2)"))));
+      if (_dc !== null && _dc < 2) fails.push("AI调用计数");
+    }
+  } catch (e) { push("- 语气提示实测异常: " + String((e && e.message) || e).slice(0, 90)); }
+  push("");
   push("## 二、朗读提示词(是否生效)");
   if (!style) {
     push("- ⚠ **未填写朗读提示词** → 引擎侧整段跳过提示词逻辑: 语速固定 spd=1.00、不做切分/停顿调整(与提示词无关)。");
