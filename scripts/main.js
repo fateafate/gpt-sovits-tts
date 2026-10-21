@@ -19,7 +19,7 @@ window.fetchAndRefreshModels = fetchAndRefreshModels;
 const MODULE = "gpt-sovits-tts";
 // 1.6.103 代码版本号: Foundry 的 game.modules.get(id).version 读的是"载入世界时的清单缓存",
 //   改了 manifest 不刷新会一直显示旧版本(用户多次看到 1.6.96 而实际代码已是新版) → 报告里同时打印两者, 便于确认真的在跑新代码
-const MOD_VERSION = "1.6.109";
+const MOD_VERSION = "1.6.110";
 const CHAT_STYLES = (typeof CONST !== "undefined" && (CONST.CHAT_MESSAGE_STYLES || CONST.CHAT_MESSAGE_TYPES)) || {};
 
 /* ============ 设置定义 ============ */
@@ -1597,6 +1597,8 @@ async function applyEmotion(emotion, name) {
       // 情绪音频作 aux 参考, 在主参考音色上叠加情绪特征
       cur.auxRef = `fvtt_chars/${charName}/${slot.ref_audio_path}`;
       if (slot.prompt_text) { cur.promptText = slot.prompt_text; cur.promptLang = slot.prompt_lang || mainLang; }
+      // 1.6.109 选中语气槽 = 明确要用这条情绪参考音; 若占比是 0(以前滑到 0%) 引擎会把它丢掉 → 纠正成 1.0
+      if (!(typeof cur.emotionMix === "number" && cur.emotionMix > 0)) cur.emotionMix = 1.0;
     } else {
       cur.auxRef = "";
     }
@@ -1769,6 +1771,11 @@ function buildSendPop() {
       const curP = (profP.chars && profP.chars[roleP]) || {};
       if (typeof curP.emotionMix === "number") overridesP.emotionMix = curP.emotionMix;
       else if (aiEmoP) overridesP.emotionMix = 1.0;   // 1.6.65 AI 判断语气 → 情绪参考音作唯一参考(与发送时一致, 严格 Shinsekai)
+      // 1.6.109 预加载合成同样要纠正"占比 0"(否则预合成的这段音频本身就是没有语气的)
+      try {
+        if (overridesP.auxRefAudioPaths && overridesP.auxRefAudioPaths.length
+            && !(typeof overridesP.emotionMix === "number" && overridesP.emotionMix > 0)) overridesP.emotionMix = 1.0;
+      } catch (e) { /* noop */ }
       // 1.6.99 AI 直出/预加载: 强度=0 时用提示词关键词语速(AI/提示词自己决定), 不再锁原速
       let _spdP = Number(cfgP2.speedFactor) || 1;
       try {
@@ -5300,6 +5307,8 @@ async function _proxySynthFor(message) {
     if (fl2.auxRef) o.auxRefAudioPaths = [fl2.auxRef];
     if (typeof fl2.emotionMix === "number") o.emotionMix = fl2.emotionMix;
     if (fl2.emotion) o.emotion = fl2.emotion;   // 1.6.20 情绪后处理(作者端判好的情绪 → 代理合成同语气)
+    // 1.6.109 玩家端代理合成同样纠正"占比 0": 否则只有 GM 听到语气, 玩家仍是默认声音
+    if (o.auxRefAudioPaths && o.auxRefAudioPaths.length && !(typeof o.emotionMix === "number" && o.emotionMix > 0)) o.emotionMix = 1.0;
     const t0 = Date.now();
     const _pprov = String(fl2.ttsProvider || req.provider || "gpt-sovits");
     let res;
