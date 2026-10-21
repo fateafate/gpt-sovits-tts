@@ -19,7 +19,7 @@ window.fetchAndRefreshModels = fetchAndRefreshModels;
 const MODULE = "gpt-sovits-tts";
 // 1.6.103 代码版本号: Foundry 的 game.modules.get(id).version 读的是"载入世界时的清单缓存",
 //   改了 manifest 不刷新会一直显示旧版本(用户多次看到 1.6.96 而实际代码已是新版) → 报告里同时打印两者, 便于确认真的在跑新代码
-const MOD_VERSION = "1.6.104";
+const MOD_VERSION = "1.6.105";
 const CHAT_STYLES = (typeof CONST !== "undefined" && (CONST.CHAT_MESSAGE_STYLES || CONST.CHAT_MESSAGE_TYPES)) || {};
 
 /* ============ 设置定义 ============ */
@@ -601,7 +601,8 @@ async function speak(text, { lang = null, sender = "", refAudioPath = null, prom
       if (kw.split && _stP >= 0.25) overrides.textSplitMethod = kw.split;   // 强度过低不切分
       if (kw.frag) overrides.fragmentInterval = kw.frag * _stP;
       // 已配置 LLM 且关键词未明确切分意图 → 让 LLM 更精确地把风格翻译成参数(失败回落关键词)
-      if (cfg.llmEnabled && cfg.llmKey && !kw.fast) {
+      // 1.6.105 强度=0 时跳过(结果最后要乘 _stP=0, 等于白花一次 LLM 往返; 用户常把强度放 0 却因此变慢)
+      if (cfg.llmEnabled && cfg.llmKey && !kw.fast && _stP > 0.01) {
         const styleKey = `role=${prof0.current || ""}|style=${stylePrompt}`;
         let llmStyleHit = null;
         try { llmStyleHit = _llmStyleCache.get(styleKey) || null; } catch (e) { /* noop */ }
@@ -1058,13 +1059,22 @@ async function maybeSpeak(message) {
       let _emo = "";
       if (cfg.llmEnabled && cfg.llmKey && window.__fvttTTSLlmBroken !== true) {
         try {
+          const _tJ0 = Date.now();   // 1.6.105 AI 判语气耗时(排查"生成特别慢": 看是 AI 慢还是合成慢)
           const res = await judgeAndPolishByLLM(decision.text, roleN, !!cfg.llmPolish, getChatContext());
+          try { window.__fvttTTSJudgeMs = Date.now() - _tJ0; } catch (e) { /* noop */ }
+          try { console.debug("[gpt-sovits-tts] AI 判语气+" + (cfg.llmPolish ? "润色" : "无润色") + " 耗时 " + ((Date.now() - _tJ0) / 1000).toFixed(1) + "s" + (res && res.ok ? "" : "（失败，降级规则判定）")); } catch (e) { /* noop */ }
           if (res.ok && res.emotion) _emo = String(res.emotion);
           // 1.6.98 朗读提示词(语气提示)里的情绪优先: 主持人/玩家明确指定语气时, 语音与立绘都以它为准
           //   (此前 AI 判出 voice_19=严肃不满 会走 neutral 立绘, 看起来"提示词没效果")
+          // 1.6.105 关键修复: styleEmotionKey 返回英文枚举(angry), 必须再解析成该角色的具体情绪槽(voice_03),
+          //   否则下面的 findEmotionSlot("angry") 找不到槽 → 不换情绪参考音 → 听感"与提示词无关"
           try {
             const _stE3 = styleEmotionKey(String(getStylePrompt(roleN) || ""));
-            if (_stE3) _emo = _stE3;
+            if (_stE3) {
+              _emo = _stE3;
+              const _sl3 = findEmotionSlot(_stE3, roleN);
+              if (_sl3 && _sl3.key) _emo = _sl3.key;
+            }
           } catch (e0) { /* noop */ }
           // 1.6.52 朗读提示词交给AI(Shinsekai式): AI按角色人设+朗读提示词润色台词朗读; 聊天记录保持原文, flags记polishText(重播一致)
           if (res.ok && res.polish && cfg.llmPolish) {
@@ -1095,6 +1105,17 @@ async function maybeSpeak(message) {
             } catch (e) { /* noop */ }
           }
           if (res.reason && res.reason !== "no-llm" && res.reason !== "no-slots" && res.reason !== "llm-broken") console.debug(`[gpt-sovits-tts] AI 判断未应用: ${res.reason}`);
+          // 1.6.105 标记"本句语气/立绘已由 assess 判过" → 下面的 AI 选立绘 hook 直接跳过,
+          //   不再为同一条消息重复调一次 LLM(以前每题 2~3 次 AI 往返, 是"生成特别慢"的主因之一)
+          if (res.ok) {
+            try {
+              if (message && message.flags && message.flags[MODULE]) {
+                const _nfD = { ...(message.flags[MODULE]) };
+                _nfD.aiDecided = true;
+                safeMsgWrite(message, { flags: { [MODULE]: _nfD } });
+              }
+            } catch (e) { /* noop */ }
+          }
         } catch (e) { /* noop */ }
       }
       if (!_emo) {
@@ -2063,10 +2084,30 @@ function armLlmReProbe() {
 
 /** 判断+润色合并(可选开关 llmMergePolish): 一次 LLM 调用返回 {emotion, polish}.
  *  关闭时退回分开两次调用(judgeEmotionByLLM + polishTextByLLM). */
+// 1.6.105 判定结果短缓存(角色+台词+提示词 相同 → 直接复用): 同一句话重发/测试重复句不再等 AI
+const _assessCache = new Map();
 async function judgeAndPolishByLLM(text, charName, wantPolish, context) {
   const cfg = getCfg();
   if (window.__fvttTTSLlmBroken === true) return { ok: false, emotion: "", reason: "llm-broken" };
+  const _ck = String(charName || "") + "|" + String(text || "") + "|" + String((typeof getStylePrompt === "function" ? getStylePrompt(charName || "") : "") || "") + "|" + (wantPolish ? "p" : "-");
   try {
+    const _hit = _assessCache.get(_ck);
+    if (_hit && (Date.now() - _hit.ts) < 300000) {   // 5 分钟内复用
+      try { console.debug("[gpt-sovits-tts] 复用 5 分钟内的 AI 判定结果(同角色+同台词+同提示词)"); } catch (e) { /* noop */ }
+      return { ..._hit.res, cached: true };
+    }
+  } catch (e) { /* noop */ }
+  try {
+    // 1.6.105 成功结果写入短缓存(同角色+同台词+同提示词 5 分钟内直接复用)
+    const _save = (r) => {
+      try {
+        if (r && r.ok) {
+          _assessCache.set(_ck, { ts: Date.now(), res: r });
+          while (_assessCache.size > 40) { const k0 = _assessCache.keys().next().value; _assessCache.delete(k0); }
+        }
+      } catch (e) { /* noop */ }
+      return r;
+    };
     // 先确保情绪槽数据(与 judgeEmotionByLLM 相同的保护)
     if (!quickChars) { try { await loadQuickChars(); } catch (e) { /* noop */ } }
     const c = (quickChars && quickChars.chars || []).find(x => x.name === charName);
@@ -2106,15 +2147,21 @@ async function judgeAndPolishByLLM(text, charName, wantPolish, context) {
             try { console.debug("[gpt-sovits-tts] AI 润色被安全校验拒绝(改动过大), 使用原台词"); } catch (e) { /* noop */ }
             _pol = "";
           }
-          return { ok: true, emotion: String(j.emotion), polish: _pol };
+          return _save({ ok: true, emotion: String(j.emotion), polish: _pol });
         }
         // 合并调用失败: LLM 服务不可用(>=400) → 记原因并禁用(根治每句 502 刷屏), 不再回退分开调用
         if (r.status >= 400) { markLlmBroken((j && j.message) || ("http " + r.status)); return { ok: false, emotion: "", reason: (j && j.message) || ("http " + r.status) }; }
-        // 结果为空/业务失败 → 回退分开调用(保证情绪判断不丢失)
-        console.debug("[gpt-sovits-tts] 合并语气判断失败, 回退分开调用:", (j && j.message) || ("http " + r.status));
+        // 1.6.105 引擎侧 AI 失败(超时/网络/上游 5xx, 返回 200+ok:false) → **不再回退分开调用**:
+        //   以前一次超时会连锁成 判语气+润色 两次额外调用(每句最多 15s×3), 这就是"生成特别慢"的主因。
+        //   现在直接返回失败 → 语气走"朗读提示词/文本规则", 一句只等一次超时。
+        const _why = String((j && j.message) || "assess-failed");
+        try { console.debug("[gpt-sovits-tts] 合并语气判断失败, 直接降级规则判定(不再补两次调用):", _why.slice(0, 120)); } catch (e) { /* noop */ }
+        return { ok: false, emotion: "", reason: _why.slice(0, 160) };
       } catch (e) {
-        markLlmBroken(String((e && e.message) || e));
-        console.debug("[gpt-sovits-tts] 合并语气判断异常, 回退分开调用:", e && e.message);
+        // 1.6.105 超时/断连不再 markLlmBroken(那是瞬时故障, 标 broken 会让后续整场都没有 AI 语气),
+        //   也不再回退分开调用 → 只损失这一句的 AI 语气, 由朗读提示词/文本规则兜底
+        try { console.debug("[gpt-sovits-tts] 合并语气判断超时/异常, 本句降级规则判定:", (e && e.message) || e); } catch (e2) { /* noop */ }
+        return { ok: false, emotion: "", reason: String((e && e.message) || e).slice(0, 160) };
       }
     }
     // 分开: 判断 + 润色两次调用
@@ -2126,7 +2173,7 @@ async function judgeAndPolishByLLM(text, charName, wantPolish, context) {
       const p = await polishTextByLLM(String(text || ""), j1.emotion, label, context || "");
       polish = p.ok ? p.text : "";
     }
-    return { ok: true, emotion: j1.emotion, polish };
+    return _save({ ok: true, emotion: j1.emotion, polish });
   } catch (e) {
     return { ok: false, emotion: "", reason: "err" };
   }
@@ -2138,10 +2185,23 @@ function findEmotionSlot(emotionKey, charName) {
   const c = (quickChars && quickChars.chars || []).find(x => x.name === name);
   const slots = (c && c.emotions) || [];
   if (!emotionKey) return null;
-  return slots.find(s => s.key === emotionKey)                    // 槽 key(voice_00)
-    || slots.find(s => s.label === emotionKey)                    // 中文 label 精确("生气")
-    || slots.find(s => s.label && emotionKey && s.label.includes(emotionKey))   // AI 返回的子串/变体
-    || null;
+  const _k = String(emotionKey);
+  const exact = slots.find(s => s.key === _k)
+    || slots.find(s => s.label === _k)
+    || slots.find(s => s.label && s.label.includes(_k));
+  if (exact) return exact;
+  // 1.6.105 语义匹配: 朗读提示词/AI 给的是英文枚举(angry/calm/joy…), 而槽的 key 是 voice_03、label 是中文("生气，鼓起脸颊")
+  //   → 以前这里匹配不到 → 不换情绪参考音、不改语调 → 用户看到"语气和朗读提示词无关"。现在按情绪语义兜底匹配。
+  try {
+    const want = normalizeEmotionKey(_k);
+    if (want) {
+      const hit = slots.find(s => {
+        try { return normalizeEmotionKey(String((s && s.label) || (s && s.key) || "")) === want; } catch (e) { return false; }
+      });
+      if (hit) return hit;
+    }
+  } catch (e) { /* noop */ }
+  return null;
 }
 
 function renderSendPopEmotions() {
@@ -5093,8 +5153,17 @@ Hooks.on("createChatMessage", (message, options, userId) => { (window.__fvttTTSH
   } catch (e) { /* noop */ }
   // ⚠ 1.6.103 这里必须 catch: 朗读链路里任何未捕获异常都会让"合成 + 写回 + 立绘"整条断掉,
   //   而 hook 里的 Promise 拒绝只会在控制台留一行红字, 表现为"没声音/没立绘"却看不出原因(1.6.99 的 flA 就是这么炸的)。
+  // 1.6.105 耗时日志: 一句消息从"进入朗读"到"音频写回/播放"的总耗时 + 其中 AI 判语气占多少(排查"特别慢")
+  const _tMsg0 = Date.now();
   try {
-    maybeSpeak(message).catch(e => reportSpeakCrash(e));
+    maybeSpeak(message).then(() => {
+      try {
+        const _tot = Date.now() - _tMsg0;
+        const _ai = Number(window.__fvttTTSJudgeMs) || 0;
+        window.__fvttTTSLastTiming = { totalMs: _tot, judgeMs: _ai, at: Date.now() };
+        console.info("[gpt-sovits-tts] 本句耗时 " + (_tot / 1000).toFixed(1) + "s（AI 判语气 " + (_ai / 1000).toFixed(1) + "s，其余≈合成/写回/播放）");
+      } catch (e2) { /* noop */ }
+    }).catch(e => reportSpeakCrash(e));
   } catch (e) { reportSpeakCrash(e); }
   try { maybePickAvatarRole(message); } catch (e) { /* noop */ }
 });
@@ -5334,6 +5403,8 @@ Hooks.on("createChatMessage", (message) => {
     const _fl = (message && message.flags && message.flags[MODULE]) || {};
     const _roleN = _fl.role || "";
     if (!_roleN || !message || !message.content) return;
+    // 1.6.105 本句已在朗读链路(assess)判过语气+立绘 → 不再重复调 LLM(每句省一次 AI 往返, 直接变快)
+    if (_fl.aiDecided) { try { console.debug("[gpt-sovits-tts] 立绘/语气已由朗读链路判定, 跳过重复 AI 调用"); } catch (e) { /* noop */ } return; }
     (async () => {
       try {
         const _e = await aiJudgeEmotionNow(String(message.content), _roleN);
@@ -5726,6 +5797,15 @@ window.fvttTTSDiag = async function fvttTTSDiag(n = 6) {
       P("CSS 尺寸变量: 消息立绘=" + (cs.getPropertyValue("--fvtt-tts-portrait-size") || "(空)") + " 头部头像=" + (cs.getPropertyValue("--fvtt-tts-header-avatar-size") || "(空)"));
     } catch (e) { /* noop */ }
     try { P("本机当前角色=" + (loadVoiceProfile().current || "(未选)")); } catch (e) { /* noop */ }
+    // 1.6.105 最近一次朗读耗时(标出"慢"到底慢在 AI 还是合成)
+    try {
+      const _tm = window.__fvttTTSLastTiming;
+      if (_tm && _tm.at) P("最近一句耗时: 总计 " + (_tm.totalMs / 1000).toFixed(1) + "s（其中 AI 判语气 " + (_tm.judgeMs / 1000).toFixed(1) + "s）@" + new Date(_tm.at).toLocaleTimeString("zh-CN"));
+    } catch (e) { /* noop */ }
+    try {
+      const _cr = window.__fvttTTSCrashList || [];
+      if (_cr.length) P("朗读链路异常记录: " + _cr.slice(-2).map(x => String(x.msg).split("\n")[0]).join(" ｜ "));
+    } catch (e) { /* noop */ }
     const msgs = Array.from(game.messages.contents).slice(-Math.max(1, n));
     P("--- 最近 " + msgs.length + " 条消息 ---");
     msgs.forEach(m => {

@@ -3803,7 +3803,8 @@ async def llm_assess_endpoint(request: Request):
         "temperature": 0.2,   # 1.6.63 降低随机性: 润色只加语气词/标点, 避免随意改写原句
         "max_tokens": 512,
     }
-    data, _llm_status, llm_err = await asyncio.to_thread(_llm_chat_call, payload, base, key, 15)
+    # 1.6.105 15→25s: 外部 LLM(尤其推理模型)首字常超 15s, 一超时就整句退回规则 → 听感"与朗读提示词无关"
+    data, _llm_status, llm_err = await asyncio.to_thread(_llm_chat_call, payload, base, key, 25)
     if data is None:
         return JSONResponse(status_code=200, content={"ok": False, "message": "LLM 请求失败(无AI语气, 语音不受影响): %s" % (llm_err or "unknown")})
     content = ""
