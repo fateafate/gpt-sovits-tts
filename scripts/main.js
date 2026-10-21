@@ -19,7 +19,7 @@ window.fetchAndRefreshModels = fetchAndRefreshModels;
 const MODULE = "gpt-sovits-tts";
 // 1.6.103 代码版本号: Foundry 的 game.modules.get(id).version 读的是"载入世界时的清单缓存",
 //   改了 manifest 不刷新会一直显示旧版本(用户多次看到 1.6.96 而实际代码已是新版) → 报告里同时打印两者, 便于确认真的在跑新代码
-const MOD_VERSION = "1.6.111";
+const MOD_VERSION = "1.6.112";
 const CHAT_STYLES = (typeof CONST !== "undefined" && (CONST.CHAT_MESSAGE_STYLES || CONST.CHAT_MESSAGE_TYPES)) || {};
 
 /* ============ 设置定义 ============ */
@@ -121,6 +121,18 @@ function styleStrengthOf(role) {
   } catch (e) { /* noop */ }
   try { const v = getCfg().styleStrength; if (typeof v === "number") return Math.max(0, Math.min(100, v)); } catch (e) { /* noop */ }
   return 50;
+}
+
+// 1.6.112 情绪占比规范化(单一来源): speak / AI 预加载 / 玩家代理合成 / 最终测试 共用
+//   规则: 本次带了情绪参考音, 而占比 <=0(或未设) → 按 1.0 使用(引擎在 mix<=0 时会直接丢弃 aux, 声音就变回默认)
+//   1.6.111 起「0 = 自动」: 不填就是让 AI 选中的情绪参考音直接生效
+function normalizeEmotionMix(ov) {
+  try {
+    if (!ov) return ov;
+    const hasAux = Array.isArray(ov.auxRefAudioPaths) && ov.auxRefAudioPaths.length > 0;
+    if (hasAux && !(typeof ov.emotionMix === "number" && ov.emotionMix > 0)) ov.emotionMix = 1.0;
+  } catch (e) { /* noop */ }
+  return ov;
 }
 // 1.6.53 角色立绘编号表(Shinsekai式): emotion_tags 行 → [{index,label}], 行号/标注编号=立绘索引(1-based), 交给 AI 按语气情绪选
 function buildSpriteList(c) {
@@ -634,11 +646,9 @@ async function speak(text, { lang = null, sender = "", refAudioPath = null, prom
   //   引擎日志里能看到 aux 有值但 mix=0, 用户听到的就是"和朗读提示词完全无关的声音"。
   //   现在: 有情绪参考音而占比 <=0(或未设) → 按 1.0 用它(Shinsekai 语义: 该情绪的参考音就是这段话的参考音)。
   try {
-    if (overrides && Array.isArray(overrides.auxRefAudioPaths) && overrides.auxRefAudioPaths.length
-        && !(typeof overrides.emotionMix === "number" && overrides.emotionMix > 0)) {
-      overrides.emotionMix = 1.0;
-      try { console.debug("[gpt-sovits-tts] 情绪参考音存在但情绪占比<=0 → 按 1.0 使用参考音(否则语气会被引擎丢弃)"); } catch (e2) { /* noop */ }
-    }
+    const _hadAux = !!(overrides && Array.isArray(overrides.auxRefAudioPaths) && overrides.auxRefAudioPaths.length);
+    normalizeEmotionMix(overrides);
+    if (_hadAux && overrides.emotionMix > 0 && _hadAux) { try { console.debug("[gpt-sovits-tts] 情绪参考音存在但情绪占比<=0 → 按 1.0 使用参考音(否则语气会被引擎丢弃)"); } catch (e2) { /* noop */ } }
   } catch (e) { /* noop */ }
   // 1.6.109 把"这次真正送给引擎的语气参数"暴露出来: 最终测试/诊断据此判断
   //   「AI 选中的语气到底有没有送到引擎」(以前日志里 aux 有值但 mix=0 → 引擎丢弃, 用户听到"没变化")
@@ -1779,11 +1789,8 @@ function buildSendPop() {
       const curP = (profP.chars && profP.chars[roleP]) || {};
       if (typeof curP.emotionMix === "number") overridesP.emotionMix = curP.emotionMix;
       else if (aiEmoP) overridesP.emotionMix = 1.0;   // 1.6.65 AI 判断语气 → 情绪参考音作唯一参考(与发送时一致, 严格 Shinsekai)
-      // 1.6.109 预加载合成同样要纠正"占比 0"(否则预合成的这段音频本身就是没有语气的)
-      try {
-        if (overridesP.auxRefAudioPaths && overridesP.auxRefAudioPaths.length
-            && !(typeof overridesP.emotionMix === "number" && overridesP.emotionMix > 0)) overridesP.emotionMix = 1.0;
-      } catch (e) { /* noop */ }
+      // 1.6.109/1.6.112 预加载合成同样规范化占比(单一来源 normalizeEmotionMix)
+      normalizeEmotionMix(overridesP);
       // 1.6.99 AI 直出/预加载: 强度=0 时用提示词关键词语速(AI/提示词自己决定), 不再锁原速
       let _spdP = Number(cfgP2.speedFactor) || 1;
       try {
@@ -4557,8 +4564,8 @@ window.runFinalTest = async function runFinalTest() {
   push("# GPT-SoVITS TTS 最终测试报告");
   push("");
   push("- 时间: " + new Date().toLocaleString("zh-CN") + " | 执行者: " + opName + " | 当前角色: " + cn + " | 代码版本: " + MOD_VERSION + "(清单缓存显示 " + verTxt + ")");
-  push("- 测试脚本: **v3**(模块 " + MOD_VERSION + " 内置) | 覆盖: 环境与配置 · AI/Key 专项 · 语气提示 · 朗读提示词(强度) · 情绪参考音 · 实际朗读 · **立绘与头像实物检查**");
-  push("  (v3 新增: 立绘/头像实测 —— 不再只看 flags, 而是「路径能否取到图 + 页面是否真的插了图且解码成功」; 对应「只有语音没有立绘」回归)");
+  push("- 测试脚本: **v4**(模块 " + MOD_VERSION + " 内置) | 覆盖: 〇改动自检 · 环境与配置 · AI/Key · 语气提示 · 朗读提示词(强度) · 情绪参考音 · **多场景实测(6 条)** · 立绘实物 · 语气送达 · 代理合成 · 白名单/按钮/去重 · 需求对照");
+  push("  (v4: 把 1.6.96~1.6.111 所有未经实测的改动都拉进判定 —— 多场景语气/立绘、情绪占比 0=自动、四滑块 0=自动、代理合成、白名单、AI 去重、崩溃上报; 任一项不符都会进失败清单)");
   push("");
   push("## 一、环境与配置");
   let engOk = false;
@@ -4617,6 +4624,48 @@ window.runFinalTest = async function runFinalTest() {
   } catch (e) { /* noop */ }
   push("");
   // 1.6.81 AI / Key 专项测试: 验证 key 有效性、base 端点、当前模型可用性, 并在当前模型不可用时自动找可用模型
+  // 1.6.112 〇: 本轮(1.6.96~1.6.111)改动自检 —— 纯逻辑, 不联网, 不依赖引擎
+  push("");
+  push("## 一·0、本轮改动自检(纯逻辑, 不联网)");
+  push("");
+  const _chk = (name, ok, detail) => { push("- " + (ok ? "✓ " : "✗ ") + name + (detail ? ("（" + detail + "）") : "")); if (!ok) fails.push(name); return ok; };
+  try {
+    const _o1 = normalizeEmotionMix({ auxRefAudioPaths: ["a.wav"], emotionMix: 0 });
+    _chk("情绪占比 0 + 有参考音 → 按 1.0", _o1.emotionMix === 1.0, "mix=" + _o1.emotionMix);
+    const _o2 = normalizeEmotionMix({ emotionMix: 0 });
+    _chk("情绪占比 0 且无参考音 → 不误改", _o2.emotionMix === 0);
+    const _o3 = normalizeEmotionMix({ auxRefAudioPaths: ["a.wav"], emotionMix: 0.5 });
+    _chk("用户手动占比 0.5 → 尊重(不改)", _o3.emotionMix === 0.5);
+  } catch (e) { _chk("情绪占比规范化", false, String((e && e.message) || e).slice(0, 50)); }
+  try {
+    _chk("「害羞/羞涩」→ shy", normalizeEmotionKey("害羞羞涩") === "shy" && styleEmotionKey("害羞羞涩的语气") === "shy");
+    _chk("「害羞，脸红」→ shy", normalizeEmotionKey("害羞，脸红") === "shy");
+    const _hasShy = (() => { try { const c = (quickChars && quickChars.chars || []).find(x => x.name === cn); return ((c && c.emotions) || []).some(e => /害羞/.test(String(e && e.label))); } catch (e) { return false; } })();
+    if (_hasShy) {
+      const _shySlot = (() => { try { return findEmotionSlot("shy", cn); } catch (e) { return null; } })();
+      _chk("英语枚举 shy → 命中中文情绪槽", !!(_shySlot && _shySlot.key), _shySlot ? String(_shySlot.key) : "未命中");
+    } else push("- · 角色「" + cn + "」没有害羞槽 → 该断言跳过");
+  } catch (e) { _chk("shy 映射", false, String((e && e.message) || e).slice(0, 40)); }
+  try {
+    const _cfg0 = getCfg();
+    _chk("四项调配默认 0 = 自动", Number(_cfg0.volume) === 0 && Number(_cfg0.speedFactor) === 0, "音量=" + _cfg0.volume + " 语速=" + _cfg0.speedFactor);
+    _chk("音量 0 不会静音(playVolume→1.0)", playVolume() === 1, "playVolume=" + playVolume());
+  } catch (e) { _chk("调配默认值", false); }
+  try {
+    _chk("立绘候选链函数就绪(toAvatarUrl/applyEmotionAvatar)", typeof toAvatarUrl === "function" && typeof applyEmotionAvatar === "function");
+    _chk("立绘诊断可用(fvttTTSDiag)", typeof window.fvttTTSDiag === "function");
+    const _crashOk = (() => {
+      const _b = (window.__fvttTTSCrashList || []).length;
+      const _prev = window.__fvttTTSCrashNotified;
+      window.__fvttTTSCrashNotified = true;   // 测试期间不要弹错误通知
+      try { reportSpeakCrash(new Error("finaltest-probe")); } catch (e) { /* noop */ }
+      window.__fvttTTSCrashNotified = _prev;
+      return (window.__fvttTTSCrashList || []).length > _b;
+    })();
+    _chk("朗读崩溃上报可用(reportSpeakCrash)", _crashOk);
+    _chk("代码版本常量", /^[0-9]+\.[0-9]+\.[0-9]+$/.test(String(MOD_VERSION)), "MOD_VERSION=" + MOD_VERSION);
+  } catch (e) { _chk("工具函数自检", false); }
+
   _mark("环境与配置");
   _note("① AI/Key 探测中(每个模型一次真实调用, 可能 20~60s)…");
   push("## 一·A、AI / Key 专项测试");
@@ -4741,6 +4790,7 @@ window.runFinalTest = async function runFinalTest() {
     }
   } catch (e) { push("- 语气提示实测异常: " + String((e && e.message) || e).slice(0, 90)); }
   push("");
+  let _strengthOk = null;   // 1.6.112 记录强度实测结果(供需求对照)
   _mark("语气提示"); push("## 二、朗读提示词(是否生效)");
   if (!style) {
     push("- ⚠ **未填写朗读提示词** → 引擎侧整段跳过提示词逻辑: 语速固定 spd=1.00、不做切分/停顿调整(与提示词无关)。");
@@ -4778,6 +4828,7 @@ window.runFinalTest = async function runFinalTest() {
       if (a1 && a2 && a1.dur > 0) {
         const _diff = (a2.dur - a1.dur) / a1.dur * 100;
         const _okp = Math.abs(_diff) > 1.5;
+        _strengthOk = _okp;   // 1.6.112 供"需求对照"引用
         push("- **提示词实测**: 强度0%(spd=1.00) 时长=" + a1.dur.toFixed(2) + "s vs 当前(spd=" + _cur.toFixed(2) + ") 时长=" + a2.dur.toFixed(2) + "s → 差异 " + (_diff >= 0 ? "+" : "") + _diff.toFixed(1) + "% " + (_okp ? "✓ 提示词确实生效" : "⚠ 差异不明显(强度太低, 或该提示词未命中关键词)"));
         if (!_okp) fails.push("提示词生效");
       } else push("- 提示词实测: 跳过(音频解析失败)");
@@ -4801,35 +4852,56 @@ window.runFinalTest = async function runFinalTest() {
     }
   } catch (e) { push("- 情绪参考音: 读取失败"); }
   push("");
-  _note("④ 实际朗读合成中(等音频写回, 最长 40s)…"); _mark("情绪参考音"); push("## 三、实际朗读(按当前提示词, 1 条健全性验证)");
+  _note("④ 多场景实测中(每条: AI 判语气 + 合成 + 写回, 约 5~15s)…"); _mark("情绪参考音");
+  push("## 三、多场景实测(每条都走真实链路: 发送 → AI判定 → 合成 → 写回)");
   push("");
-  push("(关注: 提示词命中的情绪与立绘 / AI 润色 / 合成 / 句首音量)");
+  push("覆盖: ①提示词=害羞 ②提示词=愤怒 ③提示词=温柔 ④无提示词(AI自由判) ⑤手动选语气槽 ⑥AI直出(强度0, 语速交给AI)");
+  push("(所有场景均以「四项调配=0(自动)」发送, 同时验证 1.6.111 的 0=自动 语义)");
+  const _slotKeyOf = (re) => { try { const c = (quickChars && quickChars.chars || []).find(x => x.name === cn); const s = ((c && c.emotions) || []).find(e => re.test(String((e && e.label) || ""))); return (s && s.key) || ""; } catch (e) { return ""; } };
   const scenes = [
-    { label: "朗读", role: cn, lang: "zh", text: "今天的事情，就交给我吧。我会认真处理的。", strength: Math.round(styleStrengthOf(cn)), manual: false },
+    { label: "①害羞", style: "害羞羞涩的语气", lang: "zh", text: "今天的事情，就交给我吧。我会认真处理的。", strength: 50, expect: "shy" },
+    { label: "②愤怒", style: "用愤怒、压着火气的语气说话", lang: "zh", text: "今天的事情，就交给我吧。我会认真处理的。", strength: 50, expect: "angry" },
+    { label: "③温柔", style: "温柔、轻声细语地说", lang: "zh", text: "今天的事情，就交给我吧。我会认真处理的。", strength: 50, expect: "joy" },
+    { label: "④无提示词", style: "", lang: "zh", text: "真是太糟糕了，我完全不能接受！", strength: 50, expect: "" },
+    { label: "⑤手动语气槽", style: "", lang: "zh", text: "今天的事情，就交给我吧。", strength: 0, manualSlot: (_slotKeyOf(/生气/) || "voice_03"), expect: "angry" },
+    { label: "⑥AI直出", style: "音量很低、缓慢而悲伤地说", lang: "zh", text: "没关系……我早就知道了。", strength: 0, aiDirect: true, expect: "sad" },
   ];
-  const _origRole = (() => { try { return (loadVoiceProfile().current) || ""; } catch (e) { return ""; } })();
-  const _origStre = (() => { try { const vp = loadVoiceProfile(); const cc = (vp.chars && vp.chars[cn]) || null; return (cc && typeof cc.styleStrength === "number") ? cc.styleStrength : 50; } catch (e) { return 50; } })();
-  const manualSpriteOf = (r) => { try { const cc = (quickChars && quickChars.chars || []).find(x => x.name === r); return (cc && cc.sprites && cc.sprites[0]) || ""; } catch (e) { return ""; } };
+  const _profSnap = (() => { try { return JSON.stringify(loadVoiceProfile()); } catch (e) { return ""; } })();
+  const _origStyle = (() => { try { return getStylePrompt(cn) || ""; } catch (e) { return ""; } })();
   window.__fvttTTSAiLineDiag = true;
   window.__fvttTTSAiLineDiagList = [];
   window.__fvttTTSAiLineEnterList = [];
-  let _lastMsgId = "";   // 1.6.102 立绘/头像实测用: 记下本次实际朗读生成的消息
+  let _lastMsgId = "";   // 立绘/头像实测用: 最后一条场景的消息
+  const _sceneRows = [];
   try {
     for (let i = 0; i < scenes.length; i++) {
       const sc = scenes[i];
+      // 每条场景: 设置该场景的朗读提示词 + 强度(手动槽场景额外选中该槽)
       try {
+        setStylePrompt(cn, sc.style || "");
         const profT = loadVoiceProfile();
-        profT.current = sc.role;
+        profT.current = cn;
         profT.chars = profT.chars || {};
-        const cT = profT.chars[sc.role] || (profT.chars[sc.role] = { name: sc.role });
+        const cT = profT.chars[cn] || (profT.chars[cn] = { name: cn });
         cT.styleStrength = sc.strength;
+        if (!sc.manualSlot) { cT.emotion = ""; cT.auxRef = ""; }
         saveVoiceProfile(profT);
       } catch (e) { /* noop */ }
-      const flT = { fromModSend: true, role: sc.role, lang: sc.lang };
-      if (sc.manual) { const _ms = manualSpriteOf(sc.role); if (_ms) flT.selSprite = _ms; }
+      if (sc.manualSlot) { try { await applyEmotion(sc.manualSlot, cn); } catch (e) { /* noop */ } }
+      // 造 flags: 与"发送框(doSubmitChat)"写入的字段保持一致(含 ref/auxRef/promptText),
+      //   但 speed/emotionMix/emotionMod 一律 0 → 顺带验证 1.6.111 的「0 = 自动」语义
+      const _cv = (() => { try { return currentVoice() || {}; } catch (e) { return {}; } })();
+      const flT = {
+        fromModSend: true, role: cn, lang: sc.lang,
+        emotion: _cv.emotion ? normalizeEmotionKey(_cv.emotion) : "",
+        ref: String(_cv.ref || ""), auxRef: String(_cv.auxRef || ""),
+        promptText: String(_cv.promptText || ""), promptLang: String(_cv.promptLang || ""),
+        speed: 0, emotionMix: 0, emotionMod: 0,
+        ...(sc.aiDirect ? { aiDirect: true } : {}),
+      };
       let msg = null;
-      try { msg = await ChatMessage.create({ content: sc.text, speaker: { alias: sc.role }, flags: { [MOD]: flT } }); }
-      catch (e) { push("[" + sc.label + "] 发送失败: " + String((e && e.message) || e).slice(0, 60)); fails.push(sc.label + "发送"); continue; }
+      try { msg = await ChatMessage.create({ content: sc.text, speaker: { alias: cn }, flags: { [MOD]: flT } }); }
+      catch (e) { push("- [" + sc.label + "] 发送失败: " + String((e && e.message) || e).slice(0, 60)); fails.push(sc.label + "发送"); continue; }
       if (msg && msg.id) _lastMsgId = msg.id;
       let waited = 0;
       while (waited < 150 && !(window.__fvttTTSAiLineEnterList || []).some(p => p && p.mid === msg.id)) { await new Promise(r => setTimeout(r, 200)); waited++; }
@@ -4838,7 +4910,7 @@ window.runFinalTest = async function runFinalTest() {
       while (waited < 175 && !(window.__fvttTTSAiLineDiagList || []).some(p => p && p.mid === msg.id)) { await new Promise(r => setTimeout(r, 200)); waited++; }
       let aud = "", url3 = "";
       waited = 0;
-      while (waited < 200) {   // 1.6.100 等待写回 24s→40s(引擎刚重启首次合成较慢, 避免误报超时)
+      while (waited < 200) {
         try {
           const m2 = game.messages.get(msg.id);
           const f2 = m2 && m2.flags && m2.flags[MOD];
@@ -4848,37 +4920,46 @@ window.runFinalTest = async function runFinalTest() {
       }
       const _probe = (window.__fvttTTSAiLineDiagList || []).find(p => p && p.mid === msg.id) || {};
       const _fNow = (() => { try { const m3 = game.messages.get(msg.id); return (m3 && m3.flags && m3.flags[MOD]) || {}; } catch (e) { return {}; } })();
-      const _av = _fNow.avatar || _fNow.selSprite || _fNow.aiSprite || "";
+      const _spNow = window.__fvttTTSLastSynthParams || {};
+      const _slotNow = (() => { try { return findEmotionSlot(String(_fNow.emotion || ""), cn); } catch (e) { return null; } })();
+      const _emoSema = (() => { try { return _slotNow ? normalizeEmotionKey(String(_slotNow.label || _slotNow.key || "")) : normalizeEmotionKey(String(_fNow.emotion || "")); } catch (e) { return ""; } })();
+      const _av = String(_fNow.aiSprite || _fNow.avatar || _fNow.selSprite || "");
+      const _slotAv = String((_slotNow && _slotNow.avatar) || "");
       let headTxt = "";
       if (url3) {
         const an = await analyzeAudioHead(url3);
         if (an) {
           const okH = (an.silentHead >= 0 && an.silentHead <= 0.08);
-          headTxt = " | 句首=" + an.rms20.toFixed(3) + "(静音头" + (an.silentHead < 0 ? "无" : an.silentHead.toFixed(3) + "s") + ")" + (okH ? "✓" : "⚠");
+          headTxt = " | 句首=" + an.rms20.toFixed(3) + "(静音头" + (an.silentHead < 0 ? "无" : an.silentHead.toFixed(3) + "s)") + (okH ? "✓" : "⚠");
           if (!okH) fails.push(sc.label + "句首音量");
         }
       }
-      push("- [" + sc.label + " " + sc.role + "/" + sc.lang + "/强度" + sc.strength + "%] 「" + sc.text.slice(0, 18) + "…」 → "
-        + (_probe.mid ? ("判定=" + (_probe.src || "-") + " 情绪=" + (_probe.emo || "无")) : ("未探到(" + (_entered ? "已进hook" : "hook未触发") + ")"))
+      push("- **" + sc.label + "** 提示词=「" + (sc.style || "无") + "」强度" + sc.strength + "% → "
+        + (_probe.mid ? ("判定=" + (_probe.src || "-") + " 情绪槽=" + (_fNow.emotion || _probe.emo || "无")) : ("未探到(" + (_entered ? "已进hook" : "hook未触发") + ")"))
+        + "(" + (_emoSema || "?") + ")"
         + " | 润色=" + ((_fNow.polishText || "").trim() ? "✓" : "—")
-        + " | 立绘=" + (_av ? String(_av).slice(-26) : (sc.manual ? "未覆盖(手动优先✓)" : "无"))
-        + " | 合成=" + (aud || "超时") + headTxt);
-      // 1.6.103 合成没写回 = 朗读链路断了(立绘也会因"未朗读"被拒) → 明确记为失败, 不要只显示"超时"让人以为慢
+        + " | 合成=" + (aud || "超时")
+        + " | 参考音=" + ((_spNow.aux && _spNow.aux.length) ? "✓" : "无") + " 占比=" + (_spNow.mix == null ? "?" : _spNow.mix) + " 语速=" + Number(_spNow.spd || 1).toFixed(2)
+        + " | 立绘=" + (_av ? String(_av).slice(-24) : "无") + headTxt);
+      // —— 断言(每条场景都查) ——
       if (!aud) fails.push(sc.label + "合成");
+      if (sc.expect && _emoSema !== sc.expect) fails.push(sc.label + "语气语义(" + _emoSema + "≠" + sc.expect + ")");
+      if (_slotNow && _slotNow.ref_audio_path) {
+        if (!(_spNow.aux && _spNow.aux.length)) fails.push(sc.label + "参考音未送达");
+        if (!(_spNow.mix > 0)) fails.push(sc.label + "占比未规范化");
+        if (_av && _slotAv && _av !== _slotAv) fails.push(sc.label + "立绘≠情绪槽");
+      }
+      if (!(_spNow.spd > 0)) fails.push(sc.label + "语速非法");
+      _sceneRows.push({ label: sc.label, style: sc.style, strength: sc.strength, emo: _emoSema, slot: (_fNow.emotion || ""), av: _av, slotAv: _slotAv, aux: !!(_spNow.aux && _spNow.aux.length), mix: _spNow.mix, spd: _spNow.spd, aud: !!aud, polish: !!(_fNow.polishText || "").trim(), aiDecided: !!_fNow.aiDecided });
     }
   } finally {
-    try {
-      const profR = loadVoiceProfile();
-      profR.current = _origRole;
-      profR.chars = profR.chars || {};
-      const cR = profR.chars[cn] || (profR.chars[cn] = { name: cn });
-      cR.styleStrength = _origStre;
-      saveVoiceProfile(profR);
-    } catch (e) { /* noop */ }
+    try { if (_profSnap) saveVoiceProfile(JSON.parse(_profSnap)); } catch (e) { /* noop */ }
+    try { setStylePrompt(cn, _origStyle); } catch (e) { /* noop */ }
     window.__fvttTTSAiLineDiag = false;
     window.__fvttTTSAiLineDiagList = [];
     window.__fvttTTSAiLineEnterList = [];
   }
+
   // 1.6.102 立绘 / 头像实测(回归重点): 不只看 flags 有没有写, 而是查
   //   ① 消息里的立绘路径能不能真的取到图(HTTP) ② 页面是否真的插了 <img> 且浏览器解码成功(naturalWidth>0)
   //   ③ 消息头部玩家头像是否也被换成同一张 ④ 若没插, 打印未插入原因(applyEmotionAvatar 的诊断环形缓冲)
@@ -4978,8 +5059,68 @@ window.runFinalTest = async function runFinalTest() {
     }
   } catch (e) { push("- 语气送达检查异常: " + String((e && e.message) || e).slice(0, 70)); }
   push("");
-  _mark("语气送达"); push("## 四、结论");
-  push("- 测试脚本: v3(代码版本 " + MOD_VERSION + ", 清单缓存 " + verTxt + ") | 耗时: " + Math.round((Date.now() - t0) / 1000) + "s | LLM: " + (llmOk ? "AI链路(判语气+润色+选立绘)已启用" : "规则降级(无AI: 文本规则/提示词基调; 情绪差异靠情绪参考音, 默认零 DSP 不变调)"));
+  // 1.6.112 三·D: 玩家端代理合成(玩家说话时的链路) —— GM 端直接调用代理核心做实测
+  push("");
+  _mark("语气送达");
+  push("## 三·D、玩家端代理合成实测(玩家说话 / iPad 走 socket 委托)");
+  push("");
+  try {
+    const _slotD = (() => { try { return findEmotionSlot("shy", cn) || findEmotionSlot("angry", cn); } catch (e) { return null; } })();
+    const _auxD = (_slotD && _slotD.ref_audio_path) ? ("fvtt_chars/" + cn + "/" + _slotD.ref_audio_path) : "";
+    const _fake = {
+      id: "finaltest-proxy-" + Date.now(),
+      flags: { [MOD]: { synthRequest: { text: "代理路径测试，玩家说话时的合成。", lang: "zh" }, role: cn, auxRef: _auxD, emotionMix: 0, emotion: String((_slotD && _slotD.key) || "") } },
+      update: async () => ({ ok: true }),
+    };
+    const _pr = await _proxySynthFor(_fake);
+    const _okD = !!(_pr && _pr.ok);
+    push("- 代理合成: " + (_okD ? "✓ 成功" : "✗ 失败") + " | 耗时=" + ((_pr && _pr.ms) || 0) + "ms | 音频=" + ((_pr && _pr.audioUrl) ? "有" : "无") + " | 传入情绪槽=" + String((_slotD && _slotD.key) || "(无)") + " 参考音=" + (_auxD ? "✓" : "无") + " 占比=0(自动)");
+    if (!_okD) fails.push("代理合成");
+  } catch (e) { push("- 代理合成异常: " + String((e && e.message) || e).slice(0, 70)); fails.push("代理合成异常"); }
+
+  // 1.6.112 三·E: 白名单 / 预加载按钮状态 / AI 去重
+  push("");
+  push("## 三·E、其他改动实测(朗读白名单 · 预加载按钮 · AI 去重)");
+  push("");
+  try {
+    const _mNo = await ChatMessage.create({ content: "白名单测试：这条不应该被朗读。", speaker: { alias: cn }, flags: { [MOD]: { role: cn, lang: "zh" } } });
+    await new Promise(r => setTimeout(r, 4500));
+    const _fNo = (() => { try { const mm = game.messages.get(_mNo.id); return (mm && mm.flags && mm.flags[MOD]) || {}; } catch (e) { return {}; } })();
+    const _noAudio = !(_fNo.audioUrl || _fNo.audioData);
+    push("- 朗读白名单(非模块发送框消息不朗读): " + (_noAudio ? "✓ 未生成音频" : "✗ 居然朗读了"));
+    if (!_noAudio) fails.push("朗读白名单");
+  } catch (e) { push("- 白名单测试异常: " + String((e && e.message) || e).slice(0, 60)); }
+  try {
+    const _btnOk = (() => { try { buildSendPop(); refreshPreloadBtn(); const b = sendPopEl && sendPopEl.querySelector(".fvtt-tts-sendpop-preload"); return !!b; } catch (e) { return false; } })();
+    push("- 预加载按钮状态复核(refreshPreloadBtn): " + (_btnOk ? "✓ 可用" : "✗ 异常"));
+    if (!_btnOk) fails.push("预加载按钮状态");
+  } catch (e) { /* noop */ }
+  try {
+    const _dedupe = _sceneRows.filter(r => r.aiDecided).length;
+    push("- AI 去重(aiDecided 标记, 避免每条重复调一次 /llm 选立绘): " + _dedupe + "/" + _sceneRows.length + " 条场景已标记" + (_dedupe > 0 ? " ✓" : "（LLM 降级时不会标记）"));
+    if (_sceneRows.length && _dedupe === 0) fails.push("AI去重");
+  } catch (e) { /* noop */ }
+
+  // 1.6.112 三·F: 引擎自动启动(看门狗)实测 —— 需要引擎为 1.6.112+ (否则 /watchdog 不存在, 跳过不判失败)
+  push("");
+  push("## 三·F、引擎自动启动(看门狗)实测");
+  push("");
+  try {
+    const _wr = await svcRequest(cfg.serverUrl, "GET", "/watchdog", null, { timeoutMs: 8000, retries: 0 });
+    const _wj = (_wr && typeof _wr.json === "function") ? await _wr.json().catch(() => ({})) : {};
+    if (_wr && _wr.ok && _wj && _wj.startup !== undefined) {
+      push("- Windows 启动项: " + (_wj.startup ? "✓ 已安装" : "✗ 未安装 → 运行 engine\\安装看门狗自启.bat") + "  ←  " + String(_wj.startup_path || "").slice(-46));
+      push("- 看门狗进程: " + (_wj.watchdog_running ? "✓ 正在运行" : "✗ 未在运行(wscript)"));
+      push("- 最近判断(watchdog.log): " + (String(_wj.log_tail || "") ? String(_wj.log_tail).slice(-170) : "(无 watchdog.log)"));
+      if (!_wj.startup) fails.push("看门狗自启");
+      if (!_wj.watchdog_running) fails.push("看门狗进程");
+    } else {
+      push("- ⚠ 引擎未提供 /watchdog(旧引擎) → 重启引擎后可测；本次跳过, 不计失败");
+    }
+  } catch (e) { push("- ⚠ /watchdog 查询失败(引擎可能是旧版本) → 重启引擎后可测；本次跳过"); }
+
+  _mark("代理/白名单"); push("## 四、结论");
+  push("- 测试脚本: v4(代码版本 " + MOD_VERSION + ", 清单缓存 " + verTxt + ") | 耗时: " + Math.round((Date.now() - t0) / 1000) + "s | LLM: " + (llmOk ? "AI链路(判语气+润色+选立绘)已启用" : "规则降级(无AI: 文本规则/提示词基调; 情绪差异靠情绪参考音, 默认零 DSP 不变调)"));
   push("- 关键项: " + (fails.length ? ("⚠ 存在问题 → " + fails.join("、")) : "全部通过 ✓"));
   // 1.6.104 耗时明细(哪一段慢一目了然): 上次 475s 就靠这个定位到"AI 探测重试 + 首次合成排队"
   try {
@@ -4988,6 +5129,29 @@ window.runFinalTest = async function runFinalTest() {
     if (_secTxt) push("- 耗时明细: " + _secTxt + " (合计 " + _tot + "s)");
     if (_tot > 240) push("  ⚠ 超过 4 分钟多半是: 某次 AI 探测走了重试(20s+45s)、外部 LLM 首字慢、或首次合成在排队 —— 看上面各段耗时定位");
   } catch (e) { /* noop */ }
+  // 1.6.112 需求对照(逐条) — 用本次实测数据逐项判定, 不靠感觉
+  push("");
+  push("## 五、需求对照(逐条实测)");
+  push("");
+  try {
+    const _rows = _sceneRows || [];
+    const _req = [];
+    _req.push(["AI 随台词自动切换立绘", _rows.length > 0 && _rows.every(r => !!r.av)]);
+    _req.push(["AI 随台词切换语气/声音(情绪参考音送达)", _rows.filter(r => r.aux).length >= Math.max(1, _rows.length - 1)]);
+    _req.push(["立绘与朗读提示词同步(立绘=该情绪槽的图)", _rows.every(r => !r.slotAv || r.av === r.slotAv)]);
+    _req.push(["情绪占比 0 = 自动(引擎不再丢弃参考音)", _rows.every(r => (r.mix == null) || r.mix > 0)]);
+    _req.push(["四项调配默认 0 = 自动", Number(getCfg().volume) === 0 && Number(getCfg().speedFactor) === 0]);
+    _req.push(["朗读音量 0 不静音", playVolume() === 1]);
+    _req.push(["提示词强度可影响语速(0% 与 50% 对比)", _strengthOk === null ? "未测" : _strengthOk]);
+    _req.push(["AI 判语气/润色/选立绘链路可用", !!llmOk]);
+    _req.push(["AI 润色在多场景里真实生效", _rows.some(r => r.polish)]);
+    _req.push(["关键词情绪(害羞/愤怒/温柔/悲伤)能被识别", _rows.length > 0 && _rows.filter(r => r.emo).length >= _rows.length - 1]);
+    _req.push(["玩家端代理合成可用(玩家/iPad 也能有声)", !fails.some(f => String(f).indexOf("代理合成") >= 0)]);
+    _req.push(["非模块发送框消息不朗读(白名单)", !fails.some(f => String(f) === "朗读白名单")]);
+    _req.push(["立绘实物检查(页面真的插了图且解码成功)", !fails.some(f => String(f) === "立绘显示")]);
+    _req.forEach(([n, ok]) => push("- " + (ok === true ? "✓ " : (ok === "未测" ? "· " : "✗ ")) + n + (ok === "未测" ? "（本次跳过）" : "")));
+  } catch (e) { push("- 需求对照生成失败: " + String((e && e.message) || e).slice(0, 60)); }
+
   push("- 报告文件: engine\\final_test_report.md (模块 engine 目录下; 覆盖式写入, 始终为最近一次结果)");
   const md = L.join("\n");
   try { console.warn("[gpt-sovits-tts][最终测试]\n" + md); } catch (e) { /* noop */ }
@@ -5336,8 +5500,8 @@ async function _proxySynthFor(message) {
     if (fl2.auxRef) o.auxRefAudioPaths = [fl2.auxRef];
     if (typeof fl2.emotionMix === "number") o.emotionMix = fl2.emotionMix;
     if (fl2.emotion) o.emotion = fl2.emotion;   // 1.6.20 情绪后处理(作者端判好的情绪 → 代理合成同语气)
-    // 1.6.109 玩家端代理合成同样纠正"占比 0": 否则只有 GM 听到语气, 玩家仍是默认声音
-    if (o.auxRefAudioPaths && o.auxRefAudioPaths.length && !(typeof o.emotionMix === "number" && o.emotionMix > 0)) o.emotionMix = 1.0;
+    // 1.6.109/1.6.112 玩家端代理合成同样规范化占比(单一来源): 否则只有 GM 听到语气
+    normalizeEmotionMix(o);
     const t0 = Date.now();
     const _pprov = String(fl2.ttsProvider || req.provider || "gpt-sovits");
     let res;

@@ -3317,6 +3317,46 @@ async def diag_endpoint(request: Request):
     return {"ok": True, "saved": _saved}
 
 
+# 1.6.112 看门狗状态(引擎自启是否装好/最近一次判断) —— 模块最终测试据此判定"引擎随 Foundry 自动启动"
+@APP.get("/watchdog")
+async def watchdog_state_endpoint():
+    """{ok, log, log_tail, startup, startup_path, watchdog_running}"""
+    out = {"ok": True, "log": False, "log_tail": "", "startup": False, "startup_path": "", "watchdog_running": False}
+    try:
+        eng_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "engine")
+        lp = os.path.join(eng_dir, "watchdog.log")
+        if os.path.exists(lp):
+            out["log"] = True
+            try:
+                with open(lp, "r", encoding="utf-8", errors="replace") as f:
+                    lines = [ln.strip() for ln in f.readlines()[-4:] if ln.strip()]
+                out["log_tail"] = " / ".join(lines)[-400:]
+            except Exception:
+                pass
+        try:
+            ap = os.environ.get("APPDATA", "")
+            if ap:
+                sp = os.path.join(ap, "Microsoft", "Windows", "Start Menu", "Programs", "Startup")
+                lnk = os.path.join(sp, "gpt-sovits-tts-watchdog.vbs")
+                out["startup_path"] = lnk
+                out["startup"] = os.path.exists(lnk)
+        except Exception:
+            pass
+        # 看门狗进程是否在跑(wscript 命令行含 watchdog.vbs)
+        try:
+            import subprocess
+            cp = subprocess.run(["wmic", "process", "where", "name='wscript.exe'", "get", "CommandLine", "/format:list"],
+                                capture_output=True, timeout=8)
+            txt = (cp.stdout or b"").decode("utf-8", "replace") + (cp.stderr or b"").decode("utf-8", "replace")
+            out["watchdog_running"] = ("watchdog.vbs" in txt)
+        except Exception:
+            pass
+    except Exception as e:
+        out["ok"] = False
+        out["message"] = str(e)[:200]
+    return out
+
+
 # 1.6.80 引擎机自检(部署专用 TTS 机时一键排查)
 @APP.get("/selfcheck")
 async def selfcheck_endpoint():
