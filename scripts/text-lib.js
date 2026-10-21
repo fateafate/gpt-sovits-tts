@@ -91,8 +91,18 @@ const _transCache = new Map();
 let _transBusy = new Map();
 let _transCoolUntil = 0;   // 1.6.87 免费翻译 API 限流(429)冷却截止时间
 let _transDisabled = false; // 1.6.96 429 后本会话永久停用翻译(避免每次隔几分钟发消息就再撞一次 429 刷屏)
+let _translator = null;      // 1.6.98 外部注入的翻译器(AI 翻译) — 优先于免费 MyMemory, 避免 429 且质量更高
+/** 1.6.98 注入 AI 翻译器: fn(text, from, to) → Promise<string|null>; null=失败(退化 MyMemory) */
+export function setTranslator(fn) { _translator = (typeof fn === "function") ? fn : null; }
 
 async function _mymemory(text, from, to) {
+  if (_translator) {
+    // 1.6.98 AI 翻译优先(同一把 LLM key, 无免费 API 限流)
+    try {
+      const t = await _translator(text, from, to);
+      if (t && String(t).trim()) return String(t).trim();
+    } catch (e) { /* 退化 MyMemory */ }
+  }
   if (_transDisabled) return null;   // 1.6.96 本会话已停用翻译
   if (Date.now() < _transCoolUntil) return null;   // 1.6.87 冷却中: 直接降级
   const ctrl = new AbortController();

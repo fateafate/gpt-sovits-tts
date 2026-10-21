@@ -10,7 +10,7 @@ import { installGmProxy } from "./gm-proxy.js";
 import { installTTSTests } from "./tests.js";
 import { BrowserSTT, ServerSTT } from "./stt-engine.js";
 import { VoiceManager, loadVoiceProfile, saveVoiceProfile, currentVoice, makeDraggable, getStylePrompt, setStylePrompt } from "./voice-manager.js";
-import { prepareTextForLang, localizeNumbers } from "./text-lib.js";
+import { prepareTextForLang, localizeNumbers, setTranslator } from "./text-lib.js";
 
 // 暴露给 voice-manager(语音设置面板) 调用的全局函数(函数声明 hoisted, 顶层挂载即可)
 window.fetchModelsFromServer = fetchModelsFromServer;
@@ -1052,6 +1052,12 @@ async function maybeSpeak(message) {
         try {
           const res = await judgeAndPolishByLLM(decision.text, roleN, !!cfg.llmPolish, getChatContext());
           if (res.ok && res.emotion) _emo = String(res.emotion);
+          // 1.6.98 朗读提示词(语气提示)里的情绪优先: 主持人/玩家明确指定语气时, 语音与立绘都以它为准
+          //   (此前 AI 判出 voice_19=严肃不满 会走 neutral 立绘, 看起来"提示词没效果")
+          try {
+            const _stE3 = styleEmotionKey(String(getStylePrompt(roleN) || ""));
+            if (_stE3) _emo = _stE3;
+          } catch (e0) { /* noop */ }
           // 1.6.52 朗读提示词交给AI(Shinsekai式): AI按角色人设+朗读提示词润色台词朗读; 聊天记录保持原文, flags记polishText(重播一致)
           if (res.ok && res.polish && cfg.llmPolish) {
             const _polOk = polishIsSafe(decision.text, res.polish);   // 1.6.63 双保险: 校验通过才用润色文本播出
@@ -3713,6 +3719,23 @@ Hooks.once("ready", () => {
       });
     } catch (e) { console.error("[gpt-sovits-tts] tests install failed:", e); }
   }, 800);
+  // 1.6.98 注入 AI 翻译器: 有 LLM 时优先用 AI 翻译(与判语气同一把 key, 无免费 API 的 429 限流, 质量更高); 失败才退化 MyMemory
+  try {
+    setTranslator(async (text, from, to) => {
+      try {
+        const c0 = getCfg();
+        if (!c0.llmEnabled || !c0.llmKey || window.__fvttTTSLlmBroken === true) return null;
+        const r = await svcRequest(c0.serverUrl, "POST", "/llm/translate", {
+          base: c0.llmBaseUrl || "https://api.openai.com/v1", key: c0.llmKey,
+          model: c0.llmModel || "gpt-4o-mini", text: String(text || "").slice(0, 2000),
+          to: String(to || "ja"), gm_prompt: "",
+        }, { timeoutMs: 20000, retries: 0 });
+        const j = (r && typeof r.json === "function") ? await r.json().catch(() => ({})) : {};
+        if (r && r.ok && j && j.ok && j.text) return String(j.text);
+      } catch (e) { /* fallthrough */ }
+      return null;
+    });
+  } catch (e) { /* noop */ }
   // 🤖 LLM 健康预探测(1.6.59): 失败记录原因并每 60s 自动重探, 修好 base/key 自动恢复(见模块级 probeLLMOnce/armLlmReProbe)
   setTimeout(() => {
     try {
@@ -4485,6 +4508,7 @@ window.runFinalTest = async function runFinalTest() {
       _ss.push(pct + "%→spd=" + spd.toFixed(2));
     });
     push("- 提示词=\"" + style + "\" | 关键词" + (_kw0.speed ? ("命中语速=" + _kw0.speed) : "未命中语速") + " | 当前强度=" + Math.round(_st0 * 100) + "% → 本次 spd=" + _cur.toFixed(2) + (_kw0.split ? (" | 切分=" + _kw0.split) : "") + (_kw0.frag ? (" | 停顿frag=" + (_kw0.frag * _st0).toFixed(2)) : ""));
+    if (Math.round(_st0 * 100) <= 0) push("- ⚠ 强度=0% → 按设计**不改变语速/停顿**（提示词只影响 AI 判语气/立绘）；想听出语速变化，请把强度滑块调到 50%+");
     push("- 强度插值表: " + _ss.join(" | ") + (_kw0.split ? " | 切分: <25% 不启用" : ""));
     try {
       const _sE = styleEmotionKey(style);
@@ -5137,11 +5161,18 @@ Hooks.on("createChatMessage", (message) => {
         if (profAi && profAi.chars && profAi.chars[_roleN] && profAi.chars[_roleN].selSprite) return;
         const cD = (quickChars && quickChars.chars || []).find(x => x.name === _roleN);
         if (!cD || !Array.isArray(cD.sprites) || !cD.sprites.length) return;
-        // 1.6.96 AI 返回的可能是情绪槽 key(voice_03) — 立绘匹配需要的是中文标签(生气) → 先转成标签, 否则永远匹配不到 → 立绘不变
+        // 1.6.96 AI 返回的可能是情绪槽 key(voice_03) — 立绘匹配需要的是中文标签(生气) → 先转成标签
         let _eLabel = String(_e || "");
         try {
           const _hitSlot = ((cD.emotions || []).find(s => s && (String(s.key) === String(_e) || String(s.label) === String(_e))));
           if (_hitSlot) _eLabel = String(_hitSlot.label || _hitSlot.key || _e);
+        } catch (e2) { /* noop */ }
+        // 1.6.98 立绘匹配用的是英文情绪枚举(emoTagWords 只认 joy/sad/angry...) → 把中文标签归一化
+        try { _eLabel = normalizeEmotionKey(_eLabel); } catch (e2) { /* noop */ }
+        // 1.6.98 朗读提示词(语气提示)的情绪优先, 保证"立绘与朗读提示词同步"
+        try {
+          const _stE4 = styleEmotionKey(String(getStylePrompt(_roleN) || ""));
+          if (_stE4) _eLabel = _stE4;
         } catch (e2) { /* noop */ }
         const _emoList = spriteBucketForEmotion(cD.sprites, _eLabel, cD.emotion_tags);
         const _rot = getSpriteRotation(_roleN + "|" + _eLabel + "|ai", _eLabel);

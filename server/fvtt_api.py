@@ -3125,6 +3125,53 @@ async def llm_endpoint(request: Request):
     return _ret
 
 
+@APP.post("/llm/translate")
+async def llm_translate_endpoint(request: Request):
+    """{base?, key, model?, text, to} → {ok, text}
+    1.6.98 AI 翻译: 替代免费翻译 API(MyMemory 有 429 限流), 质量更高、与判语气共用同一 key。"""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"ok": False, "message": "json body required"})
+    base = str(body.get("base") or "").strip() or "https://api.openai.com/v1"
+    key = str(body.get("key") or "").strip()
+    model = str(body.get("model") or "").strip() or "gpt-4o-mini"
+    text = str(body.get("text") or "").strip()[:2000]
+    to = str(body.get("to") or "").strip()[:20] or "ja"
+    gm_prompt = str(body.get("gm_prompt") or "").strip()[:600]
+    if not key:
+        return JSONResponse(status_code=400, content={"ok": False, "message": "api key 未配置"})
+    if not text:
+        return JSONResponse(status_code=400, content={"ok": False, "message": "text required"})
+    _lang_map = {"zh": "简体中文", "ja": "日语", "en": "英语", "ko": "韩语", "yue": "粤语"}
+    _to_name = _lang_map.get(to.lower(), to)
+    _gm_line = ("【语气/语境参考(只帮助把握语气, 不要据此增删内容)】\n%s\n\n" % gm_prompt) if gm_prompt else ""
+    sys_prompt = (
+        _gm_line +
+        "你是专业台词翻译。把用户给出的台词翻译成%s, 要求: ①只输出译文本身, 不要解释、不要加引号、不要附原文; "
+        "②保留人名/称呼与语气词的自然感(中文 呀/呢/哦, 日语 ね/よ/わ 等); ③保持口语自然, 不要逐字硬译; "
+        "④不要增删台词信息。" % _to_name
+    )
+    payload = {
+        "model": model,
+        "messages": [{"role": "system", "content": sys_prompt}, {"role": "user", "content": text}],
+        "temperature": 0.2,
+        "max_tokens": 512,
+    }
+    data, _st, err = await asyncio.to_thread(_llm_chat_call, payload, base, key, 20)
+    if data is None:
+        return JSONResponse(status_code=200, content={"ok": False, "message": "翻译失败: %s" % (err or "unknown")})
+    try:
+        _msg = (data.get("choices") or [{}])[0].get("message", {}) or {}
+        content = str(_msg.get("content") or "").strip() or str(_msg.get("reasoning_content") or "").strip()
+    except Exception:
+        content = ""
+    content = content.strip().strip('"').strip("“”").strip()
+    if not content:
+        return JSONResponse(status_code=200, content={"ok": False, "message": "翻译结果为空"})
+    return {"ok": True, "text": content[:2000]}
+
+
 @APP.post("/llm/models")
 async def llm_models_endpoint(request: Request):
     """{base?, key} → {ok, models:[...]} 获取 OpenAI 兼容服务的可用模型列表"""
