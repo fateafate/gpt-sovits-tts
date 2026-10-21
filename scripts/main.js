@@ -19,7 +19,7 @@ window.fetchAndRefreshModels = fetchAndRefreshModels;
 const MODULE = "gpt-sovits-tts";
 // 1.6.103 代码版本号: Foundry 的 game.modules.get(id).version 读的是"载入世界时的清单缓存",
 //   改了 manifest 不刷新会一直显示旧版本(用户多次看到 1.6.96 而实际代码已是新版) → 报告里同时打印两者, 便于确认真的在跑新代码
-const MOD_VERSION = "1.6.103";
+const MOD_VERSION = "1.6.104";
 const CHAT_STYLES = (typeof CONST !== "undefined" && (CONST.CHAT_MESSAGE_STYLES || CONST.CHAT_MESSAGE_TYPES)) || {};
 
 /* ============ 设置定义 ============ */
@@ -2007,22 +2007,39 @@ async function probeLLMOnce() {
     return { ok: false, reason: window.__fvttTTSLlmErr };
   }
 }
-/** 1.6.67 指定模型的可用性探测: /models 列出 ≠ 真能调用(中转站常见), 用一次极短 chat 实测该模型 */
-window.probeModelUsable = async function probeModelUsable(model) {
-  try {
+/** 1.6.67 指定模型的可用性探测: /models 列出 ≠ 真能调用(中转站常见), 用一次极短 chat 实测该模型
+ *  1.6.104 传输层失败(超时/断连/"http 0", 常见于引擎正忙或外部 LLM 首字慢) → 自动重试一次(更长时间),
+ *          避免把"瞬时抖动"误判成"模型不可用"(实测报告里出现过 同一模型 先 ✗ http 0 后 ✓) */
+window.probeModelUsable = async function probeModelUsable(model, opts) {
+  const _o = opts || {};
+  const _t1 = Number(_o.timeoutMs) || 20000;
+  const _retry = _o.retry !== false;
+  const _one = async (timeoutMs) => {
     const cfg = getCfg();
-    if (!cfg.llmBaseUrl || !cfg.llmKey) return { ok: false, reason: "未配置 base/key" };
-    const r = await svcRequest(cfg.serverUrl, "POST", "/llm", {
-      base: cfg.llmBaseUrl || "https://api.openai.com/v1",
-      key: cfg.llmKey,
-      model: String(model || ""),
-      text: "ping",
-      emotions: [{ key: "calm", label: "平静" }],
-    }, { timeoutMs: 20000, retries: 0 });
-    const j = (r && typeof r.json === "function") ? await r.json().catch(() => ({})) : {};
-    if (r && r.ok && j && j.ok) return { ok: true, emotion: String(j.emotion || "") };
-    return { ok: false, reason: String((j && j.message) || ("http " + (r && r.status)) || "unknown") };
-  } catch (e) { return { ok: false, reason: String((e && e.message) || e) }; }
+    if (!cfg.llmBaseUrl || !cfg.llmKey) return { ok: false, reason: "未配置 base/key", fatal: true };
+    try {
+      const r = await svcRequest(cfg.serverUrl, "POST", "/llm", {
+        base: cfg.llmBaseUrl || "https://api.openai.com/v1",
+        key: cfg.llmKey,
+        model: String(model || ""),
+        text: "ping",
+        emotions: [{ key: "calm", label: "平静" }],
+      }, { timeoutMs, retries: 0 });
+      const j = (r && typeof r.json === "function") ? await r.json().catch(() => ({})) : {};
+      if (r && r.ok && j && j.ok) return { ok: true, emotion: String(j.emotion || "") };
+      const st = (r && r.status) || 0;
+      const msg = String((j && j.message) || "");
+      return { ok: false, reason: msg || (st ? ("http " + st) : "请求没拿到响应(超时/网络中断)"), transport: !st && !msg };
+    } catch (e) { return { ok: false, reason: String((e && e.message) || e), transport: true }; }
+  };
+  const a = await _one(_t1);
+  if (a.ok || a.fatal) return a;
+  // key/base 明确错误(401/404 等) → 不重试, 直接报
+  if (!_retry || !a.transport || /401|403|invalid api key|unauthorized|model_not_found|does not exist|非 JSON/i.test(String(a.reason || ""))) return a;
+  try { await new Promise(r => setTimeout(r, 1500)); } catch (e) { /* noop */ }
+  const b = await _one(45000);
+  if (b.ok) return { ok: true, emotion: b.emotion, retried: true };
+  return { ok: false, reason: String(b.reason || a.reason || "unknown") + "（已重试一次仍失败）" };
 };
 
 function armLlmReProbe() {
@@ -4362,6 +4379,11 @@ window.runFinalTest = async function runFinalTest() {
   const cfg = getCfg();
   const style = (() => { try { return getStylePrompt(cn) || ""; } catch (e) { return ""; } })();
   const fails = [];
+  // 1.6.104 分段耗时: 一处跑 4~8 分钟的测试必须能看出"时间花在哪"(上次用户跑 475s 却不知慢在哪)
+  const _secMs = {};
+  let _secT = Date.now();
+  const _mark = (k) => { try { const n = Date.now(); _secMs[k] = Math.round((n - _secT) / 1000); _secT = n; } catch (e) { /* noop */ } };
+  const _note = (s) => { try { ui.notifications.info(s); } catch (e) { /* noop */ } };
 
   push("# GPT-SoVITS TTS 最终测试报告");
   push("");
@@ -4421,6 +4443,8 @@ window.runFinalTest = async function runFinalTest() {
   } catch (e) { /* noop */ }
   push("");
   // 1.6.81 AI / Key 专项测试: 验证 key 有效性、base 端点、当前模型可用性, 并在当前模型不可用时自动找可用模型
+  _mark("环境与配置");
+  _note("① AI/Key 探测中(每个模型一次真实调用, 可能 20~60s)…");
   push("## 一·A、AI / Key 专项测试");
   push("");
   try {
@@ -4452,18 +4476,25 @@ window.runFinalTest = async function runFinalTest() {
         push("- 当前模型实测（" + String(cfg.llmModel || "?") + "）: " + (_curOk ? "✓ 可用（AI 判语气/润色/选立绘会生效）" : ("✗ " + _curMsg.slice(0, 170))));
       } catch (e) { push("- 当前模型实测: ✗ " + String((e && e.message) || e).slice(0, 90)); }
       // ③ 当前模型不可用 → 从服务商列表里自动找可用模型
+      let _first = "";
       if (!_curOk && _models.length) {
-        const _cand = _models.slice(0, 3);
+        // 1.6.104 自动找可用模型: 只探最多 2 个 + 15s 超时 + 不重试(避免测试本身跑到 5~8 分钟)
+        const _cand = _models.slice(0, 2);
         const _marks = [];
-        let _first = "";
         for (const _m2 of _cand) {
           try {
-            const _p2 = await (typeof window.probeModelUsable === "function" ? window.probeModelUsable(_m2) : Promise.resolve(null));
-            if (_p2 && _p2.ok) { _marks.push(_m2 + " ✓"); if (!_first) _first = _m2; }
-            else _marks.push(_m2 + " ✗");
+            const _p2 = await (typeof window.probeModelUsable === "function" ? window.probeModelUsable(_m2, { timeoutMs: 15000, retry: false }) : Promise.resolve(null));
+            if (_p2 && _p2.ok) { _marks.push(_m2 + " ✓" + (_p2.retried ? "(重试后成功)" : "")); if (!_first) _first = _m2; }
+            else _marks.push(_m2 + " ✗ " + String((_p2 && _p2.reason) || "").slice(0, 50));
           } catch (e) { _marks.push(_m2 + " ✗"); }
         }
         push("- 自动找可用模型: " + _marks.join(" / ") + (_first ? (" → **建议改用 " + _first + "**（语音设置 → AI 接入 → 模型下拉）") : " → 没有可用模型（key 可能无额度/无权限）"));
+        // 1.6.104 复核: 当前模型在重试中又能用 → 属瞬时失败, 不计失败
+        //   (实测报告出现过自相矛盾: "当前模型 ✗ http 0" 紧接 "自动找: 同一模型 ✓")
+        if (_first && _first === String(cfg.llmModel || "")) {
+          _curOk = true;
+          push("  → **复核**: 当前模型重试后可用 ✓ → 上面的 ✗ 属瞬时失败(引擎忙/网络抖动), **不计入失败**");
+        }
       }
       // ④ 引擎侧调用统计(1.6.79)
       try {
@@ -4479,7 +4510,7 @@ window.runFinalTest = async function runFinalTest() {
   } catch (e) { push("- AI/Key 测试异常: " + String((e && e.message) || e).slice(0, 90)); }
   push("");
   // 1.6.95 语气提示实测: 证明「单句语气提示是否真的影响 AI 判定」+「AI 是否真的被调用」
-  push("### 语气提示实测（是否生效 / 是否真的调动 AI）");
+  _mark("AI/Key"); push("### 语气提示实测（是否生效 / 是否真的调动 AI）");
   push("");
   try {
     // 1.6.97 语气提示 = 当前角色的"朗读提示词"(每玩家独立); 未填时用示例做对照以便验证功能
@@ -4536,7 +4567,7 @@ window.runFinalTest = async function runFinalTest() {
     }
   } catch (e) { push("- 语气提示实测异常: " + String((e && e.message) || e).slice(0, 90)); }
   push("");
-  push("## 二、朗读提示词(是否生效)");
+  _mark("语气提示"); push("## 二、朗读提示词(是否生效)");
   if (!style) {
     push("- ⚠ **未填写朗读提示词** → 引擎侧整段跳过提示词逻辑: 语速固定 spd=1.00、不做切分/停顿调整(与提示词无关)。");
     push("- 填写位置: 语音设置 → 当前角色 → 朗读提示词(例: 严肃认真 / 愤怒 / 温柔缓慢 / 更活泼)。");
@@ -4582,7 +4613,7 @@ window.runFinalTest = async function runFinalTest() {
   //   已稳定项(引擎连通/合成播放/立绘切换/多模型/句首音量)不再逐条铺开, 只留 1 条实际朗读做健全性验证;
   //   篇幅集中到当前还没解决的三件事 —— ① 提示词是否真的生效 ② 情绪是否有参考音(真换声线) ③ AI(LLM)链路
   push("");
-  push("## 二·B、情绪参考音(决定\"情绪是否真的换声音\")");
+  _mark("朗读提示词"); push("## 二·B、情绪参考音(决定\"情绪是否真的换声音\")");
   push("");
   try {
     const _cc = (quickChars && quickChars.chars || []).find(x => x.name === cn) || null;
@@ -4596,7 +4627,7 @@ window.runFinalTest = async function runFinalTest() {
     }
   } catch (e) { push("- 情绪参考音: 读取失败"); }
   push("");
-  push("## 三、实际朗读(按当前提示词, 1 条健全性验证)");
+  _note("④ 实际朗读合成中(等音频写回, 最长 40s)…"); _mark("情绪参考音"); push("## 三、实际朗读(按当前提示词, 1 条健全性验证)");
   push("");
   push("(关注: 提示词命中的情绪与立绘 / AI 润色 / 合成 / 句首音量)");
   const scenes = [
@@ -4678,7 +4709,7 @@ window.runFinalTest = async function runFinalTest() {
   //   ① 消息里的立绘路径能不能真的取到图(HTTP) ② 页面是否真的插了 <img> 且浏览器解码成功(naturalWidth>0)
   //   ③ 消息头部玩家头像是否也被换成同一张 ④ 若没插, 打印未插入原因(applyEmotionAvatar 的诊断环形缓冲)
   push("");
-  push("## 三·B、立绘 / 头像实测(回归重点: 「只有语音没有立绘」)");
+  _mark("实际朗读"); push("## 三·B、立绘 / 头像实测(回归重点: 「只有语音没有立绘」)");
   push("");
   try {
     const _ccB = (quickChars && quickChars.chars || []).find(x => x.name === cn) || null;
@@ -4751,9 +4782,16 @@ window.runFinalTest = async function runFinalTest() {
     }
   } catch (e) { push("- 立绘/头像实测异常: " + String((e && e.message) || e).slice(0, 80)); fails.push("立绘实测"); }
   push("");
-  push("## 四、结论");
+  _mark("立绘实测"); push("## 四、结论");
   push("- 测试脚本: v3(代码版本 " + MOD_VERSION + ", 清单缓存 " + verTxt + ") | 耗时: " + Math.round((Date.now() - t0) / 1000) + "s | LLM: " + (llmOk ? "AI链路(判语气+润色+选立绘)已启用" : "规则降级(无AI: 文本规则/提示词基调; 情绪差异靠情绪参考音, 默认零 DSP 不变调)"));
   push("- 关键项: " + (fails.length ? ("⚠ 存在问题 → " + fails.join("、")) : "全部通过 ✓"));
+  // 1.6.104 耗时明细(哪一段慢一目了然): 上次 475s 就靠这个定位到"AI 探测重试 + 首次合成排队"
+  try {
+    const _secTxt = Object.keys(_secMs).map(k => k + " " + _secMs[k] + "s").join(" · ");
+    const _tot = Math.round((Date.now() - t0) / 1000);
+    if (_secTxt) push("- 耗时明细: " + _secTxt + " (合计 " + _tot + "s)");
+    if (_tot > 240) push("  ⚠ 超过 4 分钟多半是: 某次 AI 探测走了重试(20s+45s)、外部 LLM 首字慢、或首次合成在排队 —— 看上面各段耗时定位");
+  } catch (e) { /* noop */ }
   push("- 报告文件: engine\\final_test_report.md (模块 engine 目录下; 覆盖式写入, 始终为最近一次结果)");
   const md = L.join("\n");
   try { console.warn("[gpt-sovits-tts][最终测试]\n" + md); } catch (e) { /* noop */ }
