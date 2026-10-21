@@ -19,7 +19,7 @@ window.fetchAndRefreshModels = fetchAndRefreshModels;
 const MODULE = "gpt-sovits-tts";
 // 1.6.103 代码版本号: Foundry 的 game.modules.get(id).version 读的是"载入世界时的清单缓存",
 //   改了 manifest 不刷新会一直显示旧版本(用户多次看到 1.6.96 而实际代码已是新版) → 报告里同时打印两者, 便于确认真的在跑新代码
-const MOD_VERSION = "1.6.116";
+const MOD_VERSION = "1.6.117";
 const CHAT_STYLES = (typeof CONST !== "undefined" && (CONST.CHAT_MESSAGE_STYLES || CONST.CHAT_MESSAGE_TYPES)) || {};
 
 /* ============ 设置定义 ============ */
@@ -119,6 +119,29 @@ function llmModelChoices() {
   try { cached = Array.isArray(game.settings.get(MODULE, "llmModels")) ? game.settings.get(MODULE, "llmModels") : []; } catch (e) { /* noop */ }
   [...LLM_PRESET_MODELS, ...cached].forEach(m => { if (m) out[m] = m; });
   return out;
+}
+
+
+// 1.6.117 token 统计(估算, 用于量化瘦身效果): CJK≈1 字 1 token, 其他≈4 字符 1 token
+function _tokEstimate(str) {
+  const t = String(str || "");
+  let cjk = 0, other = 0;
+  for (let i = 0; i < t.length; i++) {
+    const c = t.charCodeAt(i);
+    if (c >= 0x3000 && c <= 0x9fff) cjk++;
+    else if (c >= 0xff00 && c <= 0xffef) cjk++;
+    else other++;
+  }
+  return Math.ceil(cjk + other / 4);
+}
+function aiTokenRecord(kind, inTok, outTok) {
+  try {
+    const st = (window.__fvttTTSTokenStats = window.__fvttTTSTokenStats || { calls: 0, inTok: 0, outTok: 0, byKind: {} });
+    st.calls += 1; st.inTok += (inTok | 0); st.outTok += (outTok | 0);
+    const k = (st.byKind[kind] = st.byKind[kind] || { calls: 0, in: 0, out: 0 });
+    k.calls += 1; k.in += (inTok | 0); k.out += (outTok | 0);
+    try { console.info("[gpt-sovits-tts] AI token(" + kind + ") ≈ 输入 " + (inTok | 0) + " · 输出 " + (outTok | 0) + " ｜ 累计 输入 " + st.inTok + " · 输出 " + st.outTok); } catch (e2) { /* noop */ }
+  } catch (e) { /* noop */ }
 }
 
 // 朗读提示词强度(1.6.53): 角色档案优先, 全局设置兜底; 0~100
@@ -635,7 +658,8 @@ async function speak(text, { lang = null, sender = "", refAudioPath = null, prom
         if (!llmStyleHit) {
           try {
             const qcC = (quickChars && quickChars.chars || []).find(x => x.name === (prof0.current || ""));
-            const r = await svcRequest(cfg.serverUrl, "POST", "/llm/style", { base: cfg.llmBaseUrl || "https://api.openai.com/v1", key: cfg.llmKey, model: cfg.llmModel || "gpt-4o-mini", text: finalText, style: stylePrompt, role: prof0.current || "", setting: (qcC && qcC.setting) || "", gm_prompt: (cfg.gmPrompt || "") }, { timeoutMs: 60000 });
+            const r = await svcRequest(cfg.serverUrl, "POST", "/llm/style", { base: cfg.llmBaseUrl || "https://api.openai.com/v1", key: cfg.llmKey, model: cfg.llmModel || "gpt-4o-mini", text: String(finalText).slice(0, 200), style: stylePrompt, role: prof0.current || "", setting: String((qcC && qcC.setting) || "").slice(0, 200), gm_prompt: (cfg.gmPrompt || "") }, { timeoutMs: 60000 });
+            try { const _uj = r && typeof r.jsonSafe === "function" ? (r.jsonSafe() || {}) : {}; aiTokenRecord("style", Number((_uj && _uj.usage && _uj.usage.prompt_tokens) || 0) || (_tokEstimate(stylePrompt) + 260), Number((_uj && _uj.usage && _uj.usage.completion_tokens) || 0) || 8); } catch (e2) { /* noop */ }
             const j = await r.json().catch(() => ({}));
             if (r.ok && j.ok) {
               llmStyleHit = { speed_factor: j.speed_factor, split: j.split };
@@ -1132,7 +1156,14 @@ async function maybeSpeak(message) {
       if (cfg.llmEnabled && cfg.llmKey && window.__fvttTTSLlmBroken !== true) {
         try {
           const _tJ0 = Date.now();   // 1.6.105 AI 判语气耗时(排查"生成特别慢": 看是 AI 慢还是合成慢)
-          const res = await judgeAndPolishByLLM(decision.text, roleN, !!cfg.llmPolish, getChatContext());
+          // 1.6.117 零 token 快路径: 朗读提示词已经能确定语气(styleEmotionKey 命中) 且不需要 AI 润色 →
+          //   语气/立绘都能本地决定(情绪槽 + slot.avatar), 这次完全不用调 AI
+          const _styleEmo0 = (() => { try { return styleEmotionKey(String(getStylePrompt(roleN) || "")); } catch (e) { return ""; } })();
+          const _needAi = !(_styleEmo0 && !cfg.llmPolish);
+          const _ctx = (String(decision.text || "").length <= 24) ? getChatContext(2, 120) : "";   // 1.6.117 上下文只发最近 2 行(短句才发)
+          const res = _needAi
+            ? await judgeAndPolishByLLM(decision.text, roleN, !!cfg.llmPolish, _ctx)
+            : { ok: false, emotion: "", reason: "skip-by-style" };
           try { window.__fvttTTSJudgeMs = Date.now() - _tJ0; } catch (e) { /* noop */ }
           try { console.debug("[gpt-sovits-tts] AI 判语气+" + (cfg.llmPolish ? "润色" : "无润色") + " 耗时 " + ((Date.now() - _tJ0) / 1000).toFixed(1) + "s" + (res && res.ok ? "" : "（失败，降级规则判定）")); } catch (e) { /* noop */ }
           if (res.ok && res.emotion) _emo = String(res.emotion);
@@ -2229,7 +2260,7 @@ async function judgeAndPolishByLLM(text, charName, wantPolish, context) {
   const _ck = String(charName || "") + "|" + String(text || "") + "|" + String((typeof getStylePrompt === "function" ? getStylePrompt(charName || "") : "") || "") + "|" + (wantPolish ? "p" : "-");
   try {
     const _hit = _assessCache.get(_ck);
-    if (_hit && (Date.now() - _hit.ts) < 300000) {   // 5 分钟内复用
+    if (_hit && (Date.now() - _hit.ts) < 1800000) {   // 1.6.117 5 → 30 分钟内复用(重复台词零 token)
       try { console.debug("[gpt-sovits-tts] 复用 5 分钟内的 AI 判定结果(同角色+同台词+同提示词)"); } catch (e) { /* noop */ }
       return { ..._hit.res, cached: true };
     }
@@ -2262,6 +2293,8 @@ async function judgeAndPolishByLLM(text, charName, wantPolish, context) {
     if (cfg.llmMergePolish) {
       // 合并: 一次调用同时给情绪 + 润色稿
       try {
+        const _slotAvail = ((c && c.emotions) || []).some(e => e && e.avatar);
+        const _needSpriteList = !_slotAvail;   // 有情绪槽立绘就不必再发立绘表
         const r = await svcRequest(cfg.serverUrl, "POST", "/llm/assess", {
             base: cfg.llmBaseUrl || "https://api.openai.com/v1",
             key: cfg.llmKey,
@@ -2270,8 +2303,11 @@ async function judgeAndPolishByLLM(text, charName, wantPolish, context) {
             context: context || "",
             emotions: emotionsList,
             role: charName || "",
-            setting: (c && c.setting) || "",
-            sprites: buildSpriteList(c),   // 1.6.53 立绘编号表给AI: AI 按语气情绪选立绘(手动选立绘仍优先)
+            // 1.6.117 token 瘦身: 角色设定只发前 200 字(整段人设对判语气边际收益极低)
+            setting: String((c && c.setting) || "").slice(0, 200),
+            // 1.6.117 立绘改由"情绪槽自带的图"决定(slot.avatar), 不再让 AI 从 20+ 张里挑 → 省 200~400 token/次;
+            //   仅当角色没有情绪槽立绘时才回退成"发立绘表让 AI 选"(老角色兼容)
+            sprites: _needSpriteList ? buildSpriteList(c) : [],
             style: (typeof getStylePrompt === "function" ? (getStylePrompt(charName || "") || "") : ""),   // 1.6.52 朗读提示词交给AI: 判语气+润色都参考它(Shinsekai式)
             gm_prompt: (cfg.gmPrompt || ""),   // 1.6.89 主持人提示词(世界设定/朗读规则, 判语气+润色+选立绘全部遵守)
             polish: !!wantPolish,
@@ -2284,6 +2320,12 @@ async function judgeAndPolishByLLM(text, charName, wantPolish, context) {
             try { console.debug("[gpt-sovits-tts] AI 润色被安全校验拒绝(改动过大), 使用原台词"); } catch (e) { /* noop */ }
             _pol = "";
           }
+          try {
+            const _u = j && j.usage || {};
+            const _in = Number(_u.prompt_tokens || _u.input_tokens || 0) || (_tokEstimate(String(text || "")) + 320);
+            const _out = Number(_u.completion_tokens || _u.output_tokens || 0) || _tokEstimate(String(_pol || j.emotion || ""));
+            aiTokenRecord("assess", _in, _out);
+          } catch (e2) { /* noop */ }
           return _save({ ok: true, emotion: String(j.emotion), polish: _pol });
         }
         // 合并调用失败: LLM 服务不可用(>=400) → 记原因并禁用(根治每句 502 刷屏), 不再回退分开调用
@@ -4769,7 +4811,9 @@ window.runFinalTest = async function runFinalTest() {
         const _sr2 = await svcRequest(cfg.serverUrl, "GET", "/llm/stats", null, { timeoutMs: 8000, retries: 0 });
         const _sj2 = (_sr2 && typeof _sr2.json === "function") ? await _sr2.json().catch(() => ({})) : {};
         const _st2 = (_sj2 && _sj2.stats) || null;
-        if (_st2) push("- 引擎侧统计: 累计 " + _st2.calls + " 次（成功 " + _st2.ok + " / 失败 " + _st2.fail + "）" + (_st2.last_err ? (" | 最近失败: " + String(_st2.last_err).slice(0, 130)) : ""));
+        if (_st2) push("- 引擎侧统计: 累计 " + _st2.calls + " 次（成功 " + _st2.ok + " / 失败 " + _st2.fail + "）"
+          + (Number(_st2.in_tokens || 0) > 0 ? (" | token 累计 输入 " + _st2.in_tokens + " · 输出 " + _st2.out_tokens + "（最近一次 " + (_st2.last_in || 0) + "/" + (_st2.last_out || 0) + "）") : "")
+          + (_st2.last_err ? (" | 最近失败: " + String(_st2.last_err).slice(0, 130)) : ""));
       } catch (e) { /* noop */ }
       // ⑤ 结论
       push("- **AI 结论**: " + (_curOk ? "✓ AI 链路可用" : (_models.length ? "✗ 当前模型不可用，但 key 有效 → 换一个可用模型即可" : "✗ 无法调用（先确认 key 有效、base 正确）")));
@@ -4917,6 +4961,9 @@ window.runFinalTest = async function runFinalTest() {
   window.__fvttTTSAiLineDiagList = [];
   window.__fvttTTSAiLineEnterList = [];
   let _lastMsgId = "";   // 立绘/头像实测用: 最后一条场景的消息
+  let _scenesDone = 0;   // 1.6.117 已跑完的场景数(用于平均 token)
+  // 1.6.117 token 统计快照(多场景前后对比, 量化"省了多少")
+  const _tok0 = (() => { try { return JSON.parse(JSON.stringify(window.__fvttTTSTokenStats || {})); } catch (e) { return {}; } })();
   const _sceneRows = [];
   try {
     for (let i = 0; i < scenes.length; i++) {
@@ -4995,9 +5042,17 @@ window.runFinalTest = async function runFinalTest() {
         if (_av && _slotAv && _av !== _slotAv) fails.push(sc.label + "立绘≠情绪槽");
       }
       if (!(_spNow.spd > 0)) fails.push(sc.label + "语速非法");
+      _scenesDone += 1;
       _sceneRows.push({ label: sc.label, style: sc.style, strength: sc.strength, emo: _emoSema, slot: (_fNow.emotion || ""), av: _av, slotAv: _slotAv, aux: !!(_spNow.aux && _spNow.aux.length), mix: _spNow.mix, spd: _spNow.spd, aud: !!aud, polish: !!(_fNow.polishText || "").trim(), aiDecided: !!_fNow.aiDecided });
     }
   } finally {
+    try {
+      const _tok1 = window.__fvttTTSTokenStats || {};
+      const _dm = (k) => Number(_tok1[k] || 0) - Number((_tok0 || {})[k] || 0);
+      const _dc = _dm("calls"), _di = _dm("inTok"), _do = _dm("outTok");
+      if (_dc > 0) push("");
+      if (_dc > 0) push("> 本段 AI 消耗: 调用 " + _dc + " 次 · 输入 ≈" + _di + " token · 输出 ≈" + _do + " token（平均每条 " + Math.round(_di / Math.max(1, _scenesDone || _dc)) + " 输入）");
+    } catch (e2) { /* noop */ }
     try { if (_profSnap) saveVoiceProfile(JSON.parse(_profSnap)); } catch (e) { /* noop */ }
     try { setStylePrompt(cn, _origStyle); } catch (e) { /* noop */ }
     window.__fvttTTSAiLineDiag = false;
@@ -6176,6 +6231,14 @@ window.fvttTTSDiag = async function fvttTTSDiag(n = 6) {
       P("CSS 尺寸变量: 消息立绘=" + (cs.getPropertyValue("--fvtt-tts-portrait-size") || "(空)") + " 头部头像=" + (cs.getPropertyValue("--fvtt-tts-header-avatar-size") || "(空)"));
     } catch (e) { /* noop */ }
     try { P("本机当前角色=" + (loadVoiceProfile().current || "(未选)")); } catch (e) { /* noop */ }
+    // 1.6.117 AI token 消耗(量化省了多少)
+    try {
+      const _tk = window.__fvttTTSTokenStats || null;
+      if (_tk && _tk.calls) {
+        const _bk = Object.keys(_tk.byKind || {}).map(k => k + " " + _tk.byKind[k].calls + "次/" + _tk.byKind[k].in + "in").join(" · ");
+        P("AI token 累计: 调用 " + _tk.calls + " 次 · 输入 ≈" + _tk.inTok + " · 输出 ≈" + _tk.outTok + (_bk ? (" ｜ " + _bk) : ""));
+      }
+    } catch (e) { /* noop */ }
     // 1.6.105 最近一次朗读耗时(标出"慢"到底慢在 AI 还是合成)
     try {
       const _tm = window.__fvttTTSLastTiming;

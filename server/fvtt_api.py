@@ -3013,9 +3013,11 @@ def _llm_err_text_from(e, raw):
 
 # 1.6.79 AI 调用统计(确定性证据): 直接回答"到底有没有调动 AI、结果如何、为什么没花费"
 #   calls=引擎收到的 LLM 请求次数; ok/fail; last_err=最近失败原因(401/模型不存在/非JSON...)
-_LLM_STATS = {"calls": 0, "ok": 0, "fail": 0, "last_err": "", "last_at": 0, "last_model": "", "last_base": ""}
+# 1.6.117 增加 token 统计(输入/输出总量), 用来量化"瘦身"效果
+_LLM_STATS = {"calls": 0, "ok": 0, "fail": 0, "last_err": "", "last_at": 0, "last_model": "", "last_base": "",
+              "in_tokens": 0, "out_tokens": 0, "last_in": 0, "last_out": 0}
 
-def _llm_stat(ok, err="", model="", base=""):
+def _llm_stat(ok, err="", model="", base="", usage=None):
     try:
         _LLM_STATS["calls"] = int(_LLM_STATS.get("calls", 0)) + 1
         if ok:
@@ -3026,6 +3028,13 @@ def _llm_stat(ok, err="", model="", base=""):
         _LLM_STATS["last_at"] = int(time.time())
         _LLM_STATS["last_model"] = str(model or "")
         _LLM_STATS["last_base"] = str(base or "")
+        if isinstance(usage, dict):
+            _pi = int(usage.get("prompt_tokens") or usage.get("input_tokens") or 0)
+            _po = int(usage.get("completion_tokens") or usage.get("output_tokens") or 0)
+            _LLM_STATS["last_in"] = _pi
+            _LLM_STATS["last_out"] = _po
+            _LLM_STATS["in_tokens"] = int(_LLM_STATS.get("in_tokens", 0)) + _pi
+            _LLM_STATS["out_tokens"] = int(_LLM_STATS.get("out_tokens", 0)) + _po
     except Exception:
         pass
 
@@ -3038,7 +3047,8 @@ def _llm_chat_call(payload, base, key, timeout=15):
         raise
     try:
         data = r[0] if r else None
-        _llm_stat(bool(data is not None), (r[2] if (r and len(r) > 2) else ""), (payload or {}).get("model"), base)
+        _usage = (data or {}).get("usage") if isinstance(data, dict) else None
+        _llm_stat(bool(data is not None), (r[2] if (r and len(r) > 2) else ""), (payload or {}).get("model"), base, usage=_usage)
     except Exception:
         pass
     return r
@@ -3893,34 +3903,43 @@ async def llm_assess_endpoint(request: Request):
             sprite_map = {i: l for i, l in valid}
     option_lines = "\n".join("- %s (%s)" % (k, v) for k, v in emo_map.items())
     _gm_assess_line = ("【主持人语气指令(只影响这句话的朗读语气与表演方式; 这不是世界观设定, 不要据此编造、扩写或改变台词内容)】\n%s\n\n" % gm_prompt) if gm_prompt else ""
-    sys_prompt = (
-        _gm_assess_line + "你是语气分析+台词润色+立绘选择助手(%s)。任务：根据台词内容、角色性格及其所在对话上下文，判断说话者语气，并%s，同时为这句话选择最合适的立绘。\n"
-        "%s"
-        "%s"
-        "%s"
-        "该角色可用语气选项:\n%s\n"
+    # 1.6.117 token 瘦身(对标 Shinsekai 的"按需分段拼 prompt"): 只发当前这句话真正需要的段
+    #   ① 立绘表不再默认发送(AI 选立绘已改为"由情绪槽决定", 见客户端 slot.avatar) → 省 200~400 token/次
+    #   ② 角色设定只保留开头 200 字(整段人设对"判语气+润色"边际收益极低)
+    #   ③ 上下文/台词长度收紧; 规则文案压缩
+    #   ④ max_tokens 按台词长度动态给(以前固定 512, 短句浪费一半以上)
+    setting = setting[:200]
+    _has_sprite = bool(sprite_map)
+    _rules = (
         "要求：\n"
-        "1) emotion 必须是上面选项里的英文 key 之一（优先贴合该角色性格与台词语气）；\n"
-        "2) polish 必须**逐字保留原台词的全部信息**：只允许在句首/句尾添加语气词(如 呀/呢/哦/啦/嘛)与标点停顿符号(如 ……、！、？、——)，"
-        "**严禁**删除、替换、缩写或改写原句里的任何实词/数字/专有名词/称呼，**严禁**改变句序与句式，**严禁**新增原句没有的事实信息；"
-        "润色后去掉标点空白后的字符数与原台词的差异不得超过 10%%；若无法在保持原句完整的前提下润色，就把 polish 填成原台词本身；简体中文；\n"
-        "3) 判断语气时: ①若提供了【主持人语气指令】(作为语气/表演要求), 以其为准; ②否则依据台词本身与角色性格; ③上下文(最近对话)只作辅助理解语境；\n"
-        "4) sprite 为整数编号，必须是立绘编号表里的编号之一，按这句台词的语气情绪选择最合适的那张；表为空或拿不准时填 0（0=不换立绘）；\n"
-        "5) 只输出一个 JSON 对象，格式: {\"emotion\": \"key\", \"polish\": \"润色后的台词\", \"sprite\": 编号}，不要任何解释、不要 markdown。" % (role_name or "声音助手", "按该语气把台词润色得更自然" if want_polish else "不润色, polish 填空字符串", role_lines, style_lines, sprite_lines, option_lines)
+        "1) emotion 必须是上面选项里的 key 之一；\n"
+        "2) polish 逐字保留原台词信息：只许在句首/句尾加语气词(呀/呢/哦/啦/嘛)与标点(……、！、？、——)，严禁删改实词/数字/专名/称呼、严禁改句序、严禁新增事实；去标点后字数差异≤10%%；做不到就原样返回；\n"
+        "3) 判断顺序：①【主持人语气指令】优先 ②台词本身与角色性格 ③上下文仅辅助；\n"
+        "5) 只输出一个 JSON 对象: {\"emotion\":\"key\",\"polish\":\"...\"%s}，不要解释、不要 markdown。" % (",\"sprite\":编号" if _has_sprite else "")
     )
-    user_content = text[:1200]
+    sys_prompt = (
+        _gm_assess_line
+        + ("角色：%s" % (role_name or "未知")) + ("　设定：%s" % setting if setting else "") + "\n"
+        + ("朗读提示词（语气与润色优先贴合它）：%s\n" % style if style else "")
+        + ("可用语气：" + "、".join("%s(%s)" % (k, str(v)[:10]) for k, v in emo_map.items()) + "\n")
+        + (sprite_lines if _has_sprite else "")
+        + _rules + "\n"
+        + ("润色：需要" if want_polish else "润色：不需要(polish 填空字符串)")
+    )
+    user_content = text[:800]
     if context:
-        user_content = "最近对话上下文:\n%s\n\n---\n需要判断语气(并润色)的台词: %s" % (context, text[:1200])
+        user_content = "上下文：%s\n台词：%s" % (context[:300], text[:800])
+    # 输出上限按输入长度动态给: emotion+sprite ~16 token, polish ≈ 原台词长度(中文≈1 字 1 token) + 余量
+    _max_out = 24 if not want_polish else min(420, 64 + int(len(text) * 1.3))
     payload = {
         "model": model,
         "messages": [
             {"role": "system", "content": sys_prompt},
             {"role": "user", "content": user_content},
         ],
-        "temperature": 0.2,   # 1.6.63 降低随机性: 润色只加语气词/标点, 避免随意改写原句
-        "max_tokens": 512,
+        "temperature": 0.2,
+        "max_tokens": _max_out,
     }
-    # 1.6.105 15→25s: 外部 LLM(尤其推理模型)首字常超 15s, 一超时就整句退回规则 → 听感"与朗读提示词无关"
     data, _llm_status, llm_err = await asyncio.to_thread(_llm_chat_call, payload, base, key, 25)
     if data is None:
         return JSONResponse(status_code=200, content={"ok": False, "message": "LLM 请求失败(无AI语气, 语音不受影响): %s" % (llm_err or "unknown")})
@@ -3966,7 +3985,8 @@ async def llm_assess_endpoint(request: Request):
         t = re.sub(r"^\s*(emotion|polish)\s*[:：]", "", t, flags=re.IGNORECASE).strip()
         if len(t) > 1:
             polish = t[:2000]
-    return {"ok": True, "emotion": emo, "polish": polish[:2000] if polish else "", "sprite": sprite, "raw": content[:80]}
+    _usage = data.get("usage") if isinstance(data, dict) else None
+    return {"ok": True, "emotion": emo, "polish": polish[:2000] if polish else "", "sprite": sprite, "raw": content[:80], "usage": _usage or {}}
 
 
 if __name__ == "__main__":
