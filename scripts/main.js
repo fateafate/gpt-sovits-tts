@@ -19,7 +19,7 @@ window.fetchAndRefreshModels = fetchAndRefreshModels;
 const MODULE = "gpt-sovits-tts";
 // 1.6.103 代码版本号: Foundry 的 game.modules.get(id).version 读的是"载入世界时的清单缓存",
 //   改了 manifest 不刷新会一直显示旧版本(用户多次看到 1.6.96 而实际代码已是新版) → 报告里同时打印两者, 便于确认真的在跑新代码
-const MOD_VERSION = "1.6.106";
+const MOD_VERSION = "1.6.107";
 const CHAT_STYLES = (typeof CONST !== "undefined" && (CONST.CHAT_MESSAGE_STYLES || CONST.CHAT_MESSAGE_TYPES)) || {};
 
 /* ============ 设置定义 ============ */
@@ -1277,11 +1277,29 @@ async function checkStatus(force = false) {
     return;
   }
   const r = await gptSovitsStatus(cfg.serverUrl).catch(() => ({ ok: false, data: null }));
+  // 1.6.107 引擎离线/恢复提示(只提醒一次 + 告诉怎么自动启动): 以前引擎没开时只会在控制台刷
+  //   "直连TTS失败(重试3次仍败): .../config"，用户不知道该开引擎
+  try {
+    const _wasDown = window.__fvttTTSEngineDown === true;
+    if (!r.ok) {
+      window.__fvttTTSEngineDown = true;
+      if (!_wasDown && window.__fvttTTSEngineDownWarned !== true) {
+        window.__fvttTTSEngineDownWarned = true;
+        try {
+          ui.notifications.warn("TTS 引擎未启动(" + cfg.serverUrl + ")：装了 engine\\安装看门狗自启.bat 时，它会在 Foundry 起来后自动静默启动引擎；没有就双击 engine\\启动引擎(无窗口).vbs", { permanent: false });
+        } catch (e2) { /* noop */ }
+      }
+    } else if (_wasDown) {
+      window.__fvttTTSEngineDown = false;
+      try { ui.notifications.info("TTS 引擎已就绪 ✓ 可以正常朗读了"); } catch (e2) { /* noop */ }
+    }
+  } catch (e) { /* noop */ }
   setStatus(r.ok, r.data);
-  // 服务不可用(启动/重启窗口 ~1-2 分钟)时 5 秒快速重试, 恢复后状态灯自动回绿
+  // 服务不可用(启动/重启窗口 ~1-2 分钟)时快速重试, 恢复后状态灯自动回绿
+  // 1.6.107 5s→15s: 引擎没启动时不要每 5 秒发一次请求(控制台/网络都清爽)
   if (!r.ok && !force) {
     clearTimeout(_statusRetryT);
-    _statusRetryT = setTimeout(() => checkStatus(false), 5000);
+    _statusRetryT = setTimeout(() => checkStatus(false), 15000);
   }
 }
 
@@ -1299,7 +1317,7 @@ function statusTitle() {
     const name = c?.name || statusInfo.data?.version || "";
     return `${_L("status.ok", "TTS 服务在线")} · ${name}`;
   }
-  if (statusInfo.ok === false) return `${_L("status.fail", "TTS 服务离线")} · ${cfg.serverUrl}\n${_L("status.failHint", "点击试听; 未启动请运行 server/start-tts-server.bat")}`;
+  if (statusInfo.ok === false) return `${_L("status.fail", "TTS 服务离线")} · ${cfg.serverUrl}\n${_L("status.failHint", "启动方式: 运行一次 engine\\安装看门狗自启.bat(无窗口, Foundry 一起来自动拉起引擎); 临时可双击 engine\\启动引擎(无窗口).vbs")}`;
   return _L("status.checking", "检查 TTS 服务…");
 }
 
@@ -3999,9 +4017,10 @@ Hooks.once("ready", () => {
         try { console.debug("[gpt-sovits-tts] 可达性探测: " + (direct ? "直连合成" : "GM 代理合成(走 FVTT 30000)")); } catch (e) { /* noop */ }
         try { checkStatus(true); } catch (e) { /* noop */ }   // 探测完成后刷新状态灯(代理模式立即转绿, 不再显示"未连接")
         // 启动同步"同时运行上限"(GM 专属): Foundry 设置值 → 服务端模型池(裁剪/扩容)
+        // 1.6.107 引擎没起来时不要再打这个请求(以前会触发 3 次重试并在控制台刷"直连TTS失败")
         try {
-          if (game.user && game.user.isGM && getCfg().maxConcurrentModels) {
-            svcRequest(getCfg().serverUrl, "POST", "/config", { max_concurrent_models: Number(getCfg().maxConcurrentModels) || 10 }).catch(() => { /* noop */ });
+          if (game.user && game.user.isGM && getCfg().maxConcurrentModels && direct !== false) {
+            svcRequest(getCfg().serverUrl, "POST", "/config", { max_concurrent_models: Number(getCfg().maxConcurrentModels) || 10 }, { retries: 0, timeoutMs: 5000 }).catch(() => { /* noop */ });
           }
         } catch (e) { /* noop */ }
       } catch (e) { window.__fvttTTSCanDirect = false; }

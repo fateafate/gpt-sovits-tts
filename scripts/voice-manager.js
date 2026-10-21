@@ -642,6 +642,13 @@ export class VoiceManager {
       html += `<div class="fvtt-tts-vm-status fvtt-tts-vm-hw">${t("vm.hw", "硬件")}: ${esc(hwTxt)} · ${esc(st.is_half ? "fp16" : "fp32")}</div>`;
     }
 
+    // 1.6.107 引擎离线 → 直接告诉他怎么让它"跟着 Foundry 自动起来"(无窗口看门狗, 不需要每次手动点)
+    try {
+      if (window.__fvttTTSEngineDown === true) {
+        html += `<div class="fvtt-tts-vm-status" style="color:#e8a33d">⚠ 引擎离线（9881 连不上）。让它以后自动起来：运行一次 <b>engine\\安装看门狗自启.bat</b> → 之后只要 Foundry 在运行、引擎没起来，就会被静默拉起（不弹窗口、不打扰）；临时应急可双击 <b>engine\\启动引擎(无窗口).vbs</b></div>`;
+      }
+    } catch (e) { /* noop */ }
+
     // 语音分配(GM): 列出全部 pl 账号, 每个分配语音运行电脑(默认主持人电脑; 可给该玩家自己或某台服务机)
     if (isGM) {
       try {
