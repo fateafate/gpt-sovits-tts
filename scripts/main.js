@@ -19,7 +19,7 @@ window.fetchAndRefreshModels = fetchAndRefreshModels;
 const MODULE = "gpt-sovits-tts";
 // 1.6.103 代码版本号: Foundry 的 game.modules.get(id).version 读的是"载入世界时的清单缓存",
 //   改了 manifest 不刷新会一直显示旧版本(用户多次看到 1.6.96 而实际代码已是新版) → 报告里同时打印两者, 便于确认真的在跑新代码
-const MOD_VERSION = "1.6.117";
+const MOD_VERSION = "1.6.118";
 const CHAT_STYLES = (typeof CONST !== "undefined" && (CONST.CHAT_MESSAGE_STYLES || CONST.CHAT_MESSAGE_TYPES)) || {};
 
 /* ============ 设置定义 ============ */
@@ -169,7 +169,9 @@ function normalizeEmotionMix(ov) {
   } catch (e) { /* noop */ }
   return ov;
 }
-// 1.6.53 角色立绘编号表(Shinsekai式): emotion_tags 行 → [{index,label}], 行号/标注编号=立绘索引(1-based), 交给 AI 按语气情绪选
+// 1.6.53 角色立绘编号表(Shinsekai式): emotion_tags 行 → [{index,label}]
+// 1.6.117 起默认不再发给 AI(省 200~400 token/次): 立绘由「选中的情绪槽自带图」决定;
+//   只有角色没有情绪槽立绘(老角色包)时才回退用它。改这块前先看 docs/修改报告.md 1.6.117。, 行号/标注编号=立绘索引(1-based), 交给 AI 按语气情绪选
 function buildSpriteList(c) {
   try {
     const tags = String((c && c.emotion_tags) || "").trim();
@@ -527,6 +529,26 @@ function safeGetFlag(message, key) {
   try { return message.getFlag(MODULE, key); } catch (e) { return undefined; }
 }
 
+// 1.6.118 合成兜底(模块级, 可被最终测试直接调用):
+//   参考音被引擎拒绝(400/时长不合格) → 去掉 aux 重试一次 → 本句退化为默认音色, 但不会整句没声
+async function synthSafe(runner, txt, lang, opts) {
+  try {
+    return await runner(txt, lang, opts);
+  } catch (e1) {
+    const _m = String((e1 && e1.message) || e1);
+    const _ov = opts && opts.ov;
+    if (!(_ov && Array.isArray(_ov.auxRefAudioPaths) && _ov.auxRefAudioPaths.length)) throw e1;
+    if (!/参考音|400|Bad Request|3~10/i.test(_m)) throw e1;
+    try { console.warn("[gpt-sovits-tts] 情绪参考音被引擎拒绝(时长/格式), 本句自动退化为默认参考音:", _m.slice(0, 120)); } catch (e2) { /* noop */ }
+    const _ov2 = { ..._ov };
+    delete _ov2.auxRefAudioPaths;
+    delete _ov2.emotionMix;
+    const r = await runner(txt, lang, { ...opts, ov: _ov2, emotionFallback: true });
+    try { window.__fvttTTSEmotionFallbackUsed = (Number(window.__fvttTTSEmotionFallbackUsed || 0) + 1); } catch (e3) { /* noop */ }
+    return r;
+  }
+}
+
 /* ============ 核心: 朗读 ============ */
 async function speak(text, { lang = null, sender = "", refAudioPath = null, promptText = null, promptLang = null, speed = null, volume = null, auxRefAudioPaths = null, emotionMix = null, broadcast = false, messageId = "", skipAiEmotion = false, role = null, aiDirect = false } = {}) {
   const cfg = getCfg();
@@ -615,7 +637,9 @@ async function speak(text, { lang = null, sender = "", refAudioPath = null, prom
     }
   }
   // 情绪(1.6.24): LLM 根据台词+角色提示词判情绪(优先, 声音调制+立绘分组) > 显式选择 > 规则判定; 失败降级不阻塞
-  if (pv && !pv.auxRef) {
+  // 1.6.118 P0: skipAiEmotion 以前只是参数、从未被检查 → 模块发送框的消息在 maybeSpeak 已判过语气,
+  //   这里又调一次 /llm(真实使用每条消息 2 次 AI, token 翻倍)。现在真正生效。
+  if (pv && !pv.auxRef && !skipAiEmotion) {
     let _emoDet = null;
     let _aiE = null;
     let _stSrc = "";
@@ -677,23 +701,10 @@ async function speak(text, { lang = null, sender = "", refAudioPath = null, prom
     }
   } catch (e) { /* 保底 */ }
 
-  // 1.6.115 合成兜底: 若引擎因"参考音时长不合格(3~10s)"等 400 拒绝, 自动去掉情绪参考音重试一次
+  // 1.6.115/1.6.118 合成兜底: 若引擎因"参考音时长不合格(3~10s)"等 400 拒绝, 自动去掉情绪参考音重试一次
   //   (情绪样本太短的角色仍能有声音; 只是这一句退回默认音色, 不再整句失败)
-  const _synthSafe = async (txt2, lang2, opts2) => {
-    try {
-      return await _synthIt(txt2, lang2, opts2);
-    } catch (e1) {
-      const _m = String((e1 && e1.message) || e1);
-      const _ov = opts2 && opts2.ov;
-      if (!(_ov && Array.isArray(_ov.auxRefAudioPaths) && _ov.auxRefAudioPaths.length)) throw e1;
-      if (!/参考音|400|Bad Request|3~10/i.test(_m)) throw e1;
-      try { console.warn("[gpt-sovits-tts] 情绪参考音被引擎拒绝(时长/格式), 本句自动退化为默认参考音:", _m.slice(0, 120)); } catch (e2) { /* noop */ }
-      const _ov2 = { ..._ov };
-      delete _ov2.auxRefAudioPaths;
-      delete _ov2.emotionMix;
-      return await _synthIt(txt2, lang2, { ...opts2, ov: _ov2, emotionFallback: true });
-    }
-  };
+  //   1.6.118 抽到模块作用域 synthSafe(...) → 最终测试可以直接实测这条降级路径
+  const _synthSafe = (txt2, lang2, opts2) => synthSafe((t2, l2, o2) => _synthIt(t2, l2, o2), txt2, lang2, opts2);
 
   // ---- 1.6.109 「情绪占比 0」陷阱: 情绪槽音频就是这句话的语气本身 ----
   //   以前 profile/flags 里若存着 emotionMix=0(情绪占比滑到 0%), 引擎按"纯默认"把 aux 丢掉 →
@@ -1354,7 +1365,7 @@ async function maybeSpeak(message) {
       } catch (e) { /* noop */ }
       return;
     }
-    try { await speak(speakText, { ...opts, broadcast: true, messageId: message.id || "" }); }
+    try { await speak(speakText, { ...opts, skipAiEmotion: true, broadcast: true, messageId: message.id || "" }); }
     catch (e) { console.warn("[gpt-sovits-tts] 朗读异常(已忽略):", e); }
   } else if (window.__fvttTTSCanDirect === false) {
     // 代理模式(非作者): 不设 15s 兜底合成(9881 不可达), 登记 pending — flags.audioUrl 同步到达即播放(updateChatMessage hook), 没到则静默等 GM
@@ -1388,10 +1399,10 @@ async function maybeSpeak(message) {
       } catch (e) { /* noop */ }
       // 兜底合成用**消息 flags 的作者角色/参考音频**(speak role 参数 + overrides 已带 fl.ref 等),
       // 绝不用本端当前模型 — 两个不同语音的根治
-      speak(speakText, { ...opts, broadcast: false, role: (fl && fl.role) || null });
+      speak(speakText, { ...opts, skipAiEmotion: true, broadcast: false, role: (fl && fl.role) || null });
     }, 15000));
   } else {
-    speak(speakText, { ...opts, broadcast: false });
+    speak(speakText, { ...opts, skipAiEmotion: true, broadcast: false });
   }
 }
 
@@ -4962,6 +4973,7 @@ window.runFinalTest = async function runFinalTest() {
   window.__fvttTTSAiLineEnterList = [];
   let _lastMsgId = "";   // 立绘/头像实测用: 最后一条场景的消息
   let _scenesDone = 0;   // 1.6.117 已跑完的场景数(用于平均 token)
+  const _testMsgIds = [];   // 1.6.118 测试产生的一次性消息, 结束统一删除(不污染聊天记录)
   // 1.6.117 token 统计快照(多场景前后对比, 量化"省了多少")
   const _tok0 = (() => { try { return JSON.parse(JSON.stringify(window.__fvttTTSTokenStats || {})); } catch (e) { return {}; } })();
   const _sceneRows = [];
@@ -4994,7 +5006,7 @@ window.runFinalTest = async function runFinalTest() {
       let msg = null;
       try { msg = await ChatMessage.create({ content: sc.text, speaker: { alias: cn }, flags: { [MOD]: flT } }); }
       catch (e) { push("- [" + sc.label + "] 发送失败: " + String((e && e.message) || e).slice(0, 60)); fails.push(sc.label + "发送"); continue; }
-      if (msg && msg.id) _lastMsgId = msg.id;
+      if (msg && msg.id) { _lastMsgId = msg.id; _testMsgIds.push(msg.id); }
       let waited = 0;
       while (waited < 150 && !(window.__fvttTTSAiLineEnterList || []).some(p => p && p.mid === msg.id)) { await new Promise(r => setTimeout(r, 200)); waited++; }
       const _entered = !!(window.__fvttTTSAiLineEnterList || []).some(p => p && p.mid === msg.id);
@@ -5184,6 +5196,7 @@ window.runFinalTest = async function runFinalTest() {
   push("");
   try {
     const _mNo = await ChatMessage.create({ content: "白名单测试：这条不应该被朗读。", speaker: { alias: cn }, flags: { [MOD]: { role: cn, lang: "zh" } } });
+    if (_mNo && _mNo.id) _testMsgIds.push(_mNo.id);
     await new Promise(r => setTimeout(r, 4500));
     const _fNo = (() => { try { const mm = game.messages.get(_mNo.id); return (mm && mm.flags && mm.flags[MOD]) || {}; } catch (e) { return {}; } })();
     const _noAudio = !(_fNo.audioUrl || _fNo.audioData);
@@ -5232,6 +5245,15 @@ window.runFinalTest = async function runFinalTest() {
       push("- 该角色没有带参考音的情绪槽 → 跳过");
     } else {
       const _auxG = ["fvtt_chars/" + cn + "/" + _probeSlot.ref_audio_path];
+      try {
+        const _rfG = await svcRequest(cfg.serverUrl, "GET", "/refs?role=" + encodeURIComponent(cn), null, { timeoutMs: 12000, retries: 0 });
+        const _rjG = (_rfG && typeof _rfG.json === "function") ? await _rfG.json().catch(() => ({})) : {};
+        const _rcG = (_rjG && _rjG.chars && _rjG.chars[0]) || null;
+        if (_rcG && Array.isArray(_rcG.slots)) {
+          const _sh = _rcG.slots.filter(x => typeof (x && x.seconds) === "number" && x.seconds < 3);
+          push("- 该角色情绪参考音: " + _rcG.slots.length + " 槽，其中 **" + _sh.length + " 个短于 3 秒**（引擎会自动重复拼接兜底；建议替换成 3~10 秒的干净片段以获得最好音质）");
+        }
+      } catch (e) { /* noop */ }
       push("- 用情绪槽「" + String(_probeSlot.label || _probeSlot.key) + "」的参考音 + 占比 1 直接合成一句(不等聊天链路)");
       try {
         const _rG = await gptSovitsSynth("短参考音兜底验证。", "zh", {
@@ -5248,6 +5270,26 @@ window.runFinalTest = async function runFinalTest() {
       push("- 说明: 引擎会把不足 3 秒的情绪样本重复拼接到 3~10 秒再用; 客户端再兜底一次(被拒则本句退化为默认音色, 不出错)");
     }
   } catch (e) { push("- 短参考音实测异常: " + String((e && e.message) || e).slice(0, 70)); }
+
+  // 1.6.118 三·H: 参考音被引擎拒绝时的自动降级(用 stub 确定性验证逻辑: 退化为默认参考音, 不出错)
+  push("");
+  push("## 三·H、参考音被拒时的降级实测");
+  push("");
+  try {
+    let _calls = 0, _sawNoAux = false;
+    const _stub = async (t2, l2, o2) => {
+      _calls += 1;
+      if (_calls === 1) throw new Error("TTS 服务返回 400: 参考音频在3~10秒范围外，请更换！");
+      const _ov2 = (o2 && o2.ov) || {};
+      _sawNoAux = !(Array.isArray(_ov2.auxRefAudioPaths) && _ov2.auxRefAudioPaths.length);
+      return { blob: { size: 12345 }, audioUrl: "" };
+    };
+    const _rH = await synthSafe(_stub, "降级路径验证。", "zh", { ov: { auxRefAudioPaths: ["x.wav"], emotionMix: 0.5, emotion: "voice_03" } });
+    const _okH = !!(_rH && _rH.blob && _rH.blob.size > 1000) && _sawNoAux && _calls === 2;
+    push("- 第一次被引擎拒绝(参考音 3~10 秒) → 自动去掉情绪参考音重试: " + (_okH ? "✓ 成功(共 " + _calls + " 次调用, 重试时已无 aux)" : "✗ 未按预期降级(调用 " + _calls + " 次, aux 仍存在=" + (_sawNoAux ? "否" : "是") + ")"));
+    if (!_okH) fails.push("参考音降级");
+  } catch (e) { push("- ✗ 降级实测异常: " + String((e && e.message) || e).slice(0, 80)); fails.push("参考音降级异常"); }
+
   _mark("代理/白名单"); push("## 四、结论");
   push("- 测试脚本: v4(代码版本 " + MOD_VERSION + ", 清单缓存 " + verTxt + ") | 耗时: " + Math.round((Date.now() - t0) / 1000) + "s | LLM: " + (llmOk ? "AI链路(判语气+润色+选立绘)已启用" : "规则降级(无AI: 文本规则/提示词基调; 情绪差异靠情绪参考音, 默认零 DSP 不变调)"));
   push("- 关键项: " + (fails.length ? ("⚠ 存在问题 → " + fails.join("、")) : "全部通过 ✓"));
@@ -5281,6 +5323,17 @@ window.runFinalTest = async function runFinalTest() {
     _req.forEach(([n, ok]) => push("- " + (ok === true ? "✓ " : (ok === "未测" ? "· " : "✗ ")) + n + (ok === "未测" ? "（本次跳过）" : "")));
   } catch (e) { push("- 需求对照生成失败: " + String((e && e.message) || e).slice(0, 60)); }
 
+  // 1.6.118 清理测试消息(用户确认: 删掉)
+  if (_testMsgIds.length && getCfg().finalTestKeepMsgs !== true) {
+    let _del = 0;
+    for (const _mid of _testMsgIds) {
+      try {
+        const _mm = game.messages.get(_mid);
+        if (_mm && typeof _mm.delete === "function") { await _mm.delete(); _del++; }
+      } catch (e) { /* noop */ }
+    }
+    try { push("- 已清理测试消息: " + _del + "/" + _testMsgIds.length + " 条（不污染聊天记录）"); } catch (e) { /* noop */ }
+  }
   push("- 报告文件: engine\\final_test_report.md (模块 engine 目录下; 覆盖式写入, 始终为最近一次结果)");
   const md = L.join("\n");
   try { console.warn("[gpt-sovits-tts][最终测试]\n" + md); } catch (e) { /* noop */ }
@@ -6231,6 +6284,18 @@ window.fvttTTSDiag = async function fvttTTSDiag(n = 6) {
       P("CSS 尺寸变量: 消息立绘=" + (cs.getPropertyValue("--fvtt-tts-portrait-size") || "(空)") + " 头部头像=" + (cs.getPropertyValue("--fvtt-tts-header-avatar-size") || "(空)"));
     } catch (e) { /* noop */ }
     try { P("本机当前角色=" + (loadVoiceProfile().current || "(未选)")); } catch (e) { /* noop */ }
+    // 1.6.118 情绪参考音体检: 多少槽短于 3 秒(短样本靠引擎重复拼接兜底, 音质不如原生 3~10 秒)
+    try {
+      const _rf = await svcRequest(getCfg().serverUrl, "GET", "/refs?role=" + encodeURIComponent(cn || ""), null, { timeoutMs: 12000, retries: 0 });
+      const _rj = (_rf && typeof _rf.json === "function") ? await _rf.json().catch(() => ({})) : {};
+      const _rc = (_rj && _rj.chars && _rj.chars[0]) || null;
+      if (_rc && Array.isArray(_rc.slots)) {
+        const _short = _rc.slots.filter(x => x && typeof x.seconds === "number" && x.seconds < 3);
+        const _lens = _rc.slots.map(x => Number(x && x.seconds) || 0).filter(x => x > 0);
+        P("情绪参考音: 共 " + _rc.slots.length + " 槽，短于 3 秒 " + _short.length + " 个（最长 " + (Math.max.apply(null, _lens.concat([0]))).toFixed(1) + "s，最短 " + (Math.min.apply(null, _lens.concat([99]))).toFixed(2) + "s）");
+        if (_short.length) P("  短样本: " + _short.slice(0, 6).map(x => (x.key || "") + " " + (x.label || "").slice(0, 8) + " " + x.seconds + "s").join(" ｜ ") + (_short.length > 6 ? " …" : ""));
+      }
+    } catch (e) { /* noop */ }
     // 1.6.117 AI token 消耗(量化省了多少)
     try {
       const _tk = window.__fvttTTSTokenStats || null;

@@ -3444,6 +3444,46 @@ async def watchdog_state_endpoint():
     return out
 
 
+# 1.6.118 情绪参考音体检: 列出各角色每个情绪槽的参考音时长(GPT-SoVITS 要求 3~10 秒)
+#   客户端用它提示"哪些槽太短"(短样本靠引擎重复拼接兜底, 音质不如原生 3~10 秒)
+@APP.get("/refs")
+async def refs_endpoint(role: str = ""):
+    out = {"ok": True, "chars": []}
+    try:
+        import yaml as _yaml_local   # 1.6.118 本端点内导入, 不依赖模块级是否已导入
+        base = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "engine", "fvtt_chars")
+        names = [role] if role else (sorted(os.listdir(base)) if os.path.isdir(base) else [])
+        for name in names:
+            cfg_path = os.path.join(base, name, "character.yaml")
+            if not os.path.isfile(cfg_path):
+                continue
+            try:
+                cfg = _yaml_local.safe_load(open(cfg_path, "r", encoding="utf-8")) or {}
+            except Exception:
+                cfg = {}
+            slots = []
+            for key, val in (cfg.get("emotions") or {}).items():
+                ref = val.get("ref") if isinstance(val, dict) else None
+                label = val.get("label") if isinstance(val, dict) else None
+                item = {"key": key, "label": label or "", "ref": "", "seconds": None}
+                if ref:
+                    p = ref if os.path.isabs(ref) else os.path.join(base, name, ref)
+                    item["ref"] = ref
+                    try:
+                        if os.path.isfile(p):
+                            info = sf.info(p)
+                            item["seconds"] = round(float(info.frames) / float(info.samplerate or 1), 2)
+                    except Exception:
+                        pass
+                slots.append(item)
+            short = [x for x in slots if x["seconds"] is not None and x["seconds"] < 3.0]
+            out["chars"].append({"name": name, "slots": slots, "short": len(short)})
+    except Exception as e:
+        out["ok"] = False
+        out["message"] = str(e)[:200]
+    return out
+
+
 # 1.6.80 引擎机自检(部署专用 TTS 机时一键排查)
 @APP.get("/selfcheck")
 async def selfcheck_endpoint():

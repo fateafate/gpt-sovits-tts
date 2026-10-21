@@ -1,9 +1,21 @@
 {
   "settings": {
-    "maxConcurrentModels": { "name": "Concurrent AI voice models", "hint": "How many character models stay loaded at once (speech routes to the selected character instantly). Each model uses ~2-4GB VRAM. Default 10, max 20; lower it on weak servers. Takes effect immediately." },
-    "aiSharedBase": { "name": "Shared AI base URL (GM distributed)", "hint": "Filled automatically after GM shares; read-only for players." },
-    "aiSharedKey": { "name": "Shared AI key (GM distributed)", "hint": "All players share the same key after GM distribution." },
-    "aiSharedModel": { "name": "Shared AI model (GM distributed)", "hint": "All players use the same model after GM distribution." },
+    "maxConcurrentModels": {
+      "name": "Concurrent AI voice models",
+      "hint": "How many character models stay loaded at once (speech routes to the selected character instantly). Each model uses ~2-4GB VRAM. Default 10, max 20; lower it on weak servers. Takes effect immediately."
+    },
+    "aiSharedBase": {
+      "name": "Shared AI base URL (GM distributed)",
+      "hint": "Filled automatically after GM shares; read-only for players."
+    },
+    "aiSharedKey": {
+      "name": "Shared AI key (GM distributed)",
+      "hint": "All players share the same key after GM distribution."
+    },
+    "aiSharedModel": {
+      "name": "Shared AI model (GM distributed)",
+      "hint": "All players use the same model after GM distribution."
+    },
     "portraitSize": {
       "name": "Portrait Size",
       "hint": "Display size of portrait images in chat messages (up to 3x default)",
@@ -12,74 +24,194 @@
       "large": "Large (280px)",
       "xl": "Extra Large (420px, 3x)"
     },
-    "portraitMode": { "name": "Portrait display mode", "hint": "Message image = show the character portrait above the message; Indicator = show a small portrait beside the floatbar / chat input for the bound role; Both; None = disable." },
+    "portraitMode": {
+      "name": "Portrait display mode",
+      "hint": "Message image = show the character portrait above the message; Indicator = show a small portrait beside the floatbar / chat input for the bound role; Both; None = disable."
+    },
     "portraitMode.message": "Message image",
     "portraitMode.indicator": "Role indicator",
     "portraitMode.both": "Both",
     "portraitMode.none": "None",
     "voiceRunner.gm": "GM's PC",
     "voiceRunner.gmAuto": "GM's PC (auto)",
-    "voiceRunner": { "name": "Voice Runner (whose PC runs TTS)", "hint": "Self = run TTS locally; another player = your speech is synthesized by that PC (they must run the TTS service and broadcast it). Switching auto-updates the server URL." },
+    "voiceRunner": {
+      "name": "Voice Runner (whose PC runs TTS)",
+      "hint": "Self = run TTS locally; another player = your speech is synthesized by that PC (they must run the TTS service and broadcast it). Switching auto-updates the server URL."
+    },
     "voiceRunner.self": "Self (local service)",
     "voiceRunner.current": "Current URL",
-    "aiPickAvatar": { "name": "Chat Portrait: AI-pick role when unset", "hint": "When a message has no speaking role, use AI to pick the best-matching character from the role list and show its portrait in chat. Off = only show portraits for roles." },
-    "enabled": { "name": "Enable Module", "hint": "Master switch. When off, nothing is spoken and the status light hides." },
-    "allowStressTest": { "name": "Allow GM Stress Tests", "hint": "When the GM runs the suite, concurrency/burst pressure is dispatched to online players' computers (when the server runs no account / weak hardware, pressure must land on player machines). Off = decline participation (acked declined)." },
-    "engine": { "name": "TTS Engine", "hint": "GPT-SoVITS: local server synthesis (best voice; start server/start-tts-server.bat first). Web Speech: browser system voice (zero config, robotic, for testing/fallback)." },
-    "serverUrl": { "name": "TTS Server URL", "hint": "Default auto = use this machine at http://127.0.0.1:9881. For LAN multiplayer: other players' browsers must reach the machine (GM) running the TTS service, e.g. http://192.168.1.5:9881, and the GM must start the server bound to 0.0.0.0 so everyone hears the same voice." },
-    "voiceServerUrl": { "name": "Voice Runner (Engine Machine) URL", "hint": "World setting, GM-editable. Address of the machine running the TTS engine (leave empty = this Foundry host 127.0.0.1:9881). If you run FVTT on a different computer than the engine, enter the engine machine's reachable address, e.g. http://192.168.1.5:9881 or a public frp URL like http://frp-act.com:9881. ALL clients (GM/players) synthesize through the Foundry server which forwards to this machine — changing it transfers the voice-runner role to that machine." },
-    "voiceRunnerMap": { "name": "Voice Generator Assignment (whose PC generates whose voice)", "hint": "World setting, GM-only. No IPs needed — assign by player name: one line per entry \"who speaks = generated by which player's PC\"\nExample:\nPlayerXiaoMing = PlayerXiaoMing\nPlayerXiaoHong = PlayerXiaoMing\n(Above: XiaoMing's voice is generated on his own PC; XiaoHong's voice is also generated on XiaoMing's PC. Unlisted users / blank = default engine machine. The assigned player must run the TTS service (server/start-tts-server.bat) and be network-reachable from the FVTT server (same LAN usually works — the server auto-reads that player's online IP). Applies on the next spoken line, no restart needed.)" },
+    "aiPickAvatar": {
+      "name": "Chat Portrait: AI-pick role when unset",
+      "hint": "When a message has no speaking role, use AI to pick the best-matching character from the role list and show its portrait in chat. Off = only show portraits for roles."
+    },
+    "enabled": {
+      "name": "Enable Module",
+      "hint": "Master switch. When off, nothing is spoken and the status light hides."
+    },
+    "allowStressTest": {
+      "name": "Allow GM Stress Tests",
+      "hint": "When the GM runs the suite, concurrency/burst pressure is dispatched to online players' computers (when the server runs no account / weak hardware, pressure must land on player machines). Off = decline participation (acked declined)."
+    },
+    "engine": {
+      "name": "TTS Engine",
+      "hint": "GPT-SoVITS: local server synthesis (best voice; start server/start-tts-server.bat first). Web Speech: browser system voice (zero config, robotic, for testing/fallback)."
+    },
+    "serverUrl": {
+      "name": "TTS Server URL",
+      "hint": "Default auto = use this machine at http://127.0.0.1:9881. For LAN multiplayer: other players' browsers must reach the machine (GM) running the TTS service, e.g. http://192.168.1.5:9881, and the GM must start the server bound to 0.0.0.0 so everyone hears the same voice."
+    },
+    "voiceServerUrl": {
+      "name": "Voice Runner (Engine Machine) URL",
+      "hint": "World setting, GM-editable. Address of the machine running the TTS engine (leave empty = this Foundry host 127.0.0.1:9881). If you run FVTT on a different computer than the engine, enter the engine machine's reachable address, e.g. http://192.168.1.5:9881 or a public frp URL like http://frp-act.com:9881. ALL clients (GM/players) synthesize through the Foundry server which forwards to this machine — changing it transfers the voice-runner role to that machine."
+    },
+    "voiceRunnerMap": {
+      "name": "Voice Generator Assignment (whose PC generates whose voice)",
+      "hint": "World setting, GM-only. No IPs needed — assign by player name: one line per entry \"who speaks = generated by which player's PC\"\nExample:\nPlayerXiaoMing = PlayerXiaoMing\nPlayerXiaoHong = PlayerXiaoMing\n(Above: XiaoMing's voice is generated on his own PC; XiaoHong's voice is also generated on XiaoMing's PC. Unlisted users / blank = default engine machine. The assigned player must run the TTS service (server/start-tts-server.bat) and be network-reachable from the FVTT server (same LAN usually works — the server auto-reads that player's online IP). Applies on the next spoken line, no restart needed.)"
+    },
     "triggerMode": {
       "name": "Trigger Mode",
       "hint": "send = speak on send; typing = speak after a pause while typing (no send needed); both = both (no duplicate when already spoken during typing); manual = only commands/macros/replay button.",
-      "send": "On send", "typing": "While typing", "both": "Send + typing", "manual": "Manual only"
+      "send": "On send",
+      "typing": "While typing",
+      "both": "Send + typing",
+      "manual": "Manual only"
     },
-    "speakSelf": { "name": "Speak My Messages", "hint": "Disable to stop voicing your own messages." },
-    "speakOthers": { "name": "Speak Others' Messages", "hint": "Disable to only hear your own (or the GM's) messages." },
+    "speakSelf": {
+      "name": "Speak My Messages",
+      "hint": "Disable to stop voicing your own messages."
+    },
+    "speakOthers": {
+      "name": "Speak Others' Messages",
+      "hint": "Disable to only hear your own (or the GM's) messages."
+    },
     "voiceFilter": {
       "name": "Voice Source",
       "hint": "all = everyone; gm = GM narration only; players = players only.",
-      "all": "Everyone", "gm": "GM only", "players": "Players only"
+      "all": "Everyone",
+      "gm": "GM only",
+      "players": "Players only"
     },
-    "skipOoc": { "name": "Skip OOC Messages", "hint": "Do not read out-of-character styled messages." },
-    "skipWhispers": { "name": "Skip Whispers", "hint": "When on, whispers are not spoken (off by default; only recipients can hear anyway)." },
-    "skipRolls": { "name": "Skip Rolls / Cards", "hint": "Do not read dice rolls and system-generated cards." },
-    "skipRich": { "name": "Skip Rich HTML Messages", "hint": "Messages containing HTML (item cards, macros) are not spoken by default; only plain text is voiced." },
-    "minLength": { "name": "Minimum Length", "hint": "Shorter text is not spoken." },
-    "maxLength": { "name": "Maximum Length", "hint": "Longer text is truncated (keeps synthesis fast)." },
+    "skipOoc": {
+      "name": "Skip OOC Messages",
+      "hint": "Do not read out-of-character styled messages."
+    },
+    "skipWhispers": {
+      "name": "Skip Whispers",
+      "hint": "When on, whispers are not spoken (off by default; only recipients can hear anyway)."
+    },
+    "skipRolls": {
+      "name": "Skip Rolls / Cards",
+      "hint": "Do not read dice rolls and system-generated cards."
+    },
+    "skipRich": {
+      "name": "Skip Rich HTML Messages",
+      "hint": "Messages containing HTML (item cards, macros) are not spoken by default; only plain text is voiced."
+    },
+    "minLength": {
+      "name": "Minimum Length",
+      "hint": "Shorter text is not spoken."
+    },
+    "maxLength": {
+      "name": "Maximum Length",
+      "hint": "Longer text is truncated (keeps synthesis fast)."
+    },
     "textLang": {
       "name": "Reading Output Language",
       "hint": "The language used for reading (also the auto-translate target): Chinese / Japanese / English / Korean / Cantonese. With auto-translate on, messages are translated into this language and numbers are read in it (e.g. 12345 → 一万二千三百四十五 for zh); auto = guess from content.",
-      "auto": "Auto", "zh": "Chinese", "ja": "Japanese", "en": "English", "ko": "Korean", "yue": "Cantonese"
+      "auto": "Auto",
+      "zh": "Chinese",
+      "ja": "Japanese",
+      "en": "English",
+      "ko": "Korean",
+      "yue": "Cantonese"
     },
-    "speedFactor": { "name": "Speech Speed", "hint": "0.5 - 2.0, 1.0 is normal." },
-    "styleStrength": { "name": "Reading Prompt Strength", "hint": "0%: prompt does not change speed/pause; 100%: fully applies. Also adjustable per character." },
-    "emotionFxStrength": { "name": "Emotion FX Strength (DSP)", "hint": "0% (recommended, same as Shinsekai): no pitch/tempo processing at all — emotion comes from the character's emotion reference audio (most natural). Higher values add slight speed/volume only (never pitch). Keep 0 if voices sound odd." },
-    "gmPrompt": { "name": "Tone Prompt (GM)", "hint": "Only describe the reading tone / delivery (e.g. 'angry, holding back', 'low voice with threat', 'light and lively'). It affects the tone of each line only and never changes the text — do NOT put world/story settings here. Empty = not injected. Also editable in the voice settings panel." },
-    "volume": { "name": "Volume", "hint": "0 - 1." },
+    "speedFactor": {
+      "name": "Speech Speed",
+      "hint": "0.5 - 2.0, 1.0 is normal."
+    },
+    "styleStrength": {
+      "name": "Reading Prompt Strength",
+      "hint": "0%: prompt does not change speed/pause; 100%: fully applies. Also adjustable per character."
+    },
+    "emotionFxStrength": {
+      "name": "Emotion FX Strength (DSP)",
+      "hint": "0% (recommended, same as Shinsekai): no pitch/tempo processing at all — emotion comes from the character's emotion reference audio (most natural). Higher values add slight speed/volume only (never pitch). Keep 0 if voices sound odd."
+    },
+    "gmPrompt": {
+      "name": "Tone Prompt (GM)",
+      "hint": "Only describe the reading tone / delivery (e.g. 'angry, holding back', 'low voice with threat', 'light and lively'). It affects the tone of each line only and never changes the text — do NOT put world/story settings here. Empty = not injected. Also editable in the voice settings panel."
+    },
+    "volume": {
+      "name": "Volume",
+      "hint": "0 - 1."
+    },
     "queueMode": {
       "name": "Playback Mode",
       "hint": "queue = play in order; interrupt = new message cuts off the current one.",
-      "queue": "Queue", "interrupt": "Interrupt"
+      "queue": "Queue",
+      "interrupt": "Interrupt"
     },
-    "typingDebounce": { "name": "Typing Pause (ms)", "hint": "How long to wait after you stop typing before previewing." },
-    "showReplay": { "name": "Replay Buttons", "hint": "Volume button on each message to read it again." },
-    "showStatus": { "name": "Status Light", "hint": "Server status indicator in the chat bar (green = online, red = offline; click to test)." },
-    "commands": { "name": "Slash Commands", "hint": "/ttssay text, /ttsstop, /ttstest, /ttsrec, /ttshelp." },
-    "sttEnabled": { "name": "Enable Dictation (Voice→Text)", "hint": "Microphone button in the chat bar." },
+    "typingDebounce": {
+      "name": "Typing Pause (ms)",
+      "hint": "How long to wait after you stop typing before previewing."
+    },
+    "showReplay": {
+      "name": "Replay Buttons",
+      "hint": "Volume button on each message to read it again."
+    },
+    "showStatus": {
+      "name": "Status Light",
+      "hint": "Server status indicator in the chat bar (green = online, red = offline; click to test)."
+    },
+    "commands": {
+      "name": "Slash Commands",
+      "hint": "/ttssay text, /ttsstop, /ttstest, /ttsrec, /ttshelp."
+    },
+    "sttEnabled": {
+      "name": "Enable Dictation (Voice→Text)",
+      "hint": "Microphone button in the chat bar."
+    },
     "sttEngine": {
       "name": "Dictation Engine",
       "hint": "browser = Web Speech API (Chrome/Edge, zero install); server = local server-side ASR (/asr: funasr for Chinese, faster-whisper multilingual, fully offline).",
-      "browser": "Browser recognition", "server": "Server-side local ASR"
+      "browser": "Browser recognition",
+      "server": "Server-side local ASR"
     },
-    "sttLang": { "name": "Dictation Language", "hint": "auto = guessed from the chat input content." },
-    "sttDevice": { "name": "Microphone Device", "hint": "Pick the microphone for dictation. Grant mic access once (click the 🎤 button) before device names appear; device selection applies to server-side ASR, browser ASR always uses the system default." },
-    "hudTheme": { "name": "HUD Theme", "hint": "Colors of the popups/floating bar: Dark = dark background with white text; Pink = pink background with deep-pink text.", "dark": "Dark (B&W)", "pink": "Pink" },
-    "sttAutoSend": { "name": "Send Result Directly", "hint": "On: post the transcription straight to chat. Off: insert into the input box for you to confirm." },
-    "sttAutoSpeak": { "name": "Auto-Read Dictation", "hint": "On: the transcribed text is immediately read aloud (speak → text → voice loop)." },
-    "emotionSpeed": { "name": "Emotion-Based Auto Speed", "hint": "On: reading speed follows the emotion's recommended value (angry fast / sleepy slow, etc.) to sharpen emotion contrast; manual per-voice speed still wins." },
-    "translate": { "name": "Auto-translate reading language", "hint": "On: when the reading language (e.g. Japanese) differs from the message text, translate before reading (numbers also converted to that language's reading). Uses MyMemory free API; falls back to the original text on failure." },
-    "voiceProfile": { "name": "Voice Profile", "hint": "Managed by the Voice Settings panel: character display name/avatar, emotion sample, reference audio, speed/volume. Use the Voice Settings button in the chat bar." }
+    "sttLang": {
+      "name": "Dictation Language",
+      "hint": "auto = guessed from the chat input content."
+    },
+    "sttDevice": {
+      "name": "Microphone Device",
+      "hint": "Pick the microphone for dictation. Grant mic access once (click the 🎤 button) before device names appear; device selection applies to server-side ASR, browser ASR always uses the system default.",
+      "default": "System default (browser default)"
+    },
+    "hudTheme": {
+      "name": "HUD Theme",
+      "hint": "Colors of the popups/floating bar: Dark = dark background with white text; Pink = pink background with deep-pink text.",
+      "dark": "Dark (B&W)",
+      "pink": "Pink"
+    },
+    "sttAutoSend": {
+      "name": "Send Result Directly",
+      "hint": "On: post the transcription straight to chat. Off: insert into the input box for you to confirm."
+    },
+    "sttAutoSpeak": {
+      "name": "Auto-Read Dictation",
+      "hint": "On: the transcribed text is immediately read aloud (speak → text → voice loop)."
+    },
+    "emotionSpeed": {
+      "name": "Emotion-Based Auto Speed",
+      "hint": "On: reading speed follows the emotion's recommended value (angry fast / sleepy slow, etc.) to sharpen emotion contrast; manual per-voice speed still wins."
+    },
+    "translate": {
+      "name": "Auto-translate reading language",
+      "hint": "On: when the reading language (e.g. Japanese) differs from the message text, translate before reading (numbers also converted to that language's reading). Uses MyMemory free API; falls back to the original text on failure."
+    },
+    "voiceProfile": {
+      "name": "Voice Profile",
+      "hint": "Managed by the Voice Settings panel: character display name/avatar, emotion sample, reference audio, speed/volume. Use the Voice Settings button in the chat bar."
+    }
   },
   "errors": {
     "synth": "Synthesis failed. Make sure the TTS server is running (server/start-tts-server.bat); if you are a player without the server locally, ask the GM to read, or set the server address to the GM's LAN IP in Voice Settings",
@@ -93,13 +225,35 @@
     "sttServer": "This browser cannot access the microphone.",
     "sttBrowserDevice": "Browser ASR always uses the system default mic; to pick a device, switch the ASR engine to Server-side.",
     "sttSend": "Failed to send the dictated message.",
-    "llmEnabled": { "name": "Enable AI tone detection (LLM)", "hint": "Optional: fill the key below and enable — the 'AI tone' button in the send panel judges the tone of your text via AI and applies it. Without it the module works as before with manual tone selection." },
-    "llmBaseUrl": { "name": "LLM API base URL", "hint": "OpenAI-compatible endpoint. e.g. OpenAI=https://api.openai.com/v1; DeepSeek=https://api.deepseek.com/v1; or any compatible service." },
-    "llmKey": { "name": "LLM API key", "hint": "Your model service key (used by this module only)." },
-    "llmModel": { "name": "LLM model", "hint": "Model name, e.g. gpt-4o-mini / deepseek-chat. After pressing 'Fetch model list' in the voice settings panel, this becomes a dropdown of the service's available models." },
-    "llmPolish": { "name": "AI polish lines", "hint": "On: after AI judges the tone, lightly polish the line per that emotion (interjections/expressions, same meaning) before speaking — replicating the reference app's tone variety; Off: speak the original text." },
-    "llmMergePolish": { "name": "Merge judgement & polish", "hint": "On: one LLM call returns both the emotion and the polished line (halved latency, recommended); Off: two separate calls (judge, then polish)." },
-    "llmModels": { "name": "Fetched LLM models cache", "hint": "Auto cache: models fetched by 'Fetch model list' in the voice settings panel (maintained automatically)." }
+    "llmEnabled": {
+      "name": "Enable AI tone detection (LLM)",
+      "hint": "Optional: fill the key below and enable — the 'AI tone' button in the send panel judges the tone of your text via AI and applies it. Without it the module works as before with manual tone selection."
+    },
+    "llmBaseUrl": {
+      "name": "LLM API base URL",
+      "hint": "OpenAI-compatible endpoint. e.g. OpenAI=https://api.openai.com/v1; DeepSeek=https://api.deepseek.com/v1; or any compatible service."
+    },
+    "llmKey": {
+      "name": "LLM API key",
+      "hint": "Your model service key (used by this module only)."
+    },
+    "llmModel": {
+      "name": "LLM model",
+      "hint": "Model name, e.g. gpt-4o-mini / deepseek-chat. After pressing 'Fetch model list' in the voice settings panel, this becomes a dropdown of the service's available models."
+    },
+    "llmPolish": {
+      "name": "AI polish lines",
+      "hint": "On: after AI judges the tone, lightly polish the line per that emotion (interjections/expressions, same meaning) before speaking — replicating the reference app's tone variety; Off: speak the original text."
+    },
+    "llmMergePolish": {
+      "name": "Merge judgement & polish",
+      "hint": "On: one LLM call returns both the emotion and the polished line (halved latency, recommended); Off: two separate calls (judge, then polish)."
+    },
+    "llmModels": {
+      "name": "Fetched LLM models cache",
+      "hint": "Auto cache: models fetched by 'Fetch model list' in the voice settings panel (maintained automatically)."
+    },
+    "gmProxy": "No direct TTS on this client — handed to the GM/server for synthesis; it will play automatically."
   },
   "status": {
     "proxy": "TTS via GM proxy (audio relayed by GM)",
@@ -110,7 +264,10 @@
     "web": "Engine: browser system voice"
   },
   "ui": {
-    "gmMute": { "name": "GM 全局静音(仅 GM 可操作)", "hint": "开启后所有玩家语音静音(停播+禁播); GM 悬浮条喇叭按钮一键切换" },
+    "gmMute": {
+      "name": "GM 全局静音(仅 GM 可操作)",
+      "hint": "开启后所有玩家语音静音(停播+禁播); GM 悬浮条喇叭按钮一键切换"
+    },
     "mute": "GM global mute (silence all players' voices)",
     "unmute": "Global mute active - click to unmute",
     "stylePrompt": "Reading Style",
@@ -172,7 +329,14 @@
     "quickChar": "Quick character switch (local; GM syncs the server-active character)",
     "quickEmotion": "Quick emotion switch (10 emotion slots)",
     "noChar": "No character",
-    "emotionNone": "Default"
+    "emotionNone": "Default",
+    "aiGot": "models fetched",
+    "close": "Close",
+    "preloadHint": "Warm up the AI and pre-synthesize this line; click again to send instantly (no wait).",
+    "speedTip": "0 = auto (speed decided by the read-aloud prompt and the AI)",
+    "styleStr": "Strength",
+    "styleStrTip": "Prompt strength: 0% = no speed/pause change, 100% = follow the prompt fully",
+    "volumeTip": "0 = auto (engine default loudness); set a value to override"
   },
   "vm": {
     "speedTest": "Speed",
@@ -249,7 +413,7 @@
     "volume": "Volume",
     "status": "Server status",
     "hw": "Hardware",
-    "samples": "Active character",
+    "samples": "Voice sample library (built-in)",
     "saved": "Voice settings saved",
     "saveFail": "Failed to save",
     "importing": "Uploading audio…",
@@ -330,7 +494,6 @@
     "slotUploaded": "Emotion audio bound",
     "slotUploadFail": "Failed to bind emotion audio",
     "refTooShort": "Clip too short for strong emotion; 3–10s recommended",
-    "samples": "Voice sample library (built-in)",
     "samplesHint": "Built-in reference clips: preview, then bind one to any emotion slot (transcribed text is attached automatically).",
     "samplesLoading": "Loading…",
     "samplesNone": "No samples",
@@ -356,7 +519,29 @@
     "delConfirm": "Delete character",
     "deleting": "Deleting character…",
     "deleted": "Character deleted",
-    "delFail": "Failed to delete"
+    "delFail": "Failed to delete",
+    "auto": "Auto",
+    "speedTip": "0 = auto (speed decided by the read-aloud prompt and the AI)",
+    "spriteAuto": "Cleared — portraits follow the detected tone again",
+    "spriteLib": "Portrait library",
+    "spriteLibHint": "Blue = pure portrait (not bound to voice), single select. Voice follows tone/emotion; the portrait follows this pick. Click the same one again to clear it (back to auto).",
+    "spritePicked": "Picked portrait: ",
+    "spriteTest": "Portrait test",
+    "spriteTestDone": "Portrait test finished — report generated and sent to the server",
+    "spriteTestManualHint": "A portrait is pinned manually. Click that portrait again in the library to unpin, then run the portrait test.",
+    "spriteTestNoChar": "Select a character first",
+    "spriteTestStart": "Portrait test started: sending 5 messages with different emotions (2s apart)",
+    "spriteTestTip": "Send 5 test messages with different emotions and check that portraits switch accordingly",
+    "stylePh": "e.g. speak angrily / slow and gentle",
+    "stylePrompt": "Read-aloud prompt",
+    "styleStr": "Strength",
+    "styleStrTip": "Prompt strength: 0% = no speed/pause change (tone/reference still applies), 100% = fully follow the prompt",
+    "styleTip": "Read-aloud prompt (also acts as the tone hint), e.g. “speak angrily, holding back your temper” or “more serious, no pauses”. It is injected into AI tone/polish/portrait decisions and translated into speed/pause parameters. Per character, per player.",
+    "synthFrom": "Speech synthesis source (which computer carries the load)",
+    "synthFromHint": "Use 👥 Voice runner assignment to choose which computer synthesizes for each account. If the assigned computer is offline it falls back to the default engine machine, so audio never breaks.",
+    "toneMergedHint": "Put the tone into the read-aloud prompt (per-character editor), e.g. “speak angrily, holding back your temper”, “slow and gentle, soft at the end”, “bright and lively”. It drives AI tone/polish/portrait decisions plus speed and pauses, and only affects you (each player can differ).",
+    "toneMergedTitle": "Tone / read-aloud prompt (per character · per player)",
+    "volTip": "0 = auto (engine default loudness)"
   },
   "runAssign": {
     "title": "Voice Generator Assignment (whose PC generates whose voice)",

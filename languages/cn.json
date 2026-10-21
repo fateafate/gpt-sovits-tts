@@ -1,9 +1,21 @@
 {
   "settings": {
-    "maxConcurrentModels": { "name": "同时运行 AI 语音模型数", "hint": "多个角色模型同时常驻服务器(说话按角色即时路由, 不再都变成主持人音色)。每个模型约 2-4GB 显存，默认 10，上限 20；低配机器请调小(如 2)，改完立即生效。" },
-    "aiSharedBase": { "name": "AI 配置共享·API 地址(由 GM 分发)", "hint": "主持人一键分发给所有玩家后自动填充；玩家只读。" },
-    "aiSharedKey": { "name": "AI 配置共享·密钥(由 GM 分发)", "hint": "主持人分发后全员共享同一密钥，无需玩家各自填写。" },
-    "aiSharedModel": { "name": "AI 配置共享·模型(由 GM 分发)", "hint": "主持人分发后全员使用同一模型。" },
+    "maxConcurrentModels": {
+      "name": "同时运行 AI 语音模型数",
+      "hint": "多个角色模型同时常驻服务器(说话按角色即时路由, 不再都变成主持人音色)。每个模型约 2-4GB 显存，默认 10，上限 20；低配机器请调小(如 2)，改完立即生效。"
+    },
+    "aiSharedBase": {
+      "name": "AI 配置共享·API 地址(由 GM 分发)",
+      "hint": "主持人一键分发给所有玩家后自动填充；玩家只读。"
+    },
+    "aiSharedKey": {
+      "name": "AI 配置共享·密钥(由 GM 分发)",
+      "hint": "主持人分发后全员共享同一密钥，无需玩家各自填写。"
+    },
+    "aiSharedModel": {
+      "name": "AI 配置共享·模型(由 GM 分发)",
+      "hint": "主持人分发后全员使用同一模型。"
+    },
     "portraitSize": {
       "name": "立绘图片大小",
       "hint": "聊天消息中立绘的展示尺寸(最大可到默认的 3 倍)",
@@ -12,74 +24,194 @@
       "large": "大 (280px)",
       "xl": "特大 (420px, 3倍)"
     },
-    "portraitMode": { "name": "立绘展示方式", "hint": "消息内插图=在消息内容上方显示角色立绘；角色指示物=悬浮条/聊天输入框旁显示当前绑定角色的立绘小图标；都不=关闭立绘。" },
+    "portraitMode": {
+      "name": "立绘展示方式",
+      "hint": "消息内插图=在消息内容上方显示角色立绘；角色指示物=悬浮条/聊天输入框旁显示当前绑定角色的立绘小图标；都不=关闭立绘。"
+    },
     "portraitMode.message": "消息内插图",
     "portraitMode.indicator": "角色指示物",
     "portraitMode.both": "两者都要",
     "portraitMode.none": "都不显示",
     "voiceRunner.gm": "主持人电脑",
     "voiceRunner.gmAuto": "主持人电脑（自动）",
-    "voiceRunner": { "name": "语音运行者（谁的电脑跑语音）", "hint": "选自己=本机跑 TTS 服务；选其他玩家=你的语音合成交给那台电脑（该玩家需开着 TTS 服务并已广播声明）。切换后本机服务地址自动跟随。" },
+    "voiceRunner": {
+      "name": "语音运行者（谁的电脑跑语音）",
+      "hint": "选自己=本机跑 TTS 服务；选其他玩家=你的语音合成交给那台电脑（该玩家需开着 TTS 服务并已广播声明）。切换后本机服务地址自动跟随。"
+    },
     "voiceRunner.self": "自己（本机服务）",
     "voiceRunner.current": "当前地址",
-    "aiPickAvatar": { "name": "聊天立绘：无角色时 AI 选角色", "hint": "消息没有指定朗读角色时，用 AI 从角色列表选最像说话者的角色，在聊天里显示它的立绘；关闭则只显示有角色的立绘。" },
-    "enabled": { "name": "启用模块", "hint": "总开关。关闭后不再朗读、不显示状态灯。" },
-    "allowStressTest": { "name": "允许参与 GM 压力测试", "hint": "GM 跑综合测试时会把并发/连发压力分发到在线玩家电脑执行(服务器不登录账号、配置差时压力必须下放玩家端)。关闭则拒绝参与(回执 declined)。" },
-    "engine": { "name": "朗读引擎 (TTS Engine)", "hint": "GPT-SoVITS: 本地服务合成(音色佳, 需先启动 server/start-tts-server.bat)；Web Speech: 浏览器系统语音(零配置, 音色机械, 用于测试/兜底)。" },
-    "serverUrl": { "name": "TTS 服务地址 (TTS Server URL)", "hint": "默认 auto=自动使用本机 http://127.0.0.1:9881。局域网多人时：其他玩家的浏览器要访问运行 TTS 服务那台电脑(GM)的地址，如 http://192.168.1.5:9881，并让 GM 用 0.0.0.0 启动服务，全员才能听到同一音色。" },
-    "voiceServerUrl": { "name": "语音运行者（引擎机器）地址 (Voice Runner URL)", "hint": "⚠ 世界级设置，GM 可改。跑 TTS 引擎的那台机器地址（默认留空=Foundry 主机本机 127.0.0.1:9881）。如果你用别的电脑开 FVTT、引擎在另一台机器，请填引擎机器的可达地址，如 http://192.168.1.5:9881 或 frp 公网 http://frp-act.com:9881。所有端（GM/玩家）的合成都经 Foundry 服务器转发到这台机器，改这里=把跑语音的权限转给那台机器。" },
-    "voiceRunnerMap": { "name": "语音生成者分配（谁的语音由谁的电脑生成）", "hint": "⚠ 世界级设置，仅 GM 可改。不用填 IP——直接指定玩家：每行一条「谁说话 = 由哪位玩家的电脑生成」。\n例：\n玩家小明 = 玩家小明\n玩家小红 = 玩家小明\n（上例：小明的语音由小明自己的电脑生成，小红的语音也由小明电脑生成；留空行或未列出的用户 = 用默认引擎机。被指定的玩家需要：开着 TTS 服务（server/start-tts-server.bat）、与 FVTT 服务器网络互通（同一局域网通常即可，服务端自动取该玩家在线 IP）。改完无需重启，下一句立即生效。）" },
+    "aiPickAvatar": {
+      "name": "聊天立绘：无角色时 AI 选角色",
+      "hint": "消息没有指定朗读角色时，用 AI 从角色列表选最像说话者的角色，在聊天里显示它的立绘；关闭则只显示有角色的立绘。"
+    },
+    "enabled": {
+      "name": "启用模块",
+      "hint": "总开关。关闭后不再朗读、不显示状态灯。"
+    },
+    "allowStressTest": {
+      "name": "允许参与 GM 压力测试",
+      "hint": "GM 跑综合测试时会把并发/连发压力分发到在线玩家电脑执行(服务器不登录账号、配置差时压力必须下放玩家端)。关闭则拒绝参与(回执 declined)。"
+    },
+    "engine": {
+      "name": "朗读引擎 (TTS Engine)",
+      "hint": "GPT-SoVITS: 本地服务合成(音色佳, 需先启动 server/start-tts-server.bat)；Web Speech: 浏览器系统语音(零配置, 音色机械, 用于测试/兜底)。"
+    },
+    "serverUrl": {
+      "name": "TTS 服务地址 (TTS Server URL)",
+      "hint": "默认 auto=自动使用本机 http://127.0.0.1:9881。局域网多人时：其他玩家的浏览器要访问运行 TTS 服务那台电脑(GM)的地址，如 http://192.168.1.5:9881，并让 GM 用 0.0.0.0 启动服务，全员才能听到同一音色。"
+    },
+    "voiceServerUrl": {
+      "name": "语音运行者（引擎机器）地址 (Voice Runner URL)",
+      "hint": "⚠ 世界级设置，GM 可改。跑 TTS 引擎的那台机器地址（默认留空=Foundry 主机本机 127.0.0.1:9881）。如果你用别的电脑开 FVTT、引擎在另一台机器，请填引擎机器的可达地址，如 http://192.168.1.5:9881 或 frp 公网 http://frp-act.com:9881。所有端（GM/玩家）的合成都经 Foundry 服务器转发到这台机器，改这里=把跑语音的权限转给那台机器。"
+    },
+    "voiceRunnerMap": {
+      "name": "语音生成者分配（谁的语音由谁的电脑生成）",
+      "hint": "⚠ 世界级设置，仅 GM 可改。不用填 IP——直接指定玩家：每行一条「谁说话 = 由哪位玩家的电脑生成」。\n例：\n玩家小明 = 玩家小明\n玩家小红 = 玩家小明\n（上例：小明的语音由小明自己的电脑生成，小红的语音也由小明电脑生成；留空行或未列出的用户 = 用默认引擎机。被指定的玩家需要：开着 TTS 服务（server/start-tts-server.bat）、与 FVTT 服务器网络互通（同一局域网通常即可，服务端自动取该玩家在线 IP）。改完无需重启，下一句立即生效。）"
+    },
     "triggerMode": {
       "name": "触发方式",
       "hint": "send=发送即读；typing=打字停顿即读(不发也能听)；both=两者都要(发送后若已读过则不重复)；manual=仅手动(命令/宏/重听按钮)。",
-      "send": "发送即读", "typing": "打字停顿即读", "both": "发送 + 打字", "manual": "仅手动"
+      "send": "发送即读",
+      "typing": "打字停顿即读",
+      "both": "发送 + 打字",
+      "manual": "仅手动"
     },
-    "speakSelf": { "name": "朗读自己发的消息", "hint": "关闭后自己的消息不读。" },
-    "speakOthers": { "name": "朗读别人发的消息", "hint": "关闭后只听自己(或GM)的。" },
+    "speakSelf": {
+      "name": "朗读自己发的消息",
+      "hint": "关闭后自己的消息不读。"
+    },
+    "speakOthers": {
+      "name": "朗读别人发的消息",
+      "hint": "关闭后只听自己(或GM)的。"
+    },
     "voiceFilter": {
       "name": "朗读来源",
       "hint": "all=全部；gm=只读GM(旁白/叙事)；players=只读玩家。",
-      "all": "全部", "gm": "仅 GM", "players": "仅玩家"
+      "all": "全部",
+      "gm": "仅 GM",
+      "players": "仅玩家"
     },
-    "skipOoc": { "name": "跳过 OOC 消息", "hint": "不朗读 OOC 风格的消息。" },
-    "skipWhispers": { "name": "跳过悄悄话", "hint": "开启后私聊/悄悄话不朗读(默认不跳过, 只有能看到的人才播放)。" },
-    "skipRolls": { "name": "跳过掷骰/检定卡", "hint": "不朗读掷骰结果与系统生成的卡片。" },
-    "skipRich": { "name": "跳过富文本/卡片消息", "hint": "含 HTML 的复杂消息(技能卡、道具卡等)默认不朗读, 只读纯文本。" },
-    "minLength": { "name": "最短朗读长度", "hint": "少于该字数的文本不朗读。" },
-    "maxLength": { "name": "最长朗读长度", "hint": "超过该字数的文本会被截断(防止合成太慢/太长)。" },
+    "skipOoc": {
+      "name": "跳过 OOC 消息",
+      "hint": "不朗读 OOC 风格的消息。"
+    },
+    "skipWhispers": {
+      "name": "跳过悄悄话",
+      "hint": "开启后私聊/悄悄话不朗读(默认不跳过, 只有能看到的人才播放)。"
+    },
+    "skipRolls": {
+      "name": "跳过掷骰/检定卡",
+      "hint": "不朗读掷骰结果与系统生成的卡片。"
+    },
+    "skipRich": {
+      "name": "跳过富文本/卡片消息",
+      "hint": "含 HTML 的复杂消息(技能卡、道具卡等)默认不朗读, 只读纯文本。"
+    },
+    "minLength": {
+      "name": "最短朗读长度",
+      "hint": "少于该字数的文本不朗读。"
+    },
+    "maxLength": {
+      "name": "最长朗读长度",
+      "hint": "超过该字数的文本会被截断(防止合成太慢/太长)。"
+    },
     "textLang": {
       "name": "朗读输出语言",
       "hint": "朗读用的语言(也是自动翻译的目标语言): 中文/日语/英语/韩语/粤语。开自动翻译时消息会翻译成所选语言朗读, 数字也按该语言读法(如 12345 → 一万二千三百四十五)；auto = 按内容自动判断。",
-      "auto": "自动", "zh": "中文", "ja": "日语", "en": "英语", "ko": "韩语", "yue": "粤语"
+      "auto": "自动",
+      "zh": "中文",
+      "ja": "日语",
+      "en": "英语",
+      "ko": "韩语",
+      "yue": "粤语"
     },
-    "speedFactor": { "name": "语速", "hint": "0 = 自动（交给朗读提示词与 AI 决定）；0.5~2.0 才是手动指定，1.0 为原速。" },
-    "styleStrength": { "name": "朗读提示词强度", "hint": "0%: 提示词不改变语速/停顿；100%: 完全按提示词。也每个角色单独可调。" },
-    "emotionFxStrength": { "name": "情绪效果强度(DSP)", "hint": "0%(推荐, 同 Shinsekai): 完全不做变调/变速, 情绪差异靠角色的情绪参考音频, 声音最自然；调高只加轻微语速/音量(不会变调)。觉得声音怪就先保持 0。" },
-    "gmPrompt": { "name": "语气提示(主持人)", "hint": "只填朗读语气/表演方式(如「用愤怒的语气」「压低声音, 带威胁感」「轻快活泼」); 只影响每句话的语气, 不改变台词内容, 不要写世界观/剧情设定。留空则不注入。也可在语音设置面板里编辑。" },
-    "volume": { "name": "音量", "hint": "0 = 自动（引擎默认响度，不额外衰减）；0.05~1 才是手动指定。" },
+    "speedFactor": {
+      "name": "语速",
+      "hint": "0 = 自动（交给朗读提示词与 AI 决定）；0.5~2.0 才是手动指定，1.0 为原速。"
+    },
+    "styleStrength": {
+      "name": "朗读提示词强度",
+      "hint": "0%: 提示词不改变语速/停顿；100%: 完全按提示词。也每个角色单独可调。"
+    },
+    "emotionFxStrength": {
+      "name": "情绪效果强度(DSP)",
+      "hint": "0%(推荐, 同 Shinsekai): 完全不做变调/变速, 情绪差异靠角色的情绪参考音频, 声音最自然；调高只加轻微语速/音量(不会变调)。觉得声音怪就先保持 0。"
+    },
+    "gmPrompt": {
+      "name": "语气提示(主持人)",
+      "hint": "只填朗读语气/表演方式(如「用愤怒的语气」「压低声音, 带威胁感」「轻快活泼」); 只影响每句话的语气, 不改变台词内容, 不要写世界观/剧情设定。留空则不注入。也可在语音设置面板里编辑。"
+    },
+    "volume": {
+      "name": "音量",
+      "hint": "0 = 自动（引擎默认响度，不额外衰减）；0.05~1 才是手动指定。"
+    },
     "queueMode": {
       "name": "播放模式",
       "hint": "queue=排队依次朗读；interrupt=新消息打断当前。",
-      "queue": "排队", "interrupt": "打断"
+      "queue": "排队",
+      "interrupt": "打断"
     },
-    "typingDebounce": { "name": "打字停顿(毫秒)", "hint": "停止输入多久后自动试读。" },
-    "showReplay": { "name": "显示重听按钮", "hint": "每条消息右侧的音量按钮, 点击重新朗读。" },
-    "showStatus": { "name": "显示状态灯", "hint": "聊天栏的服务状态指示灯(绿=在线, 红=离线, 点击试听)。" },
-    "commands": { "name": "启用斜杠命令", "hint": "/ttssay 文本、/ttsstop、/ttstest、/ttsrec、/ttshelp。" },
-    "sttEnabled": { "name": "启用听写(语音→文字)", "hint": "聊天栏麦克风按钮。" },
+    "typingDebounce": {
+      "name": "打字停顿(毫秒)",
+      "hint": "停止输入多久后自动试读。"
+    },
+    "showReplay": {
+      "name": "显示重听按钮",
+      "hint": "每条消息右侧的音量按钮, 点击重新朗读。"
+    },
+    "showStatus": {
+      "name": "显示状态灯",
+      "hint": "聊天栏的服务状态指示灯(绿=在线, 红=离线, 点击试听)。"
+    },
+    "commands": {
+      "name": "启用斜杠命令",
+      "hint": "/ttssay 文本、/ttsstop、/ttstest、/ttsrec、/ttshelp。"
+    },
+    "sttEnabled": {
+      "name": "启用听写(语音→文字)",
+      "hint": "聊天栏麦克风按钮。"
+    },
     "sttEngine": {
       "name": "听写引擎 (STT Engine)",
       "hint": "browser=浏览器语音识别(Chrome/Edge, 零安装)；server=服务端本地听写(/asr, funasr中文/whisper多语种, 全离线)。",
-      "browser": "浏览器识别", "server": "服务端本地听写"
+      "browser": "浏览器识别",
+      "server": "服务端本地听写"
     },
-    "sttLang": { "name": "听写语言 (STT Language)", "hint": "auto=按输入框内容猜测。" },
-    "sttDevice": { "name": "麦克风设备 (Microphone Device)", "hint": "选择听写使用的麦克风。先点一次🎤授权后这里才会列出设备名；仅“服务端听写”支持指定设备，浏览器听写始终用系统默认。" },
-    "hudTheme": { "name": "HUD 主题 (HUD Theme)", "hint": "弹窗/悬浮框的配色：黑白款 = 深色底白字；粉色系 = 粉色底深粉字。", "dark": "黑白款", "pink": "粉色系" },
-    "sttAutoSend": { "name": "听写结果直接发送", "hint": "开: 识别完直接发到聊天；关: 只插入输入框, 自己确认后再发送。" },
-    "sttAutoSpeak": { "name": "听写结果自动朗读", "hint": "开: 听写出的文字立刻用所选声音朗读(说→文字→语音闭环)。" },
-    "emotionSpeed": { "name": "按语气自动调速", "hint": "开: 朗读时按语气套用推荐语速(愤怒快/困倦慢等), 增强语气区分度; 在语音设置里手动调的语速优先。" },
-    "translate": { "name": "朗读语种自动翻译 (Auto Translate)", "hint": "开: 朗读语言(如日语)与消息原文不同时自动翻译成该语言再朗读(数字等也会转为该语言的读法)。翻译走 MyMemory 免费接口, 失败时退回原文。" },
-    "voiceProfile": { "name": "语音角色档案", "hint": "由语音设置面板管理：角色显示名/头像、语气样本、参考音频、语速音量。请用聊天栏的 语音设置 按钮修改。" }
+    "sttLang": {
+      "name": "听写语言 (STT Language)",
+      "hint": "auto=按输入框内容猜测。"
+    },
+    "sttDevice": {
+      "name": "麦克风设备 (Microphone Device)",
+      "hint": "选择听写使用的麦克风。先点一次🎤授权后这里才会列出设备名；仅“服务端听写”支持指定设备，浏览器听写始终用系统默认。",
+      "default": "系统默认(浏览器默认)"
+    },
+    "hudTheme": {
+      "name": "HUD 主题 (HUD Theme)",
+      "hint": "弹窗/悬浮框的配色：黑白款 = 深色底白字；粉色系 = 粉色底深粉字。",
+      "dark": "黑白款",
+      "pink": "粉色系"
+    },
+    "sttAutoSend": {
+      "name": "听写结果直接发送",
+      "hint": "开: 识别完直接发到聊天；关: 只插入输入框, 自己确认后再发送。"
+    },
+    "sttAutoSpeak": {
+      "name": "听写结果自动朗读",
+      "hint": "开: 听写出的文字立刻用所选声音朗读(说→文字→语音闭环)。"
+    },
+    "emotionSpeed": {
+      "name": "按语气自动调速",
+      "hint": "开: 朗读时按语气套用推荐语速(愤怒快/困倦慢等), 增强语气区分度; 在语音设置里手动调的语速优先。"
+    },
+    "translate": {
+      "name": "朗读语种自动翻译 (Auto Translate)",
+      "hint": "开: 朗读语言(如日语)与消息原文不同时自动翻译成该语言再朗读(数字等也会转为该语言的读法)。翻译走 MyMemory 免费接口, 失败时退回原文。"
+    },
+    "voiceProfile": {
+      "name": "语音角色档案",
+      "hint": "由语音设置面板管理：角色显示名/头像、语气样本、参考音频、语速音量。请用聊天栏的 语音设置 按钮修改。"
+    }
   },
   "errors": {
     "synth": "语音合成失败，请确认 TTS 服务已启动(server/start-tts-server.bat)；若你是玩家且本机没开服务，请让 GM 朗读，或在语音设置把服务地址填成 GM 电脑的局域网地址",
@@ -93,13 +225,35 @@
     "sttServer": "当前浏览器无法使用麦克风录音",
     "sttBrowserDevice": "浏览器听写使用系统默认麦克风；要指定麦克风请把听写引擎改为“服务端”",
     "sttSend": "听写消息发送失败",
-    "llmEnabled": { "name": "启用 AI 语气判断 (LLM / Enable AI Tone)", "hint": "可选功能：填写下方密钥并开启后，发送面板的「AI 语气」可用 AI 自动判断当前输入文本的语气并应用。不配置则模块照常手动选择语气。" },
-    "llmBaseUrl": { "name": "LLM API 地址 (LLM API Base URL)", "hint": "OpenAI 兼容端点。例：OpenAI=https://api.openai.com/v1；DeepSeek=https://api.deepseek.com/v1；或其他兼容服务。" },
-    "llmKey": { "name": "LLM API 密钥 (LLM API Key)", "hint": "你的模型服务密钥(仅本机模块使用)。" },
-    "llmModel": { "name": "LLM 模型 (LLM Model)", "hint": "模型名，如 gpt-4o-mini / deepseek-chat。可先在语音设置面板「获取模型列表」后，这里自动变成服务可用模型的下拉。" },
-    "llmPolish": { "name": "AI 润色台词 (AI Polish Lines)", "hint": "开(默认): 朗读时 AI 按角色人设+朗读提示词微调台词(加语气词/情绪表达, 不改原意)再朗读, 复刻成品软件的语气多样性；关: 朗读原文。" },
-    "llmMergePolish": { "name": "判断+润色合并调用 (Merge Judgement & Polish)", "hint": "开: 一次 LLM 调用同时判断语气和润色台词, 延迟减半(推荐)；关: 分两次调用(判断一次、润色一次)。" },
-    "llmModels": { "name": "LLM 可用模型缓存 (Fetched LLM Models)", "hint": "自动缓存：语音设置面板「获取模型列表」拉取到的可用模型（本项自动维护，无需手动填写）。" }
+    "llmEnabled": {
+      "name": "启用 AI 语气判断 (LLM / Enable AI Tone)",
+      "hint": "可选功能：填写下方密钥并开启后，发送面板的「AI 语气」可用 AI 自动判断当前输入文本的语气并应用。不配置则模块照常手动选择语气。"
+    },
+    "llmBaseUrl": {
+      "name": "LLM API 地址 (LLM API Base URL)",
+      "hint": "OpenAI 兼容端点。例：OpenAI=https://api.openai.com/v1；DeepSeek=https://api.deepseek.com/v1；或其他兼容服务。"
+    },
+    "llmKey": {
+      "name": "LLM API 密钥 (LLM API Key)",
+      "hint": "你的模型服务密钥(仅本机模块使用)。"
+    },
+    "llmModel": {
+      "name": "LLM 模型 (LLM Model)",
+      "hint": "模型名，如 gpt-4o-mini / deepseek-chat。可先在语音设置面板「获取模型列表」后，这里自动变成服务可用模型的下拉。"
+    },
+    "llmPolish": {
+      "name": "AI 润色台词 (AI Polish Lines)",
+      "hint": "开(默认): 朗读时 AI 按角色人设+朗读提示词微调台词(加语气词/情绪表达, 不改原意)再朗读, 复刻成品软件的语气多样性；关: 朗读原文。"
+    },
+    "llmMergePolish": {
+      "name": "判断+润色合并调用 (Merge Judgement & Polish)",
+      "hint": "开: 一次 LLM 调用同时判断语气和润色台词, 延迟减半(推荐)；关: 分两次调用(判断一次、润色一次)。"
+    },
+    "llmModels": {
+      "name": "LLM 可用模型缓存 (Fetched LLM Models)",
+      "hint": "自动缓存：语音设置面板「获取模型列表」拉取到的可用模型（本项自动维护，无需手动填写）。"
+    },
+    "gmProxy": "本机未直连 TTS，已转交 GM/服务器合成，稍后自动播放"
   },
   "status": {
     "proxy": "TTS · GM 代理合成(声音经主持人中转)",
@@ -110,7 +264,10 @@
     "web": "引擎: 浏览器系统语音"
   },
   "ui": {
-    "gmMute": { "name": "GM 全局静音(仅 GM 可操作)", "hint": "开启后所有玩家语音静音(停播+禁播); GM 悬浮条喇叭按钮一键切换" },
+    "gmMute": {
+      "name": "GM 全局静音(仅 GM 可操作)",
+      "hint": "开启后所有玩家语音静音(停播+禁播); GM 悬浮条喇叭按钮一键切换"
+    },
     "mute": "GM 全局静音(所有玩家语音静音)",
     "unmute": "已全局静音 — 点击解除",
     "stylePrompt": "朗读提示词",
@@ -172,7 +329,14 @@
     "quickChar": "快捷切换角色（本地；GM 切换会同步服务端激活角色）",
     "quickEmotion": "快捷切换语气（10 情绪槽）",
     "noChar": "无角色",
-    "emotionNone": "默认"
+    "emotionNone": "默认",
+    "aiGot": "获取到模型",
+    "close": "关闭",
+    "preloadHint": "预热 AI 并预合成当前这句话；再点一下直接发送(零等待)",
+    "speedTip": "0 = 自动（交给朗读提示词与 AI 决定语速）",
+    "styleStr": "强度",
+    "styleStrTip": "提示词强度：0%=不改变语速/停顿，100%=完全按提示词",
+    "volumeTip": "0 = 自动（引擎默认响度）；调大/调小才手动指定"
   },
   "vm": {
     "speedTest": "速度",
@@ -249,7 +413,7 @@
     "volume": "音量",
     "status": "服务状态",
     "hw": "硬件",
-    "samples": "激活角色",
+    "samples": "语音样本库（内置样本）",
     "saved": "语音设置已保存",
     "saveFail": "保存失败",
     "importing": "上传音频…",
@@ -330,7 +494,6 @@
     "slotUploaded": "语气音频已绑定",
     "slotUploadFail": "语气音频绑定失败",
     "refTooShort": "样本过短，情绪特征不足，建议 3~10 秒",
-    "samples": "语音样本库（内置样本）",
     "samplesHint": "角色自带的参考语音，试听后直接绑到任意语气槽（自动带上转写台词）。",
     "samplesLoading": "加载中…",
     "samplesNone": "无可用样本",
@@ -356,7 +519,29 @@
     "delConfirm": "确定删除角色",
     "deleting": "删除角色…",
     "deleted": "已删除角色",
-    "delFail": "删除失败"
+    "delFail": "删除失败",
+    "auto": "自动",
+    "speedTip": "0 = 自动(交给朗读提示词与 AI 决定语速)",
+    "spriteAuto": "已取消，说话立绘按语气自动",
+    "spriteLib": "立绘库",
+    "spriteLibHint": "蓝色=纯立绘(不绑语音)，单选；语音跟语气/情绪，立绘跟这里。再点同张取消(恢复自动)",
+    "spritePicked": "已选立绘：",
+    "spriteTest": "立绘测试",
+    "spriteTestDone": "立绘测试完成：报告已自动生成并发送服务器",
+    "spriteTestManualHint": "已手动选立绘(固定)。想测自动切换请先在立绘库再点那张取消，再点立绘测试",
+    "spriteTestNoChar": "请先选择角色再测",
+    "spriteTestStart": "立绘测试开始：依次发送5条不同情绪消息（2秒间隔）",
+    "spriteTestTip": "依次发送5条不同情绪测试消息，看立绘是否随情绪切换",
+    "stylePh": "如：用愤怒的语气说话 / 缓慢而温柔",
+    "stylePrompt": "朗读提示词",
+    "styleStr": "强度",
+    "styleStrTip": "提示词强度：0%=不改变语速/停顿（仍会按提示词换语气/参考音），100%=完全按提示词的语速与停顿",
+    "styleTip": "朗读提示词（同时作为语气提示）：如“用愤怒、压着火气的语气说话”“更严肃认真、中间不要中断”。会注入 AI 判语气/润色/选立绘，并翻译成语速/停顿等合成参数；每个角色/每位玩家独立。",
+    "synthFrom": "语音合成来源（压力在哪台电脑）",
+    "synthFromHint": "用 👥 语音生成者分配 指定每个账号由哪台电脑合成；被指定电脑离线时自动由默认引擎机兜底，不会断声。",
+    "toneMergedHint": "语气请填在「朗读提示词」里（角色编辑栏），例如「用愤怒、压着火气的语气说话」「缓慢而温柔，句尾放轻」「轻快活泼」。它同时影响 AI 判语气/润色/选立绘 与 语速停顿，且只作用于你自己（每位玩家可各不相同）。",
+    "toneMergedTitle": "语气 / 朗读提示词（每角色 · 每位玩家独立）",
+    "volTip": "0 = 自动(引擎默认响度)"
   },
   "runAssign": {
     "title": "语音生成者分配（谁的语音由谁的电脑生成）",

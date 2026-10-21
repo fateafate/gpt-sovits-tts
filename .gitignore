@@ -42,3 +42,5 @@ server/tmp_selftest.json
 server/player_selftest_*.json
 server/speed_report_*.json
 server/_t.json
+
+dist/
