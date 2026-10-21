@@ -527,7 +527,7 @@ export async function gptSovitsStatus(serverUrl) {
 /** 通用 TTS 服务请求(socket 代理优先 → 直连回退): https 页面(GM/玩家经 frp)Mixed Content 根治。
  *  base=serverUrl(可带协议), method=GET|POST, path="/characters" 等, bodyJSON 可选。
  *  返回 { ok, status, json, direct } — direct=false 表示走了 socket 代理, true 表示直连。 */
-export async function svcRequest(base, method, path, bodyJSON, { timeoutMs = 30000, binary = false, b64Body = "", contentType = "", retries = 3 } = {}) {
+export async function svcRequest(base, method, path, bodyJSON, { timeoutMs = 30000, binary = false, b64Body = "", contentType = "", retries = 3, quiet = false } = {}) {
   const b = String(base || "http://127.0.0.1:9881").replace(/\/+$/, "");
   // 1) socket 代理(服务端转发, 浏览器无 Mixed Content 问题; 二进制经 base64 传输)
   const pr = await gptSovitsSocketProxy({
@@ -589,7 +589,7 @@ export async function svcRequest(base, method, path, bodyJSON, { timeoutMs = 300
       } catch (e) {
         lastErr = e;
         if (_try === _rMax) {
-          try { console.warn("[gpt-sovits-tts] 直连TTS失败(重试" + _rMax + "次仍败): " + (b + path) + " err=" + String((e && e.message) || e).slice(0, 120)); } catch (e2) { /* noop */ }
+          try { (quiet ? console.debug : console.warn)("[gpt-sovits-tts] 直连TTS失败(重试" + _rMax + "次仍败): " + (b + path) + " err=" + String((e && e.message) || e).slice(0, 120)); } catch (e2) { /* noop */ }
         }
       }
     }

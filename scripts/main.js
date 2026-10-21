@@ -19,13 +19,17 @@ window.fetchAndRefreshModels = fetchAndRefreshModels;
 const MODULE = "gpt-sovits-tts";
 // 1.6.103 代码版本号: Foundry 的 game.modules.get(id).version 读的是"载入世界时的清单缓存",
 //   改了 manifest 不刷新会一直显示旧版本(用户多次看到 1.6.96 而实际代码已是新版) → 报告里同时打印两者, 便于确认真的在跑新代码
-const MOD_VERSION = "1.6.121";
+const MOD_VERSION = "1.6.122";
 const CHAT_STYLES = (typeof CONST !== "undefined" && (CONST.CHAT_MESSAGE_STYLES || CONST.CHAT_MESSAGE_TYPES)) || {};
 
 /* ============ 设置定义 ============ */
 // TTS 服务地址: 默认自动指向"当前 Foundry 所在主机"的 9881 端口
 // (GM 在 0.0.0.0 启动服务后, 玩家浏览器连 GM 的地址即自动可用, 无需手填 IP)
 const autoServerUrl = () => {
+  // 1.6.122 自动识别: 如果本机 127.0.0.1:9881 探到了引擎(玩家被分配为"语音生成者"的典型情况),
+  //   就优先用本机引擎; 否则用 Foundry 所在主机(原行为)。
+  //   以前玩家一律连 `Foundry主机:9881` → 即使他本机装了引擎也用不上, 分配了也无法出声。
+  try { if (window.__fvttTTSAutoBase) return window.__fvttTTSAutoBase; } catch (e) { /* noop */ }
   const host = (typeof location !== "undefined" && location.hostname) ? location.hostname : "127.0.0.1";
   return `http://${host}:9881`;
 };
@@ -2192,10 +2196,12 @@ async function probeLLMOnce() {
   try {
     const c0 = getCfg();
     if (!c0.llmEnabled || !c0.llmKey) return { ok: false, reason: "未配置 llmEnabled/llmKey" };
+    // 1.6.122 引擎不在线时压根不用探测(否则开局满屏 ERR_CONNECTION_REFUSED, 且每次重启还会重试)
+    if (window.__fvttTTSEngineDown === true) return { ok: false, reason: "引擎未启动" };
     const r = await svcRequest(c0.serverUrl, "POST", "/llm", {
       base: c0.llmBaseUrl || "https://api.openai.com/v1", key: c0.llmKey, model: c0.llmModel || "gpt-4o-mini",
       text: "ping", emotions: [{ key: "calm", label: "平静" }],
-    }, { timeoutMs: 20000, retries: 1 });   // 1.6.62 探测 20s 超时+1次重试(外部 API 偶发慢时不再轻易判失败)
+    }, { timeoutMs: 20000, retries: 1, quiet: true });   // 1.6.62 探测 20s 超时+1次重试; 1.6.122 quiet: 失败只 debug 不刷红字
     const j = (r && typeof r.json === "function") ? await r.json().catch(() => ({})) : {};
     if (r && r.ok && j && j.ok && j.emotion) {
       try { window.__fvttTTSLlmBroken = false; window.__fvttTTSLlmErr = ""; } catch (e) { /* noop */ }
@@ -2530,7 +2536,7 @@ async function loadQuickChars({ force = false } = {}) {
   tryDirect: try { } catch (e) { }   // (占位避免误解析; 下面两个函数定义)
   const tryDirect = async () => {
     try {
-      const r = await svcRequest(getCfg().serverUrl, "GET", "/characters");
+      const r = await svcRequest(getCfg().serverUrl, "GET", "/characters", null, { retries: 0, timeoutMs: 6000, quiet: true });   // 1.6.122 开局探测不重试(失败有快照/缓存兜底)
       const rj = r.jsonSafe ? r.jsonSafe() : (r.json || {});
       if (r.ok && Array.isArray(rj.chars) && rj.chars.length) {
         quickChars = rj;
@@ -4049,6 +4055,20 @@ Hooks.once("ready", () => {
       });
     } catch (e) { console.error("[gpt-sovits-tts] tests install failed:", e); }
   }, 800);
+  // 1.6.122 引擎地址自动识别(必须在其它探测之前): 本机有引擎 → 用本机; 否则沿用 Foundry 主机
+  (async () => {
+    try {
+      const _u = String(getCfg().serverUrl || "");
+      if (_u && _u !== "auto") return;   // 用户手填了地址 → 绝对尊重
+      const _probe = await fetch("http://127.0.0.1:9881/status", { signal: AbortSignal.timeout(2500) }).catch(() => null);
+      if (_probe && _probe.ok === true) {
+        window.__fvttTTSAutoBase = "http://127.0.0.1:9881";
+        try { console.debug("[gpt-sovits-tts] 检测到本机引擎(127.0.0.1:9881) → 自动使用本机合成"); } catch (e2) { /* noop */ }
+        try { checkStatus(true); } catch (e2) { /* noop */ }
+      }
+    } catch (e) { /* noop */ }
+  })();
+
   // 1.6.98 注入 AI 翻译器: 有 LLM 时优先用 AI 翻译(与判语气同一把 key, 无免费 API 的 429 限流, 质量更高); 失败才退化 MyMemory
   try {
     setTranslator(async (text, from, to) => {
@@ -6341,7 +6361,7 @@ window.fvttTTSDiag = async function fvttTTSDiag(n = 6) {
     P("=== gpt-sovits-tts 立绘诊断 ===");
     P("模块版本=" + mv + " | 代码版本=" + MOD_VERSION + " | Foundry=" + String(game.version || (game.release && game.release.version) || "?") + " | 用户=" + (game.user && game.user.name) + "(GM=" + !!(game.user && game.user.isGM) + ")");
     P("钩子已注册=" + JSON.stringify(window.__fvttTTSHooks || {}) + " | 可直连引擎=" + String(window.__fvttTTSCanDirect));
-    P("展示方式 portraitMode=" + cfgD.portraitMode + " | 立绘尺寸=" + cfgD.portraitSize + " | 引擎=" + cfgD.serverUrl + " | AI=" + (cfgD.llmEnabled ? "开" : "关") + (cfgD.llmKey ? "" : "(无key)"));
+    P("展示方式 portraitMode=" + cfgD.portraitMode + " | 立绘尺寸=" + cfgD.portraitSize + " | 引擎=" + cfgD.serverUrl + (window.__fvttTTSAutoBase ? "（已自动识别为本机引擎）" : "") + " | AI=" + (cfgD.llmEnabled ? "开" : "关") + (cfgD.llmKey ? "" : "(无key)"));
     let qc = quickChars;
     if (!qc || !Array.isArray(qc.chars) || !qc.chars.length) {
       try { qc = await loadQuickChars({ force: true }); } catch (e) { /* noop */ }
