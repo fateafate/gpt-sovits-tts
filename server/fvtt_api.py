@@ -3400,7 +3400,8 @@ async def diag_endpoint(request: Request):
 @APP.get("/watchdog")
 async def watchdog_state_endpoint():
     """{ok, log, log_tail, startup, startup_path, watchdog_running}"""
-    out = {"ok": True, "log": False, "log_tail": "", "startup": False, "startup_path": "", "watchdog_running": False}
+    out = {"ok": True, "log": False, "log_tail": "", "startup": False, "startup_path": "", "watchdog_running": False,
+           "script": False, "script_size": 0}
     try:
         eng_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "engine")
         lp = os.path.join(eng_dir, "watchdog.log")
@@ -3412,6 +3413,13 @@ async def watchdog_state_endpoint():
                 out["log_tail"] = " / ".join(lines)[-400:]
             except Exception:
                 pass
+        # 1.6.123 看门狗脚本本身是否存在(被 Windows Defender 隔离 → 登入不会自动启动引擎)
+        try:
+            _p_script = os.path.join(eng_dir, "watchdog.vbs")
+            out["script"] = os.path.exists(_p_script)
+            out["script_size"] = (os.path.getsize(_p_script) if out["script"] else 0)
+        except Exception:
+            pass
         try:
             ap = os.environ.get("APPDATA", "")
             if ap:

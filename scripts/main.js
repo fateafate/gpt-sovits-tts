@@ -19,7 +19,7 @@ window.fetchAndRefreshModels = fetchAndRefreshModels;
 const MODULE = "gpt-sovits-tts";
 // 1.6.103 代码版本号: Foundry 的 game.modules.get(id).version 读的是"载入世界时的清单缓存",
 //   改了 manifest 不刷新会一直显示旧版本(用户多次看到 1.6.96 而实际代码已是新版) → 报告里同时打印两者, 便于确认真的在跑新代码
-const MOD_VERSION = "1.6.122";
+const MOD_VERSION = "1.6.123";
 const CHAT_STYLES = (typeof CONST !== "undefined" && (CONST.CHAT_MESSAGE_STYLES || CONST.CHAT_MESSAGE_TYPES)) || {};
 
 /* ============ 设置定义 ============ */
@@ -5315,6 +5315,13 @@ window.runFinalTest = async function runFinalTest() {
     const _wj = (_wr && typeof _wr.json === "function") ? await _wr.json().catch(() => ({})) : {};
     if (_wr && _wr.ok && _wj && _wj.startup !== undefined) {
       push("- Windows 启动项: " + (_wj.startup ? "✓ 已安装" : "✗ 未安装 → 运行 engine\\安装看门狗自启.bat") + "  ←  " + String(_wj.startup_path || "").slice(-46));
+      // 1.6.123 看门狗脚本本身是否还在(被杀软隔离 = 启动项指向空气 → 登入不会自动启动引擎)
+      if (_wj.script === false) {
+        push("- ✗ **watchdog.vbs 不见了**（启动项指向它，所以登入不会自动启动引擎）→ 多半被杀软隔离；运行 engine\\安装看门狗自启.bat 重建，并把 engine 目录加白名单");
+        fails.push("看门狗脚本缺失");
+      } else if (_wj.script === true) {
+        push("- 看门狗脚本: ✓ 存在（" + (Math.round(Number(_wj.script_size || 0) / 102.4) / 10) + " KB）");
+      }
       // 进程存活以"锁文件心跳"为准; 判不出来时按提示处理, 不误判失败(启动项才是硬要求)
       push("- 看门狗进程: " + (_wj.watchdog_running ? "✓ 正在运行(锁文件心跳正常)" : "⚠ 未检出运行中(可能刚重启/被任务管理器结束) → 双击 engine\\watchdog.vbs 可手动起"));
       push("- 最近判断(watchdog.log): " + (String(_wj.log_tail || "") ? String(_wj.log_tail).slice(-170) : "(无 watchdog.log)"));
