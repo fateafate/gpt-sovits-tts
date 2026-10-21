@@ -19,7 +19,7 @@ window.fetchAndRefreshModels = fetchAndRefreshModels;
 const MODULE = "gpt-sovits-tts";
 // 1.6.103 代码版本号: Foundry 的 game.modules.get(id).version 读的是"载入世界时的清单缓存",
 //   改了 manifest 不刷新会一直显示旧版本(用户多次看到 1.6.96 而实际代码已是新版) → 报告里同时打印两者, 便于确认真的在跑新代码
-const MOD_VERSION = "1.6.113";
+const MOD_VERSION = "1.6.114";
 const CHAT_STYLES = (typeof CONST !== "undefined" && (CONST.CHAT_MESSAGE_STYLES || CONST.CHAT_MESSAGE_TYPES)) || {};
 
 /* ============ 设置定义 ============ */
@@ -99,7 +99,16 @@ function _canWrite() {
   try { return !!(game && game.user && game.user.isGM); } catch (e) { return false; }
 }
 function safeMsgWrite(msg, update) {
-  try { if (msg && _canWrite() && update && typeof msg.update === "function") msg.update(update).catch(() => { /* noop */ }); } catch (e) { /* noop */ }
+  try {
+    if (!msg || !_canWrite() || !update || typeof msg.update !== "function") return;
+    // 1.6.114 本地立即生效: 以前只调 update()(异步), 紧随其后的 `{...message.flags[MODULE]}` 会读到旧值 →
+    //   同一句里"情绪 / 立绘 / 参考音"的多次写回互相覆盖(实测报告出现"情绪槽=voice_09 但立绘是 voice_04 的图")
+    try {
+      const f = update && update.flags && update.flags[MODULE];
+      if (f && msg.flags && msg.flags[MODULE]) Object.assign(msg.flags[MODULE], f);
+    } catch (e2) { /* noop */ }
+    msg.update(update).catch(() => { /* noop */ });
+  } catch (e) { /* noop */ }
 }
 
 // LLM 模型下拉: 服务端拉取的可用模型(设置 llmModels 缓存) + 常用预设; 未拉取时也有预设可选
@@ -5706,8 +5715,11 @@ Hooks.on("createChatMessage", (message) => {
     const _fl = (message && message.flags && message.flags[MODULE]) || {};
     const _roleN = _fl.role || "";
     if (!_roleN || !message || !message.content) return;
-    // 1.6.105 本句已在朗读链路(assess)判过语气+立绘 → 不再重复调 LLM(每句省一次 AI 往返, 直接变快)
-    if (_fl.aiDecided) { try { console.debug("[gpt-sovits-tts] 立绘/语气已由朗读链路判定, 跳过重复 AI 调用"); } catch (e) { /* noop */ } return; }
+    // 1.6.105/1.6.114 本句语气+立绘由"朗读链路(assess)"统一决定, 这里不再重复调 LLM:
+    //   ① 模块发送框(fromModSend)的消息一定走 assess → 直接跳过(AI 判定结果由 assess 写回)
+    //   ② 其他来源的消息若已带 aiDecided 标记也跳过
+    //   以前 aiDecided 是异步写的, 这个 hook 在 create 时读到的是 false → 每条消息仍会多调一次 /llm(实测 6 条场景共 19 次调用)
+    if (_fl.fromModSend || _fl.aiDecided) { try { console.debug("[gpt-sovits-tts] 语气/立绘已由朗读链路判定, 跳过重复 AI 调用" + (_fl.fromModSend ? "(模块发送)" : "(aiDecided)")); } catch (e) { /* noop */ } return; }
     (async () => {
       try {
         const _e = await aiJudgeEmotionNow(String(message.content), _roleN);

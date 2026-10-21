@@ -1274,6 +1274,9 @@ class TTS_Request(BaseModel):
     overlap_length: int = 2
     min_chunk_length: int = 16
     emotion: str = None      # 1.6.20 情绪(用于情绪参考音选择; 1.6.65 起默认不再做 DSP 变调)
+    # 1.6.114 关键修复: 这个字段以前没声明 → pydantic 静默丢弃 → 引擎永远按默认 0.5 混合,
+    #   客户端把占比规范成 1.0 也没用(情绪参考音只被"半融合"), 听感就是"语气变化不明显/跟提示词无关"。
+    emotion_mix: float = None   # 0=纯默认参考音 / 1=情绪参考音作唯一参考 / 中间=融合
     emotion_fx: float = -1   # 1.6.65 情绪 DSP 强度(0=不处理, 严格 Shinsekai; -1=用服务端默认 DEFAULT_EMOTION_FX=0)
 
 
@@ -1629,6 +1632,15 @@ async def tts_handle(req: dict):
             req["aux_ref_audio_paths"] = []           # 纯默认: 不用情绪音频
         else:
             req["aux_ref_audio_paths"] = _resolved    # 中间: 主参考+aux 融合
+    # 1.6.114 最终生效参数落盘(证明"情绪占比/参考音"到底怎么用的):
+    #   mix=1 → 情绪参考音变成主参考(ref), aux 清空; mix=0 → 用默认主参考; 0<mix<1 → 融合
+    try:
+        with open(os.path.join(os.path.dirname(__file__), "tts-requests.log"), "a", encoding="utf-8") as _lf:
+            _lf.write("[%s] [tts-eff] mix=%s ref=%s aux=%s\n" % (
+                time.strftime("%H:%M:%S"), req.get("emotion_mix"),
+                str(req.get("ref_audio_path") or "")[-70:], str(req.get("aux_ref_audio_paths") or [])[:120]))
+    except Exception:
+        pass
 
     streaming_mode = req.get("streaming_mode", False)
     return_fragment = req.get("return_fragment", False)
