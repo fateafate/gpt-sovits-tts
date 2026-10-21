@@ -19,7 +19,7 @@ window.fetchAndRefreshModels = fetchAndRefreshModels;
 const MODULE = "gpt-sovits-tts";
 // 1.6.103 代码版本号: Foundry 的 game.modules.get(id).version 读的是"载入世界时的清单缓存",
 //   改了 manifest 不刷新会一直显示旧版本(用户多次看到 1.6.96 而实际代码已是新版) → 报告里同时打印两者, 便于确认真的在跑新代码
-const MOD_VERSION = "1.6.118";
+const MOD_VERSION = "1.6.119";
 const CHAT_STYLES = (typeof CONST !== "undefined" && (CONST.CHAT_MESSAGE_STYLES || CONST.CHAT_MESSAGE_TYPES)) || {};
 
 /* ============ 设置定义 ============ */
@@ -550,7 +550,7 @@ async function synthSafe(runner, txt, lang, opts) {
 }
 
 /* ============ 核心: 朗读 ============ */
-async function speak(text, { lang = null, sender = "", refAudioPath = null, promptText = null, promptLang = null, speed = null, volume = null, auxRefAudioPaths = null, emotionMix = null, broadcast = false, messageId = "", skipAiEmotion = false, role = null, aiDirect = false } = {}) {
+async function speak(text, { lang = null, sender = "", refAudioPath = null, promptText = null, promptLang = null, speed = null, volume = null, auxRefAudioPaths = null, emotionMix = null, emotion = null, broadcast = false, messageId = "", skipAiEmotion = false, role = null, aiDirect = false } = {}) {
   const cfg = getCfg();
   if (!cfg.enabled) return false;
   // 调试: 记录每次朗读调用(来源/语言), 排查"日语+中文重复读"
@@ -612,6 +612,7 @@ async function speak(text, { lang = null, sender = "", refAudioPath = null, prom
     if (promptLang) overrides.promptLang = promptLang;
     if (auxRefAudioPaths) overrides.auxRefAudioPaths = auxRefAudioPaths.map(fixRef);
     if (typeof emotionMix === "number") overrides.emotionMix = emotionMix;
+    if (emotion) overrides.emotion = String(emotion);   // 1.6.119 保留情绪名(诊断/引擎旁路都看得到)
     if (speed > 0) spd = speed;      // 0 = 自动(不强制语速)
     if (volume > 0) vol = volume;    // 0 = 自动
   } else if (pv) {
@@ -4729,11 +4730,11 @@ window.runFinalTest = async function runFinalTest() {
   const _chk = (name, ok, detail) => { push("- " + (ok ? "✓ " : "✗ ") + name + (detail ? ("（" + detail + "）") : "")); if (!ok) fails.push(name); return ok; };
   try {
     const _o1 = normalizeEmotionMix({ auxRefAudioPaths: ["a.wav"], emotionMix: 0 });
-    _chk("情绪占比 0 + 有参考音 → 按 1.0", _o1.emotionMix === 1.0, "mix=" + _o1.emotionMix);
+    _chk("情绪占比 0 + 有参考音 → 按 0.5(基础音+情绪叠加)", _o1.emotionMix === 0.5, "mix=" + _o1.emotionMix);
     const _o2 = normalizeEmotionMix({ emotionMix: 0 });
     _chk("情绪占比 0 且无参考音 → 不误改", _o2.emotionMix === 0);
     const _o3 = normalizeEmotionMix({ auxRefAudioPaths: ["a.wav"], emotionMix: 0.5 });
-    _chk("用户手动占比 0.5 → 尊重(不改)", _o3.emotionMix === 0.5);
+    _chk("用户手动占比 0.7 → 尊重(不改)", (function () { const _o = normalizeEmotionMix({ auxRefAudioPaths: ["a.wav"], emotionMix: 0.7 }); return _o.emotionMix === 0.7; })());
   } catch (e) { _chk("情绪占比规范化", false, String((e && e.message) || e).slice(0, 50)); }
   try {
     _chk("「害羞/羞涩」→ shy", normalizeEmotionKey("害羞羞涩") === "shy" && styleEmotionKey("害羞羞涩的语气") === "shy");
@@ -5158,7 +5159,8 @@ window.runFinalTest = async function runFinalTest() {
     if (!_sp) {
       push("- ⚠ 没抓到最近一次合成参数(可能本句走的是缓存/预加载) → 跳过");
     } else {
-      const _emoTxt = String(_sp.emotion || "(未设)");
+      const _emoFromFlags = (() => { try { const _mf = _lastMsgId ? (game.messages.get(_lastMsgId) || null) : null; return String(((_mf && _mf.flags && _mf.flags[MOD]) || {}).emotion || ""); } catch (e) { return ""; } })();
+      const _emoTxt = String(_sp.emotion || _emoFromFlags || "(未设)");
       const _slotC = (() => { try { return findEmotionSlot(_emoTxt, cn); } catch (e) { return null; } })();
       push("- 送给引擎: 情绪=" + _emoTxt + (_slotC ? ("（槽 " + (_slotC.key || "") + " " + String(_slotC.label || "").slice(0, 14) + "）") : "（无对应情绪槽）")
         + " | 情绪参考音=" + ((_sp.aux && _sp.aux.length) ? String(_sp.aux[0]).slice(-40) : "(无)")

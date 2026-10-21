@@ -3970,7 +3970,9 @@ async def llm_assess_endpoint(request: Request):
     if context:
         user_content = "上下文：%s\n台词：%s" % (context[:300], text[:800])
     # 输出上限按输入长度动态给: emotion+sprite ~16 token, polish ≈ 原台词长度(中文≈1 字 1 token) + 余量
-    _max_out = 24 if not want_polish else min(420, 64 + int(len(text) * 1.3))
+    # 1.6.119 1.6.117 的预算太紧(19 字台词只给 88 token) → 推理型模型先输出思考文字就把 JSON 截断, 润色丢失。
+    #   现在: 不润色 48; 润色 min(520, 160 + 2.2×字数) —— 实测 DeepSeek 思考前缀 + JSON 约需 120~180 token。
+    _max_out = 48 if not want_polish else min(520, 160 + int(len(text) * 2.2))
     payload = {
         "model": model,
         "messages": [
@@ -3980,7 +3982,18 @@ async def llm_assess_endpoint(request: Request):
         "temperature": 0.2,
         "max_tokens": _max_out,
     }
-    data, _llm_status, llm_err = await asyncio.to_thread(_llm_chat_call, payload, base, key, 25)
+    # 1.6.119 先试 JSON 模式(OpenAI 兼容): 模型直接吐 JSON, 不再输出"We need answer only JSON"这类思考文字
+    _payload_json = dict(payload)
+    _payload_json["response_format"] = {"type": "json_object"}
+    data, _llm_status, llm_err = await asyncio.to_thread(_llm_chat_call, _payload_json, base, key, 25)
+    if data is None:
+        # 有些中转站不支持 response_format → 退回普通模式再试一次
+        try:
+            with open(os.path.join(os.path.dirname(__file__), "tts-requests.log"), "a", encoding="utf-8") as _lf:
+                _lf.write("[%s] [llm-assess] json_mode 失败, 退回普通模式: %s\n" % (time.strftime("%H:%M:%S"), str(llm_err or "")[:120]))
+        except Exception:
+            pass
+        data, _llm_status, llm_err = await asyncio.to_thread(_llm_chat_call, payload, base, key, 25)
     if data is None:
         return JSONResponse(status_code=200, content={"ok": False, "message": "LLM 请求失败(无AI语气, 语音不受影响): %s" % (llm_err or "unknown")})
     content = ""
