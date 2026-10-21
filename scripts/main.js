@@ -477,7 +477,7 @@ function safeGetFlag(message, key) {
 }
 
 /* ============ 核心: 朗读 ============ */
-async function speak(text, { lang = null, sender = "", refAudioPath = null, promptText = null, promptLang = null, speed = null, volume = null, auxRefAudioPaths = null, emotionMix = null, broadcast = false, messageId = "", skipAiEmotion = false, role = null } = {}) {
+async function speak(text, { lang = null, sender = "", refAudioPath = null, promptText = null, promptLang = null, speed = null, volume = null, auxRefAudioPaths = null, emotionMix = null, broadcast = false, messageId = "", skipAiEmotion = false, role = null, aiDirect = false } = {}) {
   const cfg = getCfg();
   if (!cfg.enabled) return false;
   // 调试: 记录每次朗读调用(来源/语言), 排查"日语+中文重复读"
@@ -587,7 +587,12 @@ async function speak(text, { lang = null, sender = "", refAudioPath = null, prom
     const stylePrompt = getStylePrompt(prof0.current || "") || String((pv && pv.stylePrompt) || profC.stylePrompt || "").trim();
     if (stylePrompt) {
       overrides = overrides || {};
-      const _stP = styleStrengthOf(prof0.current || "") / 100;   // 1.6.53 提示词强度 0~1
+      const _stP = (() => {
+        let v = styleStrengthOf(prof0.current || "") / 100;   // 1.6.53 提示词强度 0~1
+        // 1.6.99 AI 直出模式: 强度=0 时由 AI(及其风格翻译)自己决定语速/停顿, 不锁回原速
+        try { if (v <= 0 && aiDirect === true) v = 1.0; } catch (e) { /* noop */ }
+        return v;
+      })();
       const kw = styleKeywordParams(stylePrompt, finalText.length);
       if (kw.speed) spd = 1.0 + (kw.speed - 1.0) * _stP;   // 强度 0 → 语速不变; 100 → 完全按提示词语速
       if (kw.split && _stP >= 0.25) overrides.textSplitMethod = kw.split;   // 强度过低不切分
@@ -1134,7 +1139,7 @@ async function maybeSpeak(message) {
       console.debug(`[gpt-sovits-tts] 已选语气 ${flA.emotion} (台词保持原文)`);
     }
   } catch (e) { /* AI 失败沿用原设置 */ }
-  const opts = { lang: flLang || decision.lang, sender: decision.speakerName, ...(overrides || {}) };
+  const opts = { lang: flLang || decision.lang, sender: decision.speakerName, ...(overrides || {}), aiDirect: !!(flA && flA.aiDirect) };
   // 预加载音频命中: 输入与预合成文本一致 且 角色/语气/语言/语速未变 → 作者直接播预合成音频并广播(跳过 AI 判断/重新合成, 零等待)
   // 切了角色或语气 → 签名不匹配 → 回落下方正常合成(重新按当前角色/语气合成, 绝不播旧声音)
   if (preloadAudio && preloadAudio.url && stripStageDirections(speakText) === preloadAudio.text && preloadAudio.watchKey === makeWatchKey()) {
@@ -1407,7 +1412,7 @@ function submitChatInput() {
 
 let submitLocked = false;   // 防重复提交(AI 判断慢时连点会出多个语音)
 
-async function doSubmitChat(ta) {
+async function doSubmitChat(ta, opts = {}) {
   const v = String(ta.value || "").trim();
   if (!v) { notifyOnce(_L("ui.sendEmpty", "输入框为空"), "info"); return; }
   if (v.startsWith("/")) {
@@ -1450,6 +1455,8 @@ async function doSubmitChat(ta) {
         speed: (cur1 && cur1.speed) || 0,
         lang: getCfg().textLang || "auto",
         fromModSend: true,   // 1.6.42 朗读白名单标记: 只有通过本模块发送框发出的文字才朗读
+        // 1.6.99 AI 直出标记: 强度=0 时让 AI 自己决定语速/停顿
+        ...(opts && opts.aiDirect ? { aiDirect: true } : {}),
         // 代理模式(本机连不到 9881): 附上合成请求 → GM 端 createChatMessage hook 代为合成并写回 flags.audioUrl → 全员播放
         ...(window.__fvttTTSCanDirect === false ? { synthRequest: { text: v, lang: getCfg().textLang || "auto", role: prof1.current || "", emotion: (cur1 && cur1.emotion) || "", speed: (cur1 && cur1.speed) || 0, provider: String((cur1 && cur1.ttsProvider) || "gpt-sovits") } } : {})
       } }
@@ -1560,9 +1567,9 @@ function buildSendPop() {
       ui.notifications.warn(_L("ui.aiNoKey", "未配置 AI：请到语音设置填 API 密钥并开启 LLM，或先点预加载"));
       return;
     }
-    // 直出 = 提交即发送; 朗读环节自动 AI 判断+润色(选了手动语气则用所选)
+    // 直出 = 提交即发送; 朗读环节自动 AI 判断+润色(选了手动语气则用所选); 1.6.99 强度=0 时由 AI 决定语速
     closeSendPop();
-    doSubmitChat(ta);
+    doSubmitChat(ta, { aiDirect: true });
   });
   // 🚀 AI 预加载: 预热 LLM + 预合成当前输入文本的音频; 
   //   done + 文字一致 → 再点直接发送(播出预合成同一段, 零等待)
@@ -1645,7 +1652,16 @@ function buildSendPop() {
       const curP = (profP.chars && profP.chars[roleP]) || {};
       if (typeof curP.emotionMix === "number") overridesP.emotionMix = curP.emotionMix;
       else if (aiEmoP) overridesP.emotionMix = 1.0;   // 1.6.65 AI 判断语气 → 情绪参考音作唯一参考(与发送时一致, 严格 Shinsekai)
-      const { blob, audioUrl } = await gptSovitsSynth(stripP, cfgP2.textLang || "auto", { serverUrl: cfgP2.serverUrl, speedFactor: cfgP2.speedFactor || 1, overrides: Object.keys(overridesP).length ? overridesP : null, mediaType: "mp3", asBlob: true, role: roleP, skipDirect: window.__fvttTTSCanDirect !== true });
+      // 1.6.99 AI 直出/预加载: 强度=0 时用提示词关键词语速(AI/提示词自己决定), 不再锁原速
+      let _spdP = Number(cfgP2.speedFactor) || 1;
+      try {
+        const _stP2 = styleStrengthOf(roleP) / 100;
+        if (_stP2 <= 0) {
+          const _kw2 = styleKeywordParams(getStylePrompt(roleP) || "", stripP.length);
+          if (_kw2.speed) _spdP = _kw2.speed;
+        }
+      } catch (e) { /* noop */ }
+      const { blob, audioUrl } = await gptSovitsSynth(stripP, cfgP2.textLang || "auto", { serverUrl: cfgP2.serverUrl, speedFactor: _spdP, overrides: Object.keys(overridesP).length ? overridesP : null, mediaType: "mp3", asBlob: true, role: roleP, skipDirect: window.__fvttTTSCanDirect !== true });
       const objUrl = URL.createObjectURL(blob);
       const b64 = await blobToBase64(blob);
       if (preloadAudio && preloadAudio.url) { try { URL.revokeObjectURL(preloadAudio.url); } catch (e) { /* noop */ } }
