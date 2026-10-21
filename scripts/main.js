@@ -17,6 +17,9 @@ window.fetchModelsFromServer = fetchModelsFromServer;
 window.fetchAndRefreshModels = fetchAndRefreshModels;
 
 const MODULE = "gpt-sovits-tts";
+// 1.6.103 代码版本号: Foundry 的 game.modules.get(id).version 读的是"载入世界时的清单缓存",
+//   改了 manifest 不刷新会一直显示旧版本(用户多次看到 1.6.96 而实际代码已是新版) → 报告里同时打印两者, 便于确认真的在跑新代码
+const MOD_VERSION = "1.6.103";
 const CHAT_STYLES = (typeof CONST !== "undefined" && (CONST.CHAT_MESSAGE_STYLES || CONST.CHAT_MESSAGE_TYPES)) || {};
 
 /* ============ 设置定义 ============ */
@@ -1139,7 +1142,10 @@ async function maybeSpeak(message) {
       console.debug(`[gpt-sovits-tts] 已选语气 ${flA.emotion} (台词保持原文)`);
     }
   } catch (e) { /* AI 失败沿用原设置 */ }
-  const opts = { lang: flLang || decision.lang, sender: decision.speakerName, ...(overrides || {}), aiDirect: !!(flA && flA.aiDirect) };
+  // ⚠ 1.6.103 修 1.6.99 引入的致命 bug: 这里在 try 块外, 只能引用函数作用域的 fl;
+  //   原先写 flA(只在上面 try 块内 const 声明) → ReferenceError → 整个 maybeSpeak 中断 →
+  //   「不合成 → 没有 audioUrl → 立绘关卡判定"未朗读"→ 不插立绘」= 用户看到的"只有语音/没有立绘"。
+  const opts = { lang: flLang || decision.lang, sender: decision.speakerName, ...(overrides || {}), aiDirect: !!(fl && fl.aiDirect) };
   // 预加载音频命中: 输入与预合成文本一致 且 角色/语气/语言/语速未变 → 作者直接播预合成音频并广播(跳过 AI 判断/重新合成, 零等待)
   // 切了角色或语气 → 签名不匹配 → 回落下方正常合成(重新按当前角色/语气合成, 绝不播旧声音)
   if (preloadAudio && preloadAudio.url && stripStageDirections(speakText) === preloadAudio.text && preloadAudio.watchKey === makeWatchKey()) {
@@ -4359,8 +4365,8 @@ window.runFinalTest = async function runFinalTest() {
 
   push("# GPT-SoVITS TTS 最终测试报告");
   push("");
-  push("- 时间: " + new Date().toLocaleString("zh-CN") + " | 执行者: " + opName + " | 当前角色: " + cn + " | 模块版本: " + verTxt);
-  push("- 测试脚本: **v3**(模块 " + verTxt + " 内置) | 覆盖: 环境与配置 · AI/Key 专项 · 语气提示 · 朗读提示词(强度) · 情绪参考音 · 实际朗读 · **立绘与头像实物检查**");
+  push("- 时间: " + new Date().toLocaleString("zh-CN") + " | 执行者: " + opName + " | 当前角色: " + cn + " | 代码版本: " + MOD_VERSION + "(清单缓存显示 " + verTxt + ")");
+  push("- 测试脚本: **v3**(模块 " + MOD_VERSION + " 内置) | 覆盖: 环境与配置 · AI/Key 专项 · 语气提示 · 朗读提示词(强度) · 情绪参考音 · 实际朗读 · **立绘与头像实物检查**");
   push("  (v3 新增: 立绘/头像实测 —— 不再只看 flags, 而是「路径能否取到图 + 页面是否真的插了图且解码成功」; 对应「只有语音没有立绘」回归)");
   push("");
   push("## 一、环境与配置");
@@ -4652,6 +4658,8 @@ window.runFinalTest = async function runFinalTest() {
         + " | 润色=" + ((_fNow.polishText || "").trim() ? "✓" : "—")
         + " | 立绘=" + (_av ? String(_av).slice(-26) : (sc.manual ? "未覆盖(手动优先✓)" : "无"))
         + " | 合成=" + (aud || "超时") + headTxt);
+      // 1.6.103 合成没写回 = 朗读链路断了(立绘也会因"未朗读"被拒) → 明确记为失败, 不要只显示"超时"让人以为慢
+      if (!aud) fails.push(sc.label + "合成");
     }
   } finally {
     try {
@@ -4685,6 +4693,8 @@ window.runFinalTest = async function runFinalTest() {
     } else {
       const _avB = String(_fB.selSprite || _fB.aiSprite || _fB.avatar || "");
       push("- 消息 flags: 立绘=" + (_avB ? String(_avB).slice(-44) : "(空)") + " | 情绪=" + String(_fB.emotion || "(未写)") + " | 音频=" + (_fB.audioUrl ? "url✓" : (_fB.audioData ? "内嵌✓" : "无")));
+      // 1.6.103 立绘按设计"跟随朗读": 音频没写回 → 立绘必然被拒, 先把因果写清楚(避免误判成图片问题)
+      if (!(_fB.audioUrl || _fB.audioData)) push("  ↳ ⚠ 音频没写回 → 立绘按设计不插入(先查合成/朗读链路, 见「三、实际朗读」的 合成= 与 F12 的朗读链路异常)");
       // ② 路径可访问性(真正取一次)
       if (!_avB) {
         push("- ✗ 消息里没有任何立绘路径 → 前端无处取图");
@@ -4742,7 +4752,7 @@ window.runFinalTest = async function runFinalTest() {
   } catch (e) { push("- 立绘/头像实测异常: " + String((e && e.message) || e).slice(0, 80)); fails.push("立绘实测"); }
   push("");
   push("## 四、结论");
-  push("- 测试脚本: v3(模块 " + verTxt + ") | 耗时: " + Math.round((Date.now() - t0) / 1000) + "s | LLM: " + (llmOk ? "AI链路(判语气+润色+选立绘)已启用" : "规则降级(无AI: 文本规则/提示词基调; 情绪差异靠情绪参考音, 默认零 DSP 不变调)"));
+  push("- 测试脚本: v3(代码版本 " + MOD_VERSION + ", 清单缓存 " + verTxt + ") | 耗时: " + Math.round((Date.now() - t0) / 1000) + "s | LLM: " + (llmOk ? "AI链路(判语气+润色+选立绘)已启用" : "规则降级(无AI: 文本规则/提示词基调; 情绪差异靠情绪参考音, 默认零 DSP 不变调)"));
   push("- 关键项: " + (fails.length ? ("⚠ 存在问题 → " + fails.join("、")) : "全部通过 ✓"));
   push("- 报告文件: engine\\final_test_report.md (模块 engine 目录下; 覆盖式写入, 始终为最近一次结果)");
   const md = L.join("\n");
@@ -5043,7 +5053,26 @@ Hooks.on("createChatMessage", (message, options, userId) => { (window.__fvttTTSH
       })();
     }
   } catch (e) { /* noop */ }
-  maybeSpeak(message); maybePickAvatarRole(message); });
+  // ⚠ 1.6.103 这里必须 catch: 朗读链路里任何未捕获异常都会让"合成 + 写回 + 立绘"整条断掉,
+  //   而 hook 里的 Promise 拒绝只会在控制台留一行红字, 表现为"没声音/没立绘"却看不出原因(1.6.99 的 flA 就是这么炸的)。
+  try {
+    maybeSpeak(message).catch(e => reportSpeakCrash(e));
+  } catch (e) { reportSpeakCrash(e); }
+  try { maybePickAvatarRole(message); } catch (e) { /* noop */ }
+});
+
+// 朗读链路异常上报: 每会话提示一次 + 控制台完整堆栈(含"这是模块 bug, 请把这段发给作者")
+function reportSpeakCrash(e) {
+  try {
+    const msg = String((e && (e.stack || e.message)) || e);
+    console.error("[gpt-sovits-tts] 朗读链路异常(本次消息不会出声/不会有立绘):\n" + msg);
+    try { (window.__fvttTTSCrashList = window.__fvttTTSCrashList || []).push({ ts: Date.now(), msg: msg.slice(0, 500) }); } catch (e2) { /* noop */ }
+    if (window.__fvttTTSCrashNotified !== true) {
+      window.__fvttTTSCrashNotified = true;
+      try { ui.notifications.error("语音朗读出错(模块 bug): " + msg.split("\n")[0].slice(0, 110) + " —— 详情见 F12 控制台"); } catch (e2) { /* noop */ }
+    }
+  } catch (e2) { /* noop */ }
+}
 
 // GM 代理合成(统一通道, 覆盖 HTTPS 穿透/跨网/9881 不可达/低配服务器): 核心逻辑提取为 _proxySynthFor —
 // createChatMessage hook 与自检(端到端实测)共用, 保证"代理能否合成+写回"可直接从自检报告确认
@@ -5641,7 +5670,7 @@ window.fvttTTSDiag = async function fvttTTSDiag(n = 6) {
     const mod = game.modules.get(MODULE);
     const mv = (mod && (mod.version || (mod._source && mod._source.version) || (mod.data && mod.data.version))) || "?";
     P("=== gpt-sovits-tts 立绘诊断 ===");
-    P("模块版本=" + mv + " | Foundry=" + String(game.version || (game.release && game.release.version) || "?") + " | 用户=" + (game.user && game.user.name) + "(GM=" + !!(game.user && game.user.isGM) + ")");
+    P("模块版本=" + mv + " | 代码版本=" + MOD_VERSION + " | Foundry=" + String(game.version || (game.release && game.release.version) || "?") + " | 用户=" + (game.user && game.user.name) + "(GM=" + !!(game.user && game.user.isGM) + ")");
     P("钩子已注册=" + JSON.stringify(window.__fvttTTSHooks || {}) + " | 可直连引擎=" + String(window.__fvttTTSCanDirect));
     P("展示方式 portraitMode=" + cfgD.portraitMode + " | 立绘尺寸=" + cfgD.portraitSize + " | 引擎=" + cfgD.serverUrl + " | AI=" + (cfgD.llmEnabled ? "开" : "关") + (cfgD.llmKey ? "" : "(无key)"));
     let qc = quickChars;
