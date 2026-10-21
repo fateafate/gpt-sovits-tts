@@ -3116,7 +3116,13 @@ async def llm_endpoint(request: Request):
                 break
         else:
             emo = ""
-    return {"ok": True, "emotion": emo, "raw": str(content).strip()[:80]}
+    _ret = {"ok": True, "emotion": emo, "raw": str(content).strip()[:80]}
+    try:
+        if bool(body.get("debug")):   # 1.6.94 调试: 返回实际发送的 system prompt 摘要(排查语气指令是否注入/被忽略)
+            _ret["debug_prompt"] = sys_prompt[:600]
+    except Exception:
+        pass
+    return _ret
 
 
 @APP.post("/llm/models")
