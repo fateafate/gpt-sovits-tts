@@ -4532,7 +4532,10 @@ window.runFinalTest = async function runFinalTest() {
     } catch (e) { /* noop */ }
     // 1.6.69 端到端实测: 同一句固定文本, 用 "强度0%(spd=1.00)" 与 "当前强度" 各合成一次, 比较音频时长
     //   —— 时长按 1/spd 变化即证明提示词真的改变了朗读(不是只显示在报告里)
-    try {
+    // 1.6.100 强度=0% 时语速按设计就是 1.00(无可比差异) → 跳过实测, 不再误记为失败
+    if (Math.round(_st0 * 100) <= 0) {
+      push("- 提示词实测: 跳过（强度=0% 时语速按设计不变，无可比差异；把强度调到 50%+ 才会实测）");
+    } else try {
       const _txt = "提示词强度验证测试句，一二三四五六七八九十。";
       const r1 = await gptSovitsSynth(_txt, "zh", { serverUrl: cfg.serverUrl, speedFactor: 1.0, mediaType: "mp3", asBlob: true, role: cn });
       const r2 = await gptSovitsSynth(_txt, "zh", { serverUrl: cfg.serverUrl, speedFactor: _cur, mediaType: "mp3", asBlob: true, role: cn });
@@ -4602,7 +4605,7 @@ window.runFinalTest = async function runFinalTest() {
       while (waited < 175 && !(window.__fvttTTSAiLineDiagList || []).some(p => p && p.mid === msg.id)) { await new Promise(r => setTimeout(r, 200)); waited++; }
       let aud = "", url3 = "";
       waited = 0;
-      while (waited < 120) {
+      while (waited < 200) {   // 1.6.100 等待写回 24s→40s(引擎刚重启首次合成较慢, 避免误报超时)
         try {
           const m2 = game.messages.get(msg.id);
           const f2 = m2 && m2.flags && m2.flags[MOD];
