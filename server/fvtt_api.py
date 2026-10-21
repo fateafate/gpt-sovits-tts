@@ -3342,13 +3342,21 @@ async def watchdog_state_endpoint():
                 out["startup"] = os.path.exists(lnk)
         except Exception:
             pass
-        # 看门狗进程是否在跑(wscript 命令行含 watchdog.vbs)
+        # 看门狗是否在跑: 以「锁文件心跳」为准(看门狗每 5 秒刷新 watchdog.lock, 25 秒内有更新=活着);
+        # wmic 命令行判断在部分系统/编码下不可靠, 仅作补充
+        try:
+            lp2 = os.path.join(eng_dir, "watchdog.lock")
+            if os.path.exists(lp2):
+                out["watchdog_running"] = (time.time() - os.path.getmtime(lp2)) < 25
+        except Exception:
+            pass
         try:
             import subprocess
             cp = subprocess.run(["wmic", "process", "where", "name='wscript.exe'", "get", "CommandLine", "/format:list"],
                                 capture_output=True, timeout=8)
             txt = (cp.stdout or b"").decode("utf-8", "replace") + (cp.stderr or b"").decode("utf-8", "replace")
-            out["watchdog_running"] = ("watchdog.vbs" in txt)
+            if "watchdog.vbs" in txt:
+                out["watchdog_running"] = True
         except Exception:
             pass
     except Exception as e:
