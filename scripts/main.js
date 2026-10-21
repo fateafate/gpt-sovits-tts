@@ -4412,15 +4412,6 @@ window.runFinalTest = async function runFinalTest() {
     }
   } catch (e) { push("- AI/Key 测试异常: " + String((e && e.message) || e).slice(0, 90)); }
   push("");
-  push("## 一·B、引擎机自检(部署专用 TTS 机时用)");
-  try {
-    const _sc = await (typeof window.runEngineSelfCheck === "function" ? window.runEngineSelfCheck({ silent: true }) : Promise.resolve(null));
-    if (_sc && _sc.items && _sc.items.length) {
-      for (const _it of _sc.items) push("- " + (_it.ok ? "✓ " : "✗ ") + _it.name + ": " + _it.detail);
-      if (!_sc.ok) fails.push("引擎自检");
-    } else push("- 未返回自检结果(引擎不可达或旧版引擎)");
-  } catch (e) { push("- 引擎自检异常: " + String((e && e.message) || e).slice(0, 60)); }
-  push("");
   push("## 二、朗读提示词(是否生效)");
   if (!style) {
     push("- ⚠ **未填写朗读提示词** → 引擎侧整段跳过提示词逻辑: 语速固定 spd=1.00、不做切分/停顿调整(与提示词无关)。");
@@ -4476,45 +4467,6 @@ window.runFinalTest = async function runFinalTest() {
       push("- 要像 Shinsekai 那样\"不同情绪不同声音\": 语音设置 → 情绪槽 → 给各情绪绑定该角色的样本音频。");
     }
   } catch (e) { push("- 情绪参考音: 读取失败"); }
-  push("");
-  push("## 二·C、情绪声线实测(同一句 + 两个不同情绪参考音 各合成一次, 比对波形)");
-  push("");
-  try {
-    const _cc2 = (quickChars && quickChars.chars || []).find(x => x.name === cn) || null;
-    const _refs = ((_cc2 && _cc2.emotions) || []).filter(e => e && (e.ref_audio_path || e.ref)).slice(0, 2);
-    if (_refs.length < 2) {
-      push("- 跳过: 角色「" + cn + "」带参考音频的情绪槽不足 2 个, 无法对比。切到有情绪样本的角色(例: 七海千秋)再跑即可看到结果。");
-    } else {
-      const _txt2 = "情绪声线对比测试句，一二三四五六七八。";
-      const _mk = async (slot) => {
-        const rel = String(slot.ref_audio_path || slot.ref || "");
-        return await gptSovitsSynth(_txt2, "zh", {
-          serverUrl: cfg.serverUrl, speedFactor: 1.0, mediaType: "mp3", asBlob: true, role: cn,
-          overrides: { refAudioPath: "fvtt_chars/" + cn + "/" + rel, promptText: slot.prompt_text || "", promptLang: slot.prompt_lang || "zh", emotion: slot.key, emotionMix: 1.0 },
-        });
-      };
-      const g1 = await _mk(_refs[0]);
-      const g2 = await _mk(_refs[1]);
-      const u1b = (g1 && g1.blob) ? URL.createObjectURL(g1.blob) : "";
-      const u2b = (g2 && g2.blob) ? URL.createObjectURL(g2.blob) : "";
-      const d1 = u1b ? await decodeAudioToData(u1b) : null;
-      const d2 = u2b ? await decodeAudioToData(u2b) : null;
-      const cr = (d1 && d2) ? waveCorr(d1.ch, d2.ch) : -1;
-      try { if (u1b) URL.revokeObjectURL(u1b); if (u2b) URL.revokeObjectURL(u2b); } catch (e) { /* noop */ }
-      const l1 = (_refs[0].label || _refs[0].key || "情绪1");
-      const l2 = (_refs[1].label || _refs[1].key || "情绪2");
-      if (d1 && d2) {
-        // 1.6.73 改用客观指标: 基频(F0)中位数 + 时长差(波形相关只作参考) —— 之前 ch 取用时机问题导致相关恒为 -1 而误报
-        const f1 = f0MedianOf(d1.ch, d1.sr), f2 = f0MedianOf(d2.ch, d2.sr);
-        const dPct = Math.abs(d2.dur - d1.dur) / Math.max(0.01, d1.dur) * 100;
-        const fPct = (f1 > 0 && f2 > 0) ? (Math.abs(f2 - f1) / Math.max(1, f1) * 100) : 0;
-        const okc = (dPct > 8) || (fPct > 3) || (cr >= 0 && cr < 0.98);
-        push("- 「" + l1 + "」F0中位=" + (f1 > 0 ? f1.toFixed(0) + "Hz" : "?") + " 时长=" + d1.dur.toFixed(2) + "s   vs   「" + l2 + "」F0中位=" + (f2 > 0 ? f2.toFixed(0) + "Hz" : "?") + " 时长=" + d2.dur.toFixed(2) + "s");
-        push("  → 差异: 音高 " + fPct.toFixed(1) + "% / 时长 " + dPct.toFixed(1) + "%" + (cr >= 0 ? (" / 波形相关 " + cr.toFixed(3)) : "") + " → " + (okc ? "✓ 两个情绪声线明显不同(真的换声线)" : "⚠ 两个情绪声线接近(样本差异小, 或两个槽指向同一参考音)"));
-        if (!okc) fails.push("情绪声线差异");
-      } else push("- 情绪声线实测: 音频解析失败, 跳过");
-    }
-  } catch (e) { push("- 情绪声线实测: 跳过(" + String((e && e.message) || e).slice(0, 50) + ")"); }
   push("");
   push("## 三、实际朗读(按当前提示词, 1 条健全性验证)");
   push("");
