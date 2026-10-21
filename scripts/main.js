@@ -61,9 +61,8 @@ const SETTINGS = [
   ["sttAutoSend",   { type: Boolean, scope: "client", default: true,            name: "settings.sttAutoSend.name",   hint: "settings.sttAutoSend.hint" }],
   ["sttAutoSpeak",  { type: Boolean, scope: "client", default: false,           name: "settings.sttAutoSpeak.name",  hint: "settings.sttAutoSpeak.hint" }],
   ["emotionSpeed",  { type: Boolean, scope: "client", default: true,            name: "settings.emotionSpeed.name",  hint: "settings.emotionSpeed.hint" }],
+  // 1.6.97 语气提示已并入"朗读提示词"(每角色/每位玩家独立), 不再有世界级 gmPrompt 设置项
   ["translate",     { type: Boolean, scope: "client", default: false,           name: "settings.translate.name",      hint: "settings.translate.hint" }],
-  // 1.6.89 主持人提示词(世界级): 世界设定/朗读风格/用词禁忌, 注入所有 AI 调用(判语气/润色/选立绘/风格翻译)
-  ["gmPrompt",      { type: String,  scope: "world",  restricted: true, default: "", name: "settings.gmPrompt.name", hint: "settings.gmPrompt.hint" }],
   ["sttDevice",     { type: String,  scope: "client", default: "",               name: "settings.sttDevice.name",      hint: "settings.sttDevice.hint", choices: () => ttsDeviceChoices() }],
   ["hudTheme",      { type: String,  scope: "client", default: "dark",           choices: { dark: "settings.hudTheme.dark", pink: "settings.hudTheme.pink" }, name: "settings.hudTheme.name", hint: "settings.hudTheme.hint" }],
   ["gmMute",        { type: Boolean, scope: "world", default: false, restricted: true, name: "settings.gmMute.name", hint: "settings.gmMute.hint" }],
@@ -432,6 +431,9 @@ function getCfg() {
     c.aiShared = !!(shBase || shKey || shModel);
   } catch (e) { /* noop */ }
   } catch (e) { /* noop */ }
+  // 1.6.97 语气提示并入"朗读提示词"(每角色/每玩家独立): 不再使用世界级 gmPrompt 注入, 避免 GM 统一覆盖;
+  //   判语气/润色已通过 style(=朗读提示词) 传入, 立绘也改用 styleEmotionKey(朗读提示词) 同步。
+  c.gmPrompt = "";
   return c;
 }
 
@@ -4338,10 +4340,9 @@ window.runFinalTest = async function runFinalTest() {
     } else push("- AI 调用统计: 引擎未返回统计(可能是旧引擎)");
   } catch (e) { push("- AI 调用统计: 查询失败(" + String((e && e.message) || e).slice(0, 60) + ")"); }
   push("- 朗读提示词: " + (style || "(未填)") + " | AI润色=" + (cfg.llmPolish ? "开" : "关"));
-  // 1.6.89 主持人提示词(世界级): 显示是否配置, 便于确认 AI 注入内容
+  // 1.6.97 语气提示已并入"朗读提示词"(每角色/每玩家独立) — 报告里说明分工
   try {
-    const _gmP = String(cfg.gmPrompt || "");
-    push("- 语气提示(主持人 · 只影响朗读语气): " + (_gmP ? ("已配置 " + _gmP.length + " 字: " + _gmP.slice(0, 60) + (_gmP.length > 60 ? "…" : "")) : "(未填 · 不注入)"));
+    push("- 语气提示: 由「朗读提示词」承担（每角色/每位玩家独立；上行为空则无语气提示）");
   } catch (e) { /* noop */ }
   // 1.6.74 明确"合成压力在哪台机器": 本机直连=用自己的引擎; GM代理=委托给语音生成者
   try {
@@ -4416,8 +4417,9 @@ window.runFinalTest = async function runFinalTest() {
   push("### 语气提示实测（是否生效 / 是否真的调动 AI）");
   push("");
   try {
-    const _gmP = String(cfg.gmPrompt || "").trim();
-    push("- 当前语气提示: " + (_gmP || "(未填 · 不注入)"));
+    // 1.6.97 语气提示 = 当前角色的"朗读提示词"(每玩家独立); 未填时用示例做对照以便验证功能
+    const _gmP = (() => { try { return String(getStylePrompt(cn) || "").trim(); } catch (e) { return ""; } })();
+    push("- 当前语气提示（朗读提示词）: " + (_gmP || "(未填 · 用示例对照)"));
     if (!(cfg.llmEnabled && cfg.llmKey)) {
       push("- 跳过: LLM 未配置/未启用（语气提示只在 AI 可用时生效）");
     } else {
@@ -4671,11 +4673,11 @@ Hooks.on("chatMessage", (chatLog, message, chatData) => {
           const cD = (quickChars && quickChars.chars || []).find(x => x.name === prof0n);
           if (cD && Array.isArray(cD.sprites) && cD.sprites.length >= 1) {
             // 1.6.71 立绘情绪: 文本规则 → 提示词基调兜底(neutral 也兜底), 与朗读判定保持一致
-            // 1.6.96 语气提示(主持人)优先: 主持人明确指定语气时, 立绘应与该语气同步(否则只有声音变了立绘不变)
+            // 1.6.97 朗读提示词(每角色/每玩家独立)优先作语气→立绘同步(替代原世界级语气提示)
             let _emoS = "";
             try {
-              const _gmPTxt = String((typeof getCfg === "function" ? ((getCfg() || {}).gmPrompt || "") : ""));
-              if (_gmPTxt) _emoS = styleEmotionKey(_gmPTxt) || "";
+              const _stPTxt = String(getStylePrompt(prof0n) || "");
+              if (_stPTxt) _emoS = styleEmotionKey(_stPTxt) || "";
             } catch (e0) { /* noop */ }
             if (!_emoS) _emoS = String(detectEmotion(String(message.content || chatData.content || ""), cur || null) || "neutral");
             if (!_emoS || _emoS === "neutral") {

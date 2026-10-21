@@ -488,13 +488,8 @@ export class VoiceManager {
           : `<span class="fvtt-tts-vm-hint">${t("vm.aiSharedNote", "AI 配置由主持人提供（只读，无需填写）")}</span>`
       }</div></section>
     <section class="fvtt-tts-vm-sec">
-      <div class="fvtt-tts-vm-title2">📜 ${t("vm.gmPromptTitle", "语气提示（主持人设定 · 只影响朗读语气）")}</div>
-      <div class="fvtt-tts-vm-hint">${t("vm.gmPromptHint", "只填「朗读语气 / 表演方式」，例如「用愤怒的语气」「压低声音、带威胁感」「轻快活泼」「缓慢而温柔」。它只影响每句话的语气，不会改变台词内容；不要写世界观、剧情或角色设定。留空则不注入。")}</div>
-      <textarea class="fvtt-tts-vm-gmprompt" rows="4" ${isGM ? "" : "readonly"} placeholder="${esc(t("vm.gmPromptPh", "例：\n用愤怒、压着火气的语气说话\n压低声音，带明显威胁感\n轻快活泼，语速稍快\n缓慢而温柔，句尾放轻"))}">${esc(_gmPromptVal)}</textarea>
-      <div class="fvtt-tts-vm-row">
-        ${isGM ? `<button type="button" class="fvtt-tts-vm-btn vm-gmprompt-save">💾 ${t("vm.gmPromptSave", "保存语气提示")}</button>` : `<span class="fvtt-tts-vm-hint">${t("vm.gmPromptReadonly", "由主持人统一设置（只读）")}</span>`}
-        <span class="fvtt-tts-vm-ai-status vm-gmprompt-status"></span>
-      </div>
+      <div class="fvtt-tts-vm-title2">📜 ${t("vm.toneMergedTitle", "语气 / 朗读提示词（每角色 · 每位玩家独立）")}</div>
+      <div class="fvtt-tts-vm-hint">${t("vm.toneMergedHint", "语气请填在「朗读提示词」里（角色编辑栏），例如「用愤怒、压着火气的语气说话」「缓慢而温柔，句尾放轻」「轻快活泼」。它同时影响 AI 判语气/润色/选立绘 与 语速停顿，且只作用于你自己（每位玩家可各不相同）。")}</div>
     </section>
     <section class="fvtt-tts-vm-sec">
       <div class="fvtt-tts-vm-title2">🔇 ${t("vm.gmMuteTitle", "全局静音")}</div>
@@ -616,8 +611,8 @@ export class VoiceManager {
         <input class="fvtt-tts-vm-vol" data-field="volume" type="range" min="0" max="1" step="0.05" value="${vol}">
         <span class="fvtt-tts-vm-val" data-for="volume">${vol.toFixed(2)}</span>
       </label>
-      <label class="fvtt-tts-vm-row"><span title="${t("vm.styleTip", "朗读提示词：如“更严肃认真、中间不要中断”。会翻译成语速/停顿等合成参数，角色独立记得。")}">${t("vm.stylePrompt", "朗读提示词")}</span>
-        <input class="fvtt-tts-vm-style" type="text" maxlength="120" value="${esc(getStylePrompt(this.editName || (this.charsData && this.charsData.active) || "") || ((p && p.stylePrompt) || ""))}" placeholder="${t("vm.stylePh", "如：更严肃认真，中间不要中断")}">
+      <label class="fvtt-tts-vm-row"><span title="${t("vm.styleTip", "朗读提示词（同时作为语气提示）：如“用愤怒、压着火气的语气说话”“更严肃认真、中间不要中断”。会注入 AI 判语气/润色/选立绘，并翻译成语速/停顿等合成参数；每个角色/每位玩家独立。")}">${t("vm.stylePrompt", "朗读提示词")}</span>
+        <input class="fvtt-tts-vm-style" type="text" maxlength="120" value="${esc(getStylePrompt(this.editName || (this.charsData && this.charsData.active) || "") || ((p && p.stylePrompt) || ""))}" placeholder="${t("vm.stylePh", "如：用愤怒的语气说话 / 缓慢而温柔")}">
         <span>${t("vm.styleStr", "强度")}</span> <input class="fvtt-tts-vm-stylestr" type="range" min="0" max="100" step="5" value="50"><span class="fvtt-tts-vm-val" data-for="stylestr">50%</span>
       </label></section>`;
 
@@ -1010,26 +1005,7 @@ function safeAssignments() {
     if (aiModelSel) aiModelSel.addEventListener("change", () => {
       try { game.settings.set("gpt-sovits-tts", "llmModel", aiModelSel.value || ""); } catch (e) { /* noop */ }
     });
-    // 1.6.89 主持人提示词保存(仅 GM; world 设置, 注入所有 AI 调用: 判语气/润色/选立绘/风格翻译)
-    const _gmPromptTa = body.querySelector(".fvtt-tts-vm-gmprompt");
-    const _gmPromptSaveBtn = body.querySelector(".vm-gmprompt-save");
-    if (_gmPromptSaveBtn && _gmPromptTa) _gmPromptSaveBtn.addEventListener("click", async () => {
-      try {
-        if (!(game.user && game.user.isGM)) { ui.notifications.warn("仅主持人可修改主持人提示词"); return; }
-        const _v = String(_gmPromptTa.value || "").slice(0, 2000);
-        await game.settings.set("gpt-sovits-tts", "gmPrompt", _v);
-        // 1.6.92 轻量提醒: 这里只该填"语气", 若写成世界观/剧情设定会误导 AI
-        try {
-          if (/(世界设定|世界观|剧情设定|角色设定|设定是|背景是|故事发生)/.test(_v)) {
-            ui.notifications.warn("提醒：这里只填「朗读语气/表演方式」（如「用愤怒的语气」）。世界观/剧情设定不会改变朗读语气，建议删掉。");
-          }
-        } catch (e2) { /* noop */ }
-        const _st = body.querySelector(".vm-gmprompt-status");
-        if (_st) _st.textContent = "✓ 已保存（" + _v.length + " 字）";
-        try { ui.notifications.info("主持人提示词已保存（" + _v.length + " 字），下一句起生效"); } catch (e2) { /* noop */ }
-        try { window.__fvttTTSLlmBroken = false; } catch (e2) { /* noop */ }
-      } catch (e) { ui.notifications.error("保存失败: " + String((e && e.message) || e)); }
-    });
+    // 1.6.97 语气提示已并入"朗读提示词"(每角色/每玩家独立), 不再有独立的世界级语气提示保存逻辑
     // 朗读语言(自动翻译目标): 面板内直接切换
     const vmLang = body.querySelector(".fvtt-tts-vm-lang");
     if (vmLang) vmLang.addEventListener("change", () => {
