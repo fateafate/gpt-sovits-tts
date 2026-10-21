@@ -89,16 +89,23 @@ export function localizeNumbers(text, lang) {
 /* ---------- 整句翻译(可选): MyMemory 免费 API, 失败回退原文 ---------- */
 const _transCache = new Map();
 let _transBusy = new Map();
-let _transCoolUntil = 0;   // 1.6.87 免费翻译 API 限流(429)冷却截止时间: 冷却期内跳过翻译(降级原文), 避免刷 429
+let _transCoolUntil = 0;   // 1.6.87 免费翻译 API 限流(429)冷却截止时间
+let _transDisabled = false; // 1.6.96 429 后本会话永久停用翻译(避免每次隔几分钟发消息就再撞一次 429 刷屏)
 
 async function _mymemory(text, from, to) {
+  if (_transDisabled) return null;   // 1.6.96 本会话已停用翻译
   if (Date.now() < _transCoolUntil) return null;   // 1.6.87 冷却中: 直接降级
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 10000);
   try {
     const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=${from}|${to}`;
     const r = await fetch(url, { signal: ctrl.signal });
-    if (r.status === 429) { _transCoolUntil = Date.now() + 60000; return null; }   // 1.6.87 限流 → 冷却 60s
+    if (r.status === 429) {
+      _transCoolUntil = Date.now() + 10 * 60000;
+      _transDisabled = true;
+      try { console.warn("[gpt-sovits-tts] 免费翻译服务限流(429)：本会话已停用自动翻译（朗读将按原文语言）。可在模块设置关闭「自动翻译」，或把「朗读语言」改为 auto 以完全避免翻译。"); } catch (e) { /* noop */ }
+      return null;
+    }
     if (!r.ok) return null;
     const j = await r.json();
     const t = j && j.responseData && j.responseData.translatedText;

@@ -4671,7 +4671,13 @@ Hooks.on("chatMessage", (chatLog, message, chatData) => {
           const cD = (quickChars && quickChars.chars || []).find(x => x.name === prof0n);
           if (cD && Array.isArray(cD.sprites) && cD.sprites.length >= 1) {
             // 1.6.71 立绘情绪: 文本规则 → 提示词基调兜底(neutral 也兜底), 与朗读判定保持一致
-            let _emoS = String(detectEmotion(String(message.content || chatData.content || ""), cur || null) || "neutral");
+            // 1.6.96 语气提示(主持人)优先: 主持人明确指定语气时, 立绘应与该语气同步(否则只有声音变了立绘不变)
+            let _emoS = "";
+            try {
+              const _gmPTxt = String((typeof getCfg === "function" ? ((getCfg() || {}).gmPrompt || "") : ""));
+              if (_gmPTxt) _emoS = styleEmotionKey(_gmPTxt) || "";
+            } catch (e0) { /* noop */ }
+            if (!_emoS) _emoS = String(detectEmotion(String(message.content || chatData.content || ""), cur || null) || "neutral");
             if (!_emoS || _emoS === "neutral") {
               try { const _stE2 = styleEmotionKey(getStylePrompt(prof0n) || ""); if (_stE2) _emoS = _stE2; } catch (e) { /* noop */ }
             }
@@ -5129,8 +5135,14 @@ Hooks.on("createChatMessage", (message) => {
         if (profAi && profAi.chars && profAi.chars[_roleN] && profAi.chars[_roleN].selSprite) return;
         const cD = (quickChars && quickChars.chars || []).find(x => x.name === _roleN);
         if (!cD || !Array.isArray(cD.sprites) || !cD.sprites.length) return;
-        const _emoList = spriteBucketForEmotion(cD.sprites, _e, cD.emotion_tags);
-        const _rot = getSpriteRotation(_roleN + "|" + _e + "|ai", _e);
+        // 1.6.96 AI 返回的可能是情绪槽 key(voice_03) — 立绘匹配需要的是中文标签(生气) → 先转成标签, 否则永远匹配不到 → 立绘不变
+        let _eLabel = String(_e || "");
+        try {
+          const _hitSlot = ((cD.emotions || []).find(s => s && (String(s.key) === String(_e) || String(s.label) === String(_e))));
+          if (_hitSlot) _eLabel = String(_hitSlot.label || _hitSlot.key || _e);
+        } catch (e2) { /* noop */ }
+        const _emoList = spriteBucketForEmotion(cD.sprites, _eLabel, cD.emotion_tags);
+        const _rot = getSpriteRotation(_roleN + "|" + _eLabel + "|ai", _eLabel);
         const _av = cD.sprites[_emoList[_rot % _emoList.length]];
         await message.update({ flags: { [MODULE]: { ..._fl, emotion: _e, avatar: _av } } }).catch(() => {});
         try { if (message.element) applyEmotionAvatar(message, message.element); } catch (e2) { /* noop */ }
