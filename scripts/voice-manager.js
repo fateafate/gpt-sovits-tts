@@ -628,7 +628,9 @@ export class VoiceManager {
       </label>
       <label class="fvtt-tts-vm-row"><span title="${t("vm.styleTip", "朗读提示词（同时作为语气提示）：如“用愤怒、压着火气的语气说话”“更严肃认真、中间不要中断”。会注入 AI 判语气/润色/选立绘，并翻译成语速/停顿等合成参数；每个角色/每位玩家独立。")}">${t("vm.stylePrompt", "朗读提示词")}</span>
         <input class="fvtt-tts-vm-style" type="text" maxlength="120" value="${esc(getStylePrompt(this.editName || (this.charsData && this.charsData.active) || "") || ((p && p.stylePrompt) || ""))}" placeholder="${t("vm.stylePh", "如：用愤怒的语气说话 / 缓慢而温柔")}">
-        <span>${t("vm.styleStr", "强度")}</span> <input class="fvtt-tts-vm-stylestr" type="range" min="0" max="100" step="5" value="50"><span class="fvtt-tts-vm-val" data-for="stylestr">50%</span>
+      </label>
+      <label class="fvtt-tts-vm-row" title="${t("vm.styleStrTip", "提示词强度：0%=不改变语速/停顿（仍会按提示词换语气/参考音），100%=完全按提示词的语速与停顿")}"><span>${t("vm.styleStr", "强度")}</span>
+        <input class="fvtt-tts-vm-stylestr" type="range" min="0" max="100" step="5" value="50"><span class="fvtt-tts-vm-val" data-for="stylestr">50%</span>
       </label></section>`;
 
     const st = this.status;

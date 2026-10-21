@@ -515,9 +515,12 @@
 .fvtt-tts-sendpop-emo.on { border-color: var(--color-text-hyperlink, #6c8cff); color: #fff; box-shadow: 0 0 6px rgba(108, 140, 255, 0.4); }
 .fvtt-tts-sendpop-emo.off { opacity: 0.55; }
 .fvtt-tts-sendpop-tune { display: flex; flex-direction: column; gap: 4px; }
-.fvtt-tts-sendpop-tuneline { display: flex; align-items: center; gap: 6px; }
+.fvtt-tts-sendpop-tuneline { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .fvtt-tts-sendpop-tuneline span { flex: 0 0 60px; color: #dcdcdc; }
-.fvtt-tts-sendpop-tuneline input[type="range"] { flex: 1; accent-color: var(--color-text-hyperlink, #6c8cff); }
+.fvtt-tts-sendpop-tuneline input[type="range"] { flex: 1 1 120px; min-width: 120px; accent-color: var(--color-text-hyperlink, #6c8cff); }
+/* 1.6.106 修「强度滑块拖不动」: 以前提示词文本框与强度滑块挤在同一行同一个 <label> 里(点标签还会把点击转给文本框),
+   现在拆成两行两控件; 文本框允许收缩, 滑块保证最小可拖宽度, 行内放不下就换行而不是被挤出面板 */
+.fvtt-tts-sendpop-tuneline input[type="text"] { flex: 1 1 120px; min-width: 0; box-sizing: border-box; }
 .fvtt-tts-sendpop-actions { margin-top: 6px; }
 .fvtt-tts-sendpop-openvm {
   width: 100%;

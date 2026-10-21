@@ -19,7 +19,7 @@ window.fetchAndRefreshModels = fetchAndRefreshModels;
 const MODULE = "gpt-sovits-tts";
 // 1.6.103 代码版本号: Foundry 的 game.modules.get(id).version 读的是"载入世界时的清单缓存",
 //   改了 manifest 不刷新会一直显示旧版本(用户多次看到 1.6.96 而实际代码已是新版) → 报告里同时打印两者, 便于确认真的在跑新代码
-const MOD_VERSION = "1.6.105";
+const MOD_VERSION = "1.6.106";
 const CHAT_STYLES = (typeof CONST !== "undefined" && (CONST.CHAT_MESSAGE_STYLES || CONST.CHAT_MESSAGE_TYPES)) || {};
 
 /* ============ 设置定义 ============ */
@@ -1592,7 +1592,8 @@ function buildSendPop() {
         <label class="fvtt-tts-sendpop-tuneline"><span>${_L("ui.speed", "语速")}</span><input type="range" class="fvtt-tts-sendpop-speed" min="0.5" max="1.5" step="0.05" value="1"></label>
         <label class="fvtt-tts-sendpop-tuneline"><span title="${_L("ui.emotionMixTip", "0% 纯默认主参考；100% 情绪音频作唯一参考；中间主参考+情绪融合")}">${_L("ui.emotionMix", "情绪占比")} <b class="fvtt-tts-sendpop-mixval">50%</b></span><input type="range" class="fvtt-tts-sendpop-mix" min="0" max="100" step="5" value="50"></label>
         <label class="fvtt-tts-sendpop-tuneline"><span title="${_L("ui.emotionModTip", "用语速等参数调制情感：0% 不调制；100% 完全按情绪语速(开心快/悲伤慢)")}">${_L("ui.emotionMod", "情感参数调制")} <b class="fvtt-tts-sendpop-modval">50%</b></span><input type="range" class="fvtt-tts-sendpop-mod" min="0" max="100" step="5" value="50"></label>
-<label class="fvtt-tts-sendpop-tuneline"><span title="${_L("ui.styleTip", "朗读提示词：如“更严肃认真、中间不要中断”。会翻译成语速/停顿等合成参数，角色独立记得。")}">${_L("ui.stylePrompt", "朗读提示词")}</span><input type="text" class="fvtt-tts-sendpop-style" placeholder="${_L("ui.stylePh", "如：更严肃认真，中间不要中断")}" maxlength="120"><span title="${_L("ui.styleStrTip", "提示词强度：0%=不改变语速/停顿，100%=完全按提示词")}">${_L("ui.styleStr", "强度")}</span> <input type="range" class="fvtt-tts-sendpop-stylestr" min="0" max="100" step="5" value="50"><b class="fvtt-tts-sendpop-stylestrval">50%</b></label>
+<label class="fvtt-tts-sendpop-tuneline"><span title="${_L("ui.styleTip", "朗读提示词：如“更严肃认真、中间不要中断”。会翻译成语速/停顿等合成参数，角色独立记得。")}">${_L("ui.stylePrompt", "朗读提示词")}</span><input type="text" class="fvtt-tts-sendpop-style" placeholder="${_L("ui.stylePh", "如：更严肃认真，中间不要中断")}" maxlength="120"></label>
+        <div class="fvtt-tts-sendpop-tuneline"><span title="${_L("ui.styleStrTip", "提示词强度：0%=不改变语速/停顿，100%=完全按提示词")}">${_L("ui.styleStr", "强度")}</span><input type="range" class="fvtt-tts-sendpop-stylestr" min="0" max="100" step="5" value="50"><b class="fvtt-tts-sendpop-stylestrval">50%</b></div>
       </div>
       <div class="fvtt-tts-sendpop-actions">
         <button type="button" class="fvtt-tts-sendpop-preload">🚀 ${_L("ui.sendPopPreload", "AI 预加载")}</button>
@@ -2246,6 +2247,15 @@ function openSendPop() {
   // 打开面板总是拉最新角色/情绪(服务端可能已更新槽/标签), 拉完重绘语气网格
   loadQuickChars({ force: true }).then(() => { try { renderSendPopEmotions(); } catch (e) { /* noop */ } }).catch(() => { /* noop */ });
   refreshPreloadBtn();   // 1.6.102 每次打开面板都按当前输入重算"已预加载/空闲"(修发送后一直显示已加载)
+  // 1.6.106 每次打开面板刷新「朗读提示词 / 强度」: 面板只构建一次, 以前切了角色后这两项显示的是旧角色的值
+  try {
+    const _si = pop.querySelector(".fvtt-tts-sendpop-style");
+    const _ss = pop.querySelector(".fvtt-tts-sendpop-stylestr");
+    const _sv = pop.querySelector(".fvtt-tts-sendpop-stylestrval");
+    const _cn2 = (loadVoiceProfile().current) || "";
+    if (_si) _si.value = (typeof getStylePrompt === "function" ? (getStylePrompt(_cn2) || "") : "");
+    if (_ss) { const v = styleStrengthOf(_cn2); _ss.value = String(v); if (_sv) _sv.textContent = v + "%"; }
+  } catch (e) { /* noop */ }
   const ta = findChatTextarea();
   const fire = pop.querySelector(".fvtt-tts-sendpop-fire");
   if (fire) fire.disabled = !(ta && String(ta.value || "").trim());
