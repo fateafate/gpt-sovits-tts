@@ -614,15 +614,15 @@ export class VoiceManager {
       </section>`;
     }
 
-    // 语速 / 音量
-    const spd = p && p.speed ? p.speed : 1;
-    const vol = p && p.volume ? p.volume : 1;
+    // 语速 / 音量 (1.6.111: 0 = 自动, 由朗读提示词/AI/引擎决定)
+    const spd = (p && p.speed > 0) ? p.speed : 0;
+    const vol = (p && p.volume > 0) ? p.volume : 0;
     html += `<section class="fvtt-tts-vm-sec">
-      <label class="fvtt-tts-vm-row"><span>${t("vm.speed", "语速")}</span>
-        <input class="fvtt-tts-vm-speed" data-field="speed" type="range" min="0.5" max="2" step="0.05" value="${spd}">
-        <span class="fvtt-tts-vm-val" data-for="speed">${spd.toFixed(2)}</span>
+      <label class="fvtt-tts-vm-row" title="${t("vm.speedTip", "0 = 自动(交给朗读提示词与 AI 决定语速)")}"><span>${t("vm.speed", "语速")}</span>
+        <input class="fvtt-tts-vm-speed" data-field="speed" type="range" min="0" max="2" step="0.05" value="${spd}">
+        <span class="fvtt-tts-vm-val" data-for="speed">${spd > 0 ? spd.toFixed(2) : t("vm.auto", "自动")}</span>
       </label>
-      <label class="fvtt-tts-vm-row"><span>${t("vm.volume", "音量")}</span>
+      <label class="fvtt-tts-vm-row" title="${t("vm.volTip", "0 = 自动(引擎默认响度)")}"><span>${t("vm.volume", "音量")}</span>
         <input class="fvtt-tts-vm-vol" data-field="volume" type="range" min="0" max="1" step="0.05" value="${vol}">
         <span class="fvtt-tts-vm-val" data-for="volume">${vol.toFixed(2)}</span>
       </label>
@@ -680,7 +680,7 @@ export class VoiceManager {
       r.addEventListener("input", () => {
         const v = parseFloat(r.value);
         const val = body.querySelector(`.fvtt-tts-vm-val[data-for="${r.dataset.field}"]`);
-        if (val) val.textContent = v.toFixed(2);
+        if (val) val.textContent = v > 0 ? v.toFixed(2) : t("vm.auto", "自动");   // 1.6.111 0 = 自动
       });
     });
     // 朗读风格提示词 → 当前角色独立记住

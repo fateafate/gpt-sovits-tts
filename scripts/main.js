@@ -19,7 +19,7 @@ window.fetchAndRefreshModels = fetchAndRefreshModels;
 const MODULE = "gpt-sovits-tts";
 // 1.6.103 代码版本号: Foundry 的 game.modules.get(id).version 读的是"载入世界时的清单缓存",
 //   改了 manifest 不刷新会一直显示旧版本(用户多次看到 1.6.96 而实际代码已是新版) → 报告里同时打印两者, 便于确认真的在跑新代码
-const MOD_VERSION = "1.6.110";
+const MOD_VERSION = "1.6.111";
 const CHAT_STYLES = (typeof CONST !== "undefined" && (CONST.CHAT_MESSAGE_STYLES || CONST.CHAT_MESSAGE_TYPES)) || {};
 
 /* ============ 设置定义 ============ */
@@ -48,11 +48,12 @@ const SETTINGS = [
   ["minLength",     { type: Number,  scope: "client", default: 1,                name: "settings.minLength.name",      hint: "settings.minLength.hint" }],
   ["maxLength",     { type: Number,  scope: "client", default: 200,              name: "settings.maxLength.name",      hint: "settings.maxLength.hint" }],
   ["textLang",      { type: String,  scope: "client", default: "auto",           choices: { auto: "settings.textLang.auto", zh: "zh", ja: "ja", en: "en", ko: "ko", yue: "yue" }, name: "settings.textLang.name", hint: "settings.textLang.hint" }],
-  ["speedFactor",   { type: Number,  scope: "client", default: 1.0,              range: { min: 0.5, max: 2.0, step: 0.05 }, name: "settings.speedFactor.name", hint: "settings.speedFactor.hint" }],
+  // 1.6.111 「0 = 自动」: 语速/音量默认 0, 由朗读提示词/AI/引擎决定(用户要求: 默认全交给 AI)
+  ["speedFactor",   { type: Number,  scope: "client", default: 0,                range: { min: 0, max: 2.0, step: 0.05 }, name: "settings.speedFactor.name", hint: "settings.speedFactor.hint" }],
   ["styleStrength", { type: Number,  scope: "client", default: 50,               range: { min: 0, max: 100, step: 5 },    name: "settings.styleStrength.name", hint: "settings.styleStrength.hint" }],
   // 1.6.65 情绪效果强度(严格对齐 Shinsekai): 默认 0 = 完全不做 DSP 变调, 情绪差异靠"情绪参考音频"; 调高只加轻微语速/音量, 不变调
   ["emotionFxStrength", { type: Number, scope: "client", default: 0, range: { min: 0, max: 100, step: 5 }, name: "settings.emotionFxStrength.name", hint: "settings.emotionFxStrength.hint" }],
-  ["volume",        { type: Number,  scope: "client", default: 1.0,              range: { min: 0, max: 1, step: 0.05 }, name: "settings.volume.name", hint: "settings.volume.hint" }],
+  ["volume",        { type: Number,  scope: "client", default: 0,                range: { min: 0, max: 1, step: 0.05 }, name: "settings.volume.name", hint: "settings.volume.hint" }],   // 1.6.111 0 = 自动(引擎默认响度)
   ["queueMode",     { type: String,  scope: "client", default: "queue",          choices: { queue: "settings.queueMode.queue", interrupt: "settings.queueMode.interrupt" }, name: "settings.queueMode.name", hint: "settings.queueMode.hint" }],
   ["typingDebounce",{ type: Number,  scope: "client", default: 1200,             name: "settings.typingDebounce.name", hint: "settings.typingDebounce.hint" }],
   ["showReplay",    { type: Boolean, scope: "client", default: true,            name: "settings.showReplay.name",     hint: "settings.showReplay.hint" }],
@@ -297,7 +298,7 @@ function handleSocketTts(p) {
         const u = URL.createObjectURL(new Blob([b], { type: mime }));
         if (p.messageId) cacheAudio(p.messageId, u, mime);   // 缓存同一段(重播复用)
         diagPlay("broadcast", p.messageId, "url");
-        queue.enqueue({ play: () => audioPlay(u, { volume: getCfg().volume, push: false }) });
+        queue.enqueue({ play: () => audioPlay(u, { volume: playVolume(), push: false }) });
       })
       .catch(() => { /* URL 拉取失败(罕见): 玩家 15s 兜底会本地重合成 */ });
     return;
@@ -314,7 +315,7 @@ function handleSocketTts(p) {
   } catch (e) { url = `data:${mime};base64,${p.audio}`; }
   if (p.messageId) cacheAudio(p.messageId, url, mime);   // 缓存同一段(重播复用, 不再重新合成)
   diagPlay("broadcast", p.messageId, "");
-  queue.enqueue({ play: () => audioPlay(url, { volume: getCfg().volume, push: false }) });
+  queue.enqueue({ play: () => audioPlay(url, { volume: playVolume(), push: false }) });
 }
 
 /* ============ 本地化(内置中文兜底, 语言包不生效时也始终显示中文) ============ */
@@ -530,8 +531,9 @@ async function speak(text, { lang = null, sender = "", refAudioPath = null, prom
   };
   // 参考路径规范化: 旧档案可能只存了 "speech/xx.wav", 补成 fvtt_chars/<角色>/speech/xx.wav(任意客户端可解析)
   const fixRef = (r) => (r && !String(r).startsWith("fvtt_chars/") && !String(r).startsWith("http")) ? `fvtt_chars/${prof0.current || ""}/${r}` : r;
-  let spd = cfg.speedFactor;
-  let vol = cfg.volume;
+  // 1.6.111 「0 = 自动」: 朗读音量/语速/情绪占比/情感参数调制 默认 0, 由 AI/朗读提示词/引擎决定
+  let spd = (Number(cfg.speedFactor) > 0) ? Number(cfg.speedFactor) : 1.0;   // 0=自动: 先取 1.0, 后面由提示词/AI 决定
+  let vol = (Number(cfg.volume) > 0) ? Number(cfg.volume) : 1.0;             // 0=自动: 用引擎默认响度(不额外衰减)
   let overrides = null;
   const explicit = (refAudioPath || promptText || promptLang || speed || volume || auxRefAudioPaths || typeof emotionMix === "number");
   if (explicit) {
@@ -541,21 +543,21 @@ async function speak(text, { lang = null, sender = "", refAudioPath = null, prom
     if (promptLang) overrides.promptLang = promptLang;
     if (auxRefAudioPaths) overrides.auxRefAudioPaths = auxRefAudioPaths.map(fixRef);
     if (typeof emotionMix === "number") overrides.emotionMix = emotionMix;
-    if (speed) spd = speed;
-    if (volume) vol = volume;
+    if (speed > 0) spd = speed;      // 0 = 自动(不强制语速)
+    if (volume > 0) vol = volume;    // 0 = 自动
   } else if (pv) {
-    if (pv.speed) spd = pv.speed;
+    if (pv.speed > 0) spd = pv.speed;
     else if (cfg.emotionSpeed && pv.emotion) {
       // 情感参数调制: 按语气标签推断情绪速度(愤怒快/困倦慢/悲伤缓...), 语速按调制度从 1.0 插值
       const slotC = findEmotionSlot(pv.emotion, prof0.current);
       const emoSpd = inferEmotionSpeed(slotC && slotC.label);
       if (emoSpd) {
-        const modAmt = (typeof pv.emotionMod === "number") ? pv.emotionMod : 0.5;
+        // 1.6.111 调制度 0 = 自动 → 按 1.0 全额使用"AI/情绪推断的语速"(以前 0 会被当成"不调制", 等于没效果)
+        const modAmt = (typeof pv.emotionMod === "number" && pv.emotionMod > 0) ? pv.emotionMod : 1.0;
         spd = 1.0 + (emoSpd - 1.0) * modAmt;
-        if (pv.emotionMix === 0) spd = 1.0;   // 占比 0 = 纯默认, 不调制
       }
     }
-    if (pv.volume) vol = pv.volume;
+    if (pv.volume > 0) vol = pv.volume;   // 0 = 自动
     if (pv.ref || pv.promptText || pv.promptLang || pv.auxRef) {
       overrides = {};
       if (pv.ref) overrides.refAudioPath = fixRef(pv.ref);
@@ -968,6 +970,11 @@ function applyPortraitSize() {
 }
 
 function stopSpeaking() { queue.stop(); }
+// 1.6.111 「朗读音量 0 = 自动」: 设置里 0 表示"不额外衰减(引擎默认响度)", 绝不能当静音传给播放器,
+//   否则默认值 0 会让所有语音被静音。所有播放点统一走这里。
+function playVolume() {
+  try { const v = Number(getCfg().volume); return (v > 0 && v <= 1) ? v : 1; } catch (e) { return 1; }
+}
 // GM 全局静音: world 设置(restricted, 仅 GM 可改) → 所有客户端 updateSetting 同步 → 静音时停播+禁播
 const isGmMuted = () => {
   try {
@@ -1228,7 +1235,7 @@ async function maybeSpeak(message) {
         if (message.id) { playedIds.add(message.id); setTimeout(() => { try { playedIds.delete(message.id); } catch (e) { /* noop */ } }, 30000); }   // 本地预载已播(防 flags 写回再播)
         // 官方文件路径优先 + push 广播(全员官方通道); 无落盘才 dataUrl 本端播
         const _mpu = (() => { try { return _modulePath(preloadAudio.audioUrl || ""); } catch (e) { return ""; } })();
-        queue.enqueue({ play: () => audioPlay(_mpu || preloadAudio.dataUrl || preloadAudio.url, { volume: getCfg().volume, push: !!_mpu }) });
+        queue.enqueue({ play: () => audioPlay(_mpu || preloadAudio.dataUrl || preloadAudio.url, { volume: playVolume(), push: !!_mpu }) });
       } else {
         // 代理模式: 本机没直连引擎, 预载音频已在 flags 写回(等 pl 端 hook 从 30000 拉), 不重复发声
         try { if (message.id) pendingTts.set(message.id, { text: speakText, ts: Date.now() }); } catch (e) { /* noop */ }
@@ -1538,8 +1545,8 @@ async function doSubmitChat(ta, opts = {}) {
         auxRef: (cur1 && cur1.auxRef) || "",
         promptText: pT,
         promptLang: pL,
-        emotionMix: (cur1 && typeof cur1.emotionMix === "number") ? cur1.emotionMix : 0.5,
-        emotionMod: (cur1 && typeof cur1.emotionMod === "number") ? cur1.emotionMod : 0.5,
+        emotionMix: (cur1 && typeof cur1.emotionMix === "number") ? cur1.emotionMix : 0,   // 1.6.111 0=自动
+        emotionMod: (cur1 && typeof cur1.emotionMod === "number") ? cur1.emotionMod : 0,
         polish: (cur1 && cur1.polishText) || "",
         speed: (cur1 && cur1.speed) || 0,
         lang: getCfg().textLang || "auto",
@@ -1582,8 +1589,8 @@ async function applyEmotion(emotion, name) {
     const cur = prof.chars[charName];
     cur.emotion = emotion || "";
     prof.emotion = emotion || "";   // 顶层同步(渲染读 prof.emotion, 高亮才随点击变化)
-    if (typeof cur.emotionMix !== "number") cur.emotionMix = 1.0;   // 1.6.65 严格 Shinsekai: 情绪参考音作唯一参考(0=纯默认音, 1=全情绪音)
-    if (typeof cur.emotionMod !== "number") cur.emotionMod = 0.5;   // 情感参数调制: 语速等参数强度
+    if (typeof cur.emotionMix !== "number") cur.emotionMix = 0;   // 1.6.111 0 = 自动(选了带参考音的槽时会按 1.0 使用)
+    if (typeof cur.emotionMod !== "number") cur.emotionMod = 0;   // 0 = 自动: 按 AI/情绪决定语速
     const c = (quickChars && quickChars.chars || []).find(x => x.name === charName);
     const slot = c && c.emotions.find(s => s.key === emotion);
     const mainRef = c && c.ref_audio_path ? `fvtt_chars/${charName}/${c.ref_audio_path}` : "";
@@ -1651,11 +1658,12 @@ function buildSendPop() {
       <div class="fvtt-tts-sendpop-sec">${_L("ui.sendPopEmo", "语气")}</div>
       <div class="fvtt-tts-sendpop-emogrid"></div>
       <div class="fvtt-tts-sendpop-sec">${_L("ui.sendPopTune", "调配")}</div>
+      <!-- 1.6.111 这四项默认 0 = 自动: 不填就由 AI/朗读提示词/引擎自己决定 -->
       <div class="fvtt-tts-sendpop-tune">
-        <label class="fvtt-tts-sendpop-tuneline"><span>${_L("ui.volume", "朗读音量")}</span><input type="range" class="fvtt-tts-sendpop-vol" min="0" max="1" step="0.05" value="0.8"></label>
-        <label class="fvtt-tts-sendpop-tuneline"><span>${_L("ui.speed", "语速")}</span><input type="range" class="fvtt-tts-sendpop-speed" min="0.5" max="1.5" step="0.05" value="1"></label>
-        <label class="fvtt-tts-sendpop-tuneline"><span title="${_L("ui.emotionMixTip", "0% 纯默认主参考；100% 情绪音频作唯一参考；中间主参考+情绪融合")}">${_L("ui.emotionMix", "情绪占比")} <b class="fvtt-tts-sendpop-mixval">50%</b></span><input type="range" class="fvtt-tts-sendpop-mix" min="0" max="100" step="5" value="50"></label>
-        <label class="fvtt-tts-sendpop-tuneline"><span title="${_L("ui.emotionModTip", "用语速等参数调制情感：0% 不调制；100% 完全按情绪语速(开心快/悲伤慢)")}">${_L("ui.emotionMod", "情感参数调制")} <b class="fvtt-tts-sendpop-modval">50%</b></span><input type="range" class="fvtt-tts-sendpop-mod" min="0" max="100" step="5" value="50"></label>
+        <label class="fvtt-tts-sendpop-tuneline"><span title="${_L("ui.volumeTip", "0 = 自动（引擎默认响度）；调大/调小才手动指定")}">${_L("ui.volume", "朗读音量")} <b class="fvtt-tts-sendpop-volval">自动</b></span><input type="range" class="fvtt-tts-sendpop-vol" min="0" max="1" step="0.05" value="0"></label>
+        <label class="fvtt-tts-sendpop-tuneline"><span title="${_L("ui.speedTip", "0 = 自动（交给朗读提示词与 AI 决定语速）")}">${_L("ui.speed", "语速")} <b class="fvtt-tts-sendpop-spdval">自动</b></span><input type="range" class="fvtt-tts-sendpop-speed" min="0" max="1.5" step="0.05" value="0"></label>
+        <label class="fvtt-tts-sendpop-tuneline"><span title="${_L("ui.emotionMixTip", "0 = 自动（AI/提示词选中的情绪参考音直接使用）；>0 才手动指定混合比例")}">${_L("ui.emotionMix", "情绪占比")} <b class="fvtt-tts-sendpop-mixval">自动</b></span><input type="range" class="fvtt-tts-sendpop-mix" min="0" max="100" step="5" value="0"></label>
+        <label class="fvtt-tts-sendpop-tuneline"><span title="${_L("ui.emotionModTip", "0 = 自动（按 AI 判断的情绪决定语速快慢）；>0 才手动指定调制强度")}">${_L("ui.emotionMod", "情感参数调制")} <b class="fvtt-tts-sendpop-modval">自动</b></span><input type="range" class="fvtt-tts-sendpop-mod" min="0" max="100" step="5" value="0"></label>
 <label class="fvtt-tts-sendpop-tuneline"><span title="${_L("ui.styleTip", "朗读提示词：如“更严肃认真、中间不要中断”。会翻译成语速/停顿等合成参数，角色独立记得。")}">${_L("ui.stylePrompt", "朗读提示词")}</span><input type="text" class="fvtt-tts-sendpop-style" placeholder="${_L("ui.stylePh", "如：更严肃认真，中间不要中断")}" maxlength="120"></label>
         <div class="fvtt-tts-sendpop-tuneline"><span title="${_L("ui.styleStrTip", "提示词强度：0%=不改变语速/停顿，100%=完全按提示词")}">${_L("ui.styleStr", "强度")}</span><input type="range" class="fvtt-tts-sendpop-stylestr" min="0" max="100" step="5" value="50"><b class="fvtt-tts-sendpop-stylestrval">50%</b></div>
       </div>
@@ -1804,15 +1812,20 @@ function buildSendPop() {
   // 恢复预加载状态(1.6.102 改为统一复核): 已预合成的音频(文字一致且角色/语气/语言未变)按钮直接显示 done, 再点即发送; 文字/签名变了 → 回到未预加载
   const preBtn = pop.querySelector(".fvtt-tts-sendpop-preload");
   if (preBtn) refreshPreloadBtn();
-  // 音量/语速(实时写设置)
+  // 音量/语速(实时写设置) — 1.6.111: 0 = 自动(显示"自动", 交给 AI/提示词/引擎)
   const vol = pop.querySelector(".fvtt-tts-sendpop-vol");
   const spd = pop.querySelector(".fvtt-tts-sendpop-speed");
+  const volVal = pop.querySelector(".fvtt-tts-sendpop-volval");
+  const spdVal = pop.querySelector(".fvtt-tts-sendpop-spdval");
   const cfg0 = getCfg();
-  vol.value = String(cfg0.volume || 0);
-  spd.value = String(cfg0.speedFactor || 1);
-  vol.addEventListener("input", () => game.settings.set(MODULE, "volume", parseFloat(vol.value)).catch(() => {}));
-  spd.addEventListener("input", () => game.settings.set(MODULE, "speedFactor", parseFloat(spd.value)).catch(() => {}));
-  // 情绪占比 / 情感参数调制 → 保存到当前角色档案
+  const _fmtAuto = (v, isPct) => (Number(v) > 0 ? (isPct ? Math.round(Number(v) * 100) + "%" : Number(v).toFixed(2)) : "自动");
+  vol.value = String(Number(cfg0.volume) > 0 ? Number(cfg0.volume) : 0);
+  spd.value = String(Number(cfg0.speedFactor) > 0 ? Number(cfg0.speedFactor) : 0);
+  if (volVal) volVal.textContent = _fmtAuto(vol.value, false);
+  if (spdVal) spdVal.textContent = _fmtAuto(spd.value, false);
+  vol.addEventListener("input", () => { if (volVal) volVal.textContent = _fmtAuto(vol.value, false); game.settings.set(MODULE, "volume", parseFloat(vol.value)).catch(() => {}); });
+  spd.addEventListener("input", () => { if (spdVal) spdVal.textContent = _fmtAuto(spd.value, false); game.settings.set(MODULE, "speedFactor", parseFloat(spd.value)).catch(() => {}); });
+  // 情绪占比 / 情感参数调制 → 保存到当前角色档案; 0 = 自动
   const saveMix = () => {
     const prof = loadVoiceProfile();
     const charName = prof.current || "";
@@ -1822,8 +1835,10 @@ function buildSendPop() {
     cur.emotionMix = parseFloat(pop.querySelector(".fvtt-tts-sendpop-mix").value) / 100;
     cur.emotionMod = parseFloat(pop.querySelector(".fvtt-tts-sendpop-mod").value) / 100;
     try { saveVoiceProfile(prof); } catch (e) { /* noop */ }
-    pop.querySelector(".fvtt-tts-sendpop-mixval").textContent = pop.querySelector(".fvtt-tts-sendpop-mix").value + "%";
-    pop.querySelector(".fvtt-tts-sendpop-modval").textContent = pop.querySelector(".fvtt-tts-sendpop-mod").value + "%";
+    const _mk = pop.querySelector(".fvtt-tts-sendpop-mixval");
+    const _md = pop.querySelector(".fvtt-tts-sendpop-modval");
+    if (_mk) _mk.textContent = (parseFloat(pop.querySelector(".fvtt-tts-sendpop-mix").value) > 0 ? pop.querySelector(".fvtt-tts-sendpop-mix").value + "%" : "自动");
+    if (_md) _md.textContent = (parseFloat(pop.querySelector(".fvtt-tts-sendpop-mod").value) > 0 ? pop.querySelector(".fvtt-tts-sendpop-mod").value + "%" : "自动");
   };
   pop.querySelector(".fvtt-tts-sendpop-mix").addEventListener("input", saveMix);
   pop.querySelector(".fvtt-tts-sendpop-mod").addEventListener("input", saveMix);
@@ -2290,8 +2305,17 @@ function renderSendPopEmotions() {
   const cur2 = (prof2.chars && prof2.chars[prof2.current]) || {};
   const mix = sendPopEl.querySelector(".fvtt-tts-sendpop-mix");
   const mod = sendPopEl.querySelector(".fvtt-tts-sendpop-mod");
-  if (mix) { mix.value = String(Math.round((typeof cur2.emotionMix === "number" ? cur2.emotionMix : 0.5) * 100)); sendPopEl.querySelector(".fvtt-tts-sendpop-mixval").textContent = mix.value + "%"; }
-  if (mod) { mod.value = String(Math.round((typeof cur2.emotionMod === "number" ? cur2.emotionMod : 0.5) * 100)); sendPopEl.querySelector(".fvtt-tts-sendpop-modval").textContent = mod.value + "%"; }
+  // 1.6.111 这两项也是 0 = 自动(AI 决定), 未设置就显示"自动"而不是 50%
+  if (mix) {
+    mix.value = String(Math.round(((typeof cur2.emotionMix === "number" && cur2.emotionMix > 0) ? cur2.emotionMix : 0) * 100));
+    const _mk = sendPopEl.querySelector(".fvtt-tts-sendpop-mixval");
+    if (_mk) _mk.textContent = Number(mix.value) > 0 ? mix.value + "%" : "自动";
+  }
+  if (mod) {
+    mod.value = String(Math.round(((typeof cur2.emotionMod === "number" && cur2.emotionMod > 0) ? cur2.emotionMod : 0) * 100));
+    const _md = sendPopEl.querySelector(".fvtt-tts-sendpop-modval");
+    if (_md) _md.textContent = Number(mod.value) > 0 ? mod.value + "%" : "自动";
+  }
 }
 
 function openSendPop() {
@@ -2634,7 +2658,7 @@ function addReplayButton(message, html) {
     // 优先播放第一次的同一段音频(缓存), 无缓存才重新合成
     const cached = audioCache.get(message.id || "");
     if (cached && cached.url) {
-      queue.enqueue({ play: () => audioPlay(cached.url, { volume: getCfg().volume, push: false }) });
+      queue.enqueue({ play: () => audioPlay(cached.url, { volume: playVolume(), push: false }) });
       return;
     }
     // 缓存 miss(被挤出/跨会话): 用消息 flags 里的原音色上下文重新合成,
@@ -3255,7 +3279,7 @@ async function runPlayerSelfTest() {
       if (lres && lres.blob && lres.blob.size > 0) {
         localBlob = lres.blob;
         pass("本地合成", "成功 ✓ (" + Math.round((lres.blob.size || 0) / 1024) + "KB)", true);
-        try { await audioPlay(URL.createObjectURL(lres.blob), { volume: getCfg().volume, push: false }); } catch (e) { localErr = String((e && e.message) || e).slice(0, 60); }
+        try { await audioPlay(URL.createObjectURL(lres.blob), { volume: playVolume(), push: false }); } catch (e) { localErr = String((e && e.message) || e).slice(0, 60); }
       } else {
         const _e = String((lres && (lres.err || lres.error)) || "无音频(合成被拒?)").slice(0, 60);
         pass("本地合成", "失败: " + _e, false);
@@ -3303,7 +3327,7 @@ async function runPlayerSelfTest() {
             : getCfg().serverUrl.replace(/\/+$/, "") + audioUrl;
         } catch (e) { playSrc = audioUrl; }
       }
-      try { await audioPlay(playSrc, { volume: getCfg().volume, push: false }); } catch (e) { playErr = String((e && e.message) || e).slice(0, 80); }
+      try { await audioPlay(playSrc, { volume: playVolume(), push: false }); } catch (e) { playErr = String((e && e.message) || e).slice(0, 80); }
     } else {
       playErr = "无音频可播(写回失败)";
     }
@@ -4566,6 +4590,11 @@ window.runFinalTest = async function runFinalTest() {
     } else push("- AI 调用统计: 引擎未返回统计(可能是旧引擎)");
   } catch (e) { push("- AI 调用统计: 查询失败(" + String((e && e.message) || e).slice(0, 60) + ")"); }
   push("- 朗读提示词: " + (style || "(未填)") + " | AI润色=" + (cfg.llmPolish ? "开" : "关"));
+  // 1.6.111 调配项(0=自动: 交给 AI/提示词/引擎)
+  try {
+    push("- 调配(0=自动): 音量=" + (Number(cfg.volume) > 0 ? Number(cfg.volume).toFixed(2) : "自动")
+      + " · 语速=" + (Number(cfg.speedFactor) > 0 ? Number(cfg.speedFactor).toFixed(2) : "自动"));
+  } catch (e) { /* noop */ }
   // 1.6.97 语气提示已并入"朗读提示词"(每角色/每玩家独立) — 报告里说明分工
   try {
     push("- 语气提示: 由「朗读提示词」承担（每角色/每位玩家独立；上行为空则无语气提示）");
@@ -5058,8 +5087,8 @@ Hooks.on("chatMessage", (chatLog, message, chatData) => {
         auxRef: (cur && cur.auxRef) || "",
         promptText: (cur && cur.promptText) || "",
         promptLang: (cur && cur.promptLang) || "",
-        emotionMix: (cur && typeof cur.emotionMix === "number") ? cur.emotionMix : 0.5,
-        emotionMod: (cur && typeof cur.emotionMod === "number") ? cur.emotionMod : 0.5,
+        emotionMix: (cur && typeof cur.emotionMix === "number") ? cur.emotionMix : 0,   // 1.6.111 0=自动
+        emotionMod: (cur && typeof cur.emotionMod === "number") ? cur.emotionMod : 0,
         speed: (cur && cur.speed) || 0,
         lang: cfg.textLang || "auto",
       };
@@ -5098,7 +5127,7 @@ Hooks.on("createChatMessage", (message, options, userId) => { (window.__fvttTTSH
           playedIds.add(message.id);
           setTimeout(() => { try { playedIds.delete(message.id); } catch (e) { /* noop */ } }, 30000);
           try { cacheAudio(message.id, flD.audioData, "audio/mpeg"); } catch (e) { /* noop */ }
-          queue.enqueue({ play: () => audioPlay(flD.audioData, { volume: getCfg().volume, push: false }) });
+          queue.enqueue({ play: () => audioPlay(flD.audioData, { volume: playVolume(), push: false }) });
         }
       }
     }
@@ -5606,11 +5635,11 @@ Hooks.on("updateChatMessage", (message, changed) => {
       })() : "";
       if (reluc) {
         try { if (message.id) cacheAudio(message.id, reluc, "audio/mpeg"); } catch (e) { /* noop */ }
-        try { queue.enqueue({ play: () => audioPlay(reluc, { volume: getCfg().volume, push: false }) }); return; } catch (e) { /* noop */ }
+        try { queue.enqueue({ play: () => audioPlay(reluc, { volume: playVolume(), push: false }) }); return; } catch (e) { /* noop */ }
       }
       if (flags.audioData && typeof flags.audioData === "string" && flags.audioData.length > 20) {
         try { if (message.id) cacheAudio(message.id, flags.audioData, "audio/mpeg"); } catch (e) { /* noop */ }
-        try { queue.enqueue({ play: () => audioPlay(flags.audioData, { volume: getCfg().volume, push: false }) }); } catch (e) { /* noop */ }
+        try { queue.enqueue({ play: () => audioPlay(flags.audioData, { volume: playVolume(), push: false }) }); } catch (e) { /* noop */ }
       }
       return;
     }
@@ -5632,7 +5661,7 @@ Hooks.on("updateChatMessage", (message, changed) => {
           playedIds.add(message.id);
           setTimeout(() => { try { playedIds.delete(message.id); } catch (e) { /* noop */ } }, 30000);
           try { if (pendingTts.has(message.id)) pendingTts.delete(message.id); } catch (e) { /* noop */ }   // 清 pending(代理哨兵/15s 兜底): flags 已送达即播放, 不再重复
-          queue.enqueue({ play: () => audioPlay(u, { volume: getCfg().volume, push: false }) });
+          queue.enqueue({ play: () => audioPlay(u, { volume: playVolume(), push: false }) });
         }).catch(() => { try { playedIds.delete(message.id); } catch (e) { /* noop */ } });
       })
       .catch(() => { try { playedIds.delete(message.id); } catch (e) { /* noop */ } /* 拉取失败: 放行(15s 兜底(直连模式)或等待 GM(代理模式)) */ });
