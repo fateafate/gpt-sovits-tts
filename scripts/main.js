@@ -19,7 +19,7 @@ window.fetchAndRefreshModels = fetchAndRefreshModels;
 const MODULE = "gpt-sovits-tts";
 // 1.6.103 代码版本号: Foundry 的 game.modules.get(id).version 读的是"载入世界时的清单缓存",
 //   改了 manifest 不刷新会一直显示旧版本(用户多次看到 1.6.96 而实际代码已是新版) → 报告里同时打印两者, 便于确认真的在跑新代码
-const MOD_VERSION = "1.6.124";
+const MOD_VERSION = "1.6.125";
 const CHAT_STYLES = (typeof CONST !== "undefined" && (CONST.CHAT_MESSAGE_STYLES || CONST.CHAT_MESSAGE_TYPES)) || {};
 
 /* ============ 设置定义 ============ */
@@ -4788,8 +4788,10 @@ window.runFinalTest = async function runFinalTest() {
       const _b = (window.__fvttTTSCrashList || []).length;
       const _prev = window.__fvttTTSCrashNotified;
       window.__fvttTTSCrashNotified = true;   // 测试期间不要弹错误通知
+      window.__fvttTTSCrashSilent = true;     // 1.6.125 也不要在控制台打红字(那条 finaltest-probe 会吓人)
       try { reportSpeakCrash(new Error("finaltest-probe")); } catch (e) { /* noop */ }
       window.__fvttTTSCrashNotified = _prev;
+      window.__fvttTTSCrashSilent = false;
       return (window.__fvttTTSCrashList || []).length > _b;
     })();
     _chk("朗读崩溃上报可用(reportSpeakCrash)", _crashOk);
@@ -5767,7 +5769,7 @@ Hooks.on("createChatMessage", (message, options, userId) => { (window.__fvttTTSH
 function reportSpeakCrash(e) {
   try {
     const msg = String((e && (e.stack || e.message)) || e);
-    console.error("[gpt-sovits-tts] 朗读链路异常(本次消息不会出声/不会有立绘):\n" + msg);
+    if (window.__fvttTTSCrashSilent !== true) console.error("[gpt-sovits-tts] 朗读链路异常(本次消息不会出声/不会有立绘):\n" + msg);   // 1.6.125 自检探针时静默
     try { (window.__fvttTTSCrashList = window.__fvttTTSCrashList || []).push({ ts: Date.now(), msg: msg.slice(0, 500) }); } catch (e2) { /* noop */ }
     if (window.__fvttTTSCrashNotified !== true) {
       window.__fvttTTSCrashNotified = true;
