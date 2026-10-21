@@ -19,7 +19,7 @@ window.fetchAndRefreshModels = fetchAndRefreshModels;
 const MODULE = "gpt-sovits-tts";
 // 1.6.103 代码版本号: Foundry 的 game.modules.get(id).version 读的是"载入世界时的清单缓存",
 //   改了 manifest 不刷新会一直显示旧版本(用户多次看到 1.6.96 而实际代码已是新版) → 报告里同时打印两者, 便于确认真的在跑新代码
-const MOD_VERSION = "1.6.115";
+const MOD_VERSION = "1.6.116";
 const CHAT_STYLES = (typeof CONST !== "undefined" && (CONST.CHAT_MESSAGE_STYLES || CONST.CHAT_MESSAGE_TYPES)) || {};
 
 /* ============ 设置定义 ============ */
@@ -139,7 +139,10 @@ function normalizeEmotionMix(ov) {
   try {
     if (!ov) return ov;
     const hasAux = Array.isArray(ov.auxRefAudioPaths) && ov.auxRefAudioPaths.length > 0;
-    if (hasAux && !(typeof ov.emotionMix === "number" && ov.emotionMix > 0)) ov.emotionMix = 1.0;
+    // 1.6.116 修正语义(用户反馈音质崩): 「情绪语音 = 在基础语音之上追加的参考」, 不是取代!
+    //   0.5 = 基础音(主参考) + 情绪音(附加参考) 融合 → 保留角色原音色, 只叠加情绪色彩(Shinsekai 的做法)
+    //   1.0 = 情绪音当唯一参考 → 音色完全变成那条情绪片段(短样本还要拼接, 音质会明显变差) → 只应由用户手动拉满
+    if (hasAux && !(typeof ov.emotionMix === "number" && ov.emotionMix > 0)) ov.emotionMix = 0.5;
   } catch (e) { /* noop */ }
   return ov;
 }
@@ -1209,7 +1212,7 @@ async function maybeSpeak(message) {
           if (slot.prompt_text) overrides.promptText = slot.prompt_text;
           if (slot.prompt_lang) overrides.promptLang = slot.prompt_lang;
           // 1.6.109 占比<=0 视为"未设置"(以前 0 会让引擎丢掉情绪参考音 → 听起来跟提示词无关)
-          if (!(typeof overrides.emotionMix === "number" && overrides.emotionMix > 0)) overrides.emotionMix = 1.0;
+          if (!(typeof overrides.emotionMix === "number" && overrides.emotionMix > 0)) overrides.emotionMix = 0.5;   // 1.6.116 基础音+情绪音叠加(不是取代)
           console.debug(`[gpt-sovits-tts] 自动语气朗读: ${_emo}${(cfg.llmEnabled && cfg.llmKey && window.__fvttTTSLlmBroken !== true) ? "(AI)" : "(规则/风格)"} 台词保持原文`);   // 1.6.50 降级路径同样换情绪参考音
           // 1.6.109 立绘跟"选中的情绪槽"走(对标 Shinsekai: 立绘 N ↔ 情绪 N ↔ 参考音 N 是同一条线)
           //   以前这里只换声音, 立绘由另一套"语义分桶"决定 → 会出现"害羞的声音 + 中性的立绘"这种错配
@@ -1243,11 +1246,26 @@ async function maybeSpeak(message) {
       const curMix = (typeof flA.emotionMix === "number") ? flA.emotionMix : 0;
       if (curMix < 0.75) {
         overrides = overrides || {};
-        if (typeof overrides.emotionMix !== "number") overrides.emotionMix = 1.0;   // 1.6.65 严格 Shinsekai: 情绪参考音作唯一参考
+        if (typeof overrides.emotionMix !== "number") overrides.emotionMix = 0.5;   // 1.6.116 基础音+情绪音叠加
       }
       // 1.6.109 手动选了语气槽时同理: 占比 0 会让引擎丢掉这条参考音(声音又变回默认)
       if (overrides && Array.isArray(overrides.auxRefAudioPaths) && overrides.auxRefAudioPaths.length
-          && !(typeof overrides.emotionMix === "number" && overrides.emotionMix > 0)) overrides.emotionMix = 1.0;
+          && !(typeof overrides.emotionMix === "number" && overrides.emotionMix > 0)) overrides.emotionMix = 0.5;
+      // 1.6.116 手动选语气槽时, 立绘也要跟这个槽走(以前只换声音, 立绘由另一套语义分桶决定 → 错配)
+      try {
+        const _slM = findEmotionSlot(String(flA.emotion || ""), roleN);
+        if (_slM && !(flA && flA.selSprite) && message && message.flags && message.flags[MODULE]) {
+          const _ccM = (quickChars && quickChars.chars || []).find(x => x.name === roleN);
+          const _ordM = Math.max(0, ((_ccM && _ccM.emotions) || []).findIndex(e => e && e.key === _slM.key));
+          const _spM = String(_slM.avatar || ((_ccM && _ccM.sprites && _ccM.sprites[_ordM]) || ""));
+          if (_spM) {
+            const _nfM = { ...(message.flags[MODULE]) };
+            _nfM.aiSprite = _spM;
+            _nfM.slotAvatar = String(_slM.avatar || "");
+            safeMsgWrite(message, { flags: { [MODULE]: _nfM } });
+          }
+        }
+      } catch (e2) { /* noop */ }
       console.debug(`[gpt-sovits-tts] 已选语气 ${flA.emotion} (台词保持原文)`);
     }
   } catch (e) { /* AI 失败沿用原设置 */ }
@@ -1626,7 +1644,7 @@ async function applyEmotion(emotion, name) {
     const cur = prof.chars[charName];
     cur.emotion = emotion || "";
     prof.emotion = emotion || "";   // 顶层同步(渲染读 prof.emotion, 高亮才随点击变化)
-    if (typeof cur.emotionMix !== "number") cur.emotionMix = 0;   // 1.6.111 0 = 自动(选了带参考音的槽时会按 1.0 使用)
+    if (typeof cur.emotionMix !== "number") cur.emotionMix = 0;   // 0 = 自动(选了带参考音的槽时按 0.5 = 基础音+情绪叠加)
     if (typeof cur.emotionMod !== "number") cur.emotionMod = 0;   // 0 = 自动: 按 AI/情绪决定语速
     const c = (quickChars && quickChars.chars || []).find(x => x.name === charName);
     const slot = c && c.emotions.find(s => s.key === emotion);
@@ -1642,7 +1660,7 @@ async function applyEmotion(emotion, name) {
       cur.auxRef = `fvtt_chars/${charName}/${slot.ref_audio_path}`;
       if (slot.prompt_text) { cur.promptText = slot.prompt_text; cur.promptLang = slot.prompt_lang || mainLang; }
       // 1.6.109 选中语气槽 = 明确要用这条情绪参考音; 若占比是 0(以前滑到 0%) 引擎会把它丢掉 → 纠正成 1.0
-      if (!(typeof cur.emotionMix === "number" && cur.emotionMix > 0)) cur.emotionMix = 1.0;
+      if (!(typeof cur.emotionMix === "number" && cur.emotionMix > 0)) cur.emotionMix = 0.5;
     } else {
       cur.auxRef = "";
     }
@@ -1699,7 +1717,7 @@ function buildSendPop() {
       <div class="fvtt-tts-sendpop-tune">
         <label class="fvtt-tts-sendpop-tuneline"><span title="${_L("ui.volumeTip", "0 = 自动（引擎默认响度）；调大/调小才手动指定")}">${_L("ui.volume", "朗读音量")} <b class="fvtt-tts-sendpop-volval">自动</b></span><input type="range" class="fvtt-tts-sendpop-vol" min="0" max="1" step="0.05" value="0"></label>
         <label class="fvtt-tts-sendpop-tuneline"><span title="${_L("ui.speedTip", "0 = 自动（交给朗读提示词与 AI 决定语速）")}">${_L("ui.speed", "语速")} <b class="fvtt-tts-sendpop-spdval">自动</b></span><input type="range" class="fvtt-tts-sendpop-speed" min="0" max="1.5" step="0.05" value="0"></label>
-        <label class="fvtt-tts-sendpop-tuneline"><span title="${_L("ui.emotionMixTip", "0 = 自动（AI/提示词选中的情绪参考音直接使用）；>0 才手动指定混合比例")}">${_L("ui.emotionMix", "情绪占比")} <b class="fvtt-tts-sendpop-mixval">自动</b></span><input type="range" class="fvtt-tts-sendpop-mix" min="0" max="100" step="5" value="0"></label>
+        <label class="fvtt-tts-sendpop-tuneline"><span title="${_L("ui.emotionMixTip", "0 = 自动：基础音作主参考 + 情绪音作附加参考叠加（保留角色音色）；100% = 情绪音单独作参考（音色会变，短样本可能不自然）")}">${_L("ui.emotionMix", "情绪占比")} <b class="fvtt-tts-sendpop-mixval">自动</b></span><input type="range" class="fvtt-tts-sendpop-mix" min="0" max="100" step="5" value="0"></label>
         <label class="fvtt-tts-sendpop-tuneline"><span title="${_L("ui.emotionModTip", "0 = 自动（按 AI 判断的情绪决定语速快慢）；>0 才手动指定调制强度")}">${_L("ui.emotionMod", "情感参数调制")} <b class="fvtt-tts-sendpop-modval">自动</b></span><input type="range" class="fvtt-tts-sendpop-mod" min="0" max="100" step="5" value="0"></label>
 <label class="fvtt-tts-sendpop-tuneline"><span title="${_L("ui.styleTip", "朗读提示词：如“更严肃认真、中间不要中断”。会翻译成语速/停顿等合成参数，角色独立记得。")}">${_L("ui.stylePrompt", "朗读提示词")}</span><input type="text" class="fvtt-tts-sendpop-style" placeholder="${_L("ui.stylePh", "如：更严肃认真，中间不要中断")}" maxlength="120"></label>
         <div class="fvtt-tts-sendpop-tuneline"><span title="${_L("ui.styleStrTip", "提示词强度：0%=不改变语速/停顿，100%=完全按提示词")}">${_L("ui.styleStr", "强度")}</span><input type="range" class="fvtt-tts-sendpop-stylestr" min="0" max="100" step="5" value="50"><b class="fvtt-tts-sendpop-stylestrval">50%</b></div>
@@ -1815,7 +1833,7 @@ function buildSendPop() {
       }
       const curP = (profP.chars && profP.chars[roleP]) || {};
       if (typeof curP.emotionMix === "number") overridesP.emotionMix = curP.emotionMix;
-      else if (aiEmoP) overridesP.emotionMix = 1.0;   // 1.6.65 AI 判断语气 → 情绪参考音作唯一参考(与发送时一致, 严格 Shinsekai)
+      else if (aiEmoP && !(typeof overridesP.emotionMix === "number" && overridesP.emotionMix > 0)) overridesP.emotionMix = 0.5;   // 1.6.116 预加载同样: 基础音+情绪叠加
       // 1.6.109/1.6.112 预加载合成同样规范化占比(单一来源 normalizeEmotionMix)
       normalizeEmotionMix(overridesP);
       // 1.6.99 AI 直出/预加载: 强度=0 时用提示词关键词语速(AI/提示词自己决定), 不再锁原速
