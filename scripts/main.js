@@ -19,7 +19,7 @@ window.fetchAndRefreshModels = fetchAndRefreshModels;
 const MODULE = "gpt-sovits-tts";
 // 1.6.103 代码版本号: Foundry 的 game.modules.get(id).version 读的是"载入世界时的清单缓存",
 //   改了 manifest 不刷新会一直显示旧版本(用户多次看到 1.6.96 而实际代码已是新版) → 报告里同时打印两者, 便于确认真的在跑新代码
-const MOD_VERSION = "1.6.128";
+const MOD_VERSION = "1.6.129";
 const CHAT_STYLES = (typeof CONST !== "undefined" && (CONST.CHAT_MESSAGE_STYLES || CONST.CHAT_MESSAGE_TYPES)) || {};
 
 /* ============ 设置定义 ============ */
@@ -261,6 +261,20 @@ function makeWatchKey() {
     const c = getCfg();
     return JSON.stringify({ role: p.current || "", emotion: p.emotion || "", lang: c.textLang || "auto", speed: c.speedFactor || 1 });
   } catch (e) { return ""; }
+}
+
+/** 1.6.129 预加载命中判定: 预合成时若 AI 润色生效, 存进 preloadAudio.text 的是"润色稿",
+ *  而用户输入框里仍是原文 → 原先用 text 比较永不相等 → 按钮显示"✓ 已预加载"但再点不发送
+ *  (最终测试 L 段暴露: 预加载 ✓ 但 预加载→发送 消息✗)。
+ *  srcText = 预合成时的输入原文; 匹配一律以它为准, text 只作展示与兜底。 */
+function preloadHit(t) {
+  try {
+    if (!preloadAudio || !preloadAudio.url) return false;
+    const want = String(t || "");
+    if (!want) return false;
+    const key = String(preloadAudio.srcText || preloadAudio.text || "");
+    return key === want && preloadAudio.watchKey === makeWatchKey();
+  } catch (e) { return false; }
 }
 
 /** 播放诊断: 把"实际播放了什么"上报服务端落盘(排查播放固定同一段) */
@@ -1323,7 +1337,7 @@ async function maybeSpeak(message) {
   const opts = { lang: flLang || decision.lang, sender: decision.speakerName, ...(overrides || {}), aiDirect: !!(fl && fl.aiDirect) };
   // 预加载音频命中: 输入与预合成文本一致 且 角色/语气/语言/语速未变 → 作者直接播预合成音频并广播(跳过 AI 判断/重新合成, 零等待)
   // 切了角色或语气 → 签名不匹配 → 回落下方正常合成(重新按当前角色/语气合成, 绝不播旧声音)
-  if (preloadAudio && preloadAudio.url && stripStageDirections(speakText) === preloadAudio.text && preloadAudio.watchKey === makeWatchKey()) {
+  if (preloadHit(stripStageDirections(speakText)) && preloadAudio && preloadAudio.url) {
     if (decision.isSelf) {
       // 代理模式(pl 在 HTTPS/跨网/9881 不可达环境): 预合成音频路径写回 flags → 全员从 Foundry 30000 拉同一段
       try {
@@ -1735,7 +1749,7 @@ function refreshPreloadBtn() {
     if (pb.classList.contains("loading")) return;   // 合成中不打扰进度显示
     const ta = findChatTextarea();
     const t = (ta && String(ta.value || "").trim()) ? stripStageDirections(String(ta.value || "").trim()) : "";
-    const ok = !!(t && preloadAudio && preloadAudio.url && preloadAudio.text === t && preloadAudio.watchKey === makeWatchKey());
+    const ok = preloadHit(t);
     if (ok) {
       pb.textContent = _L("ui.preloadedBtn", "✓ 已预加载");
       pb.title = _L("ui.preloadedSendTip", "音频已就绪，再点直接播出");
@@ -1817,7 +1831,7 @@ function buildSendPop() {
       return;
     }
     // done + 文字一致 且 角色/语气/语言未变 → 直接发送并播出预合成的同一段音频(零等待)
-    if (btnP2.classList.contains("done") && preloadAudio && preloadAudio.text === tnow && preloadAudio.watchKey === makeWatchKey()) {
+    if (btnP2.classList.contains("done") && preloadHit(tnow)) {
       closeSendPop();
       doSubmitChat(ta);
       return;
@@ -1897,12 +1911,18 @@ function buildSendPop() {
       const objUrl = URL.createObjectURL(blob);
       const b64 = await blobToBase64(blob);
       if (preloadAudio && preloadAudio.url) { try { URL.revokeObjectURL(preloadAudio.url); } catch (e) { /* noop */ } }
-      preloadAudio = { text: stripP, lang: cfgP2.textLang || "auto", url: objUrl, audioUrl: audioUrl || "", dataUrl: `data:audio/mpeg;base64,${b64}`, mime: "audio/mpeg", ts: Date.now(), watchKey: makeWatchKey() };
+      preloadAudio = { text: stripP, srcText: tnow, lang: cfgP2.textLang || "auto", url: objUrl, audioUrl: audioUrl || "", dataUrl: `data:audio/mpeg;base64,${b64}`, mime: "audio/mpeg", ts: Date.now(), watchKey: makeWatchKey() };
       btnP2.textContent = _L("ui.preloadedBtn", "✓ 已预加载");
       btnP2.title = _L("ui.preloadedSendTip", "音频已就绪，再点直接播出");
       btnP2.classList.remove("loading");
       btnP2.classList.add("done");
       // 合成完成只标记 done, 等待用户点击发送(不再自动发送; 再点即直接播出同一段零等待音频)
+      // 1.6.129: wasDone = 上一轮已预加载过、这次因为文字/角色/语气变了而重合成 → 按"再点即发送"的承诺直接发送,
+      //   否则用户点了没反应(最终测试 L 段"预加载→发送 消息✗"就是落在这条路径上)。
+      if (wasDone) {
+        try { closeSendPop(); } catch (e) { /* noop */ }
+        await doSubmitChat(ta);
+      }
     } catch (e) {
       btnP2.textContent = oldP2;
       btnP2.classList.remove("loading");
@@ -2628,13 +2648,16 @@ function updateMicUI() {
 /* ============ 打字即读 ============ */
 function attachTyping() {
   const cfg = getCfg();
-  if (!cfg.typingVoice && !cfg.commands) return;
+  // 1.6.129 修: 原来这里读 cfg.typingVoice(该设定从未注册, 读出来恒为 undefined) → 打字停顿朗读整条链路永不触发。
+  //   现在只用 triggerMode 判定(typing/both = 打字即读), commands 只用于命令解析, 与本功能无关。
+  const _typingOn0 = (cfg.triggerMode === "typing" || cfg.triggerMode === "both");
+  if (!_typingOn0 && !cfg.commands) return;
   const ta = document.getElementById("chat-message");
   if (!ta || ta.dataset.fvttTtsAttached) return;
   ta.dataset.fvttTtsAttached = "1";
   ta.addEventListener("input", () => {
     const c = getCfg();
-    if (!c.typingVoice || (c.triggerMode !== "typing" && c.triggerMode !== "both")) return;
+    if (c.triggerMode !== "typing" && c.triggerMode !== "both") return;
     clearTimeout(typingTimer);
     typingTimer = setTimeout(() => {
       const el = document.getElementById("chat-message");
@@ -4926,10 +4949,10 @@ window.runFinalTest = async function runFinalTest() {
     const _cfgT = getCfg();
     if (!ta2) push("- K 打字朗读: 跳过（找不到输入框）");
     else {
-      const _oldTyping = _cfgT.typingVoice, _oldMode = _cfgT.triggerMode, _oldMin = _cfgT.minLength;
+      const _oldMode = _cfgT.triggerMode, _oldMin = _cfgT.minLength, _oldDeb = _cfgT.typingDebounce;
       const _tBefore = Number(window.__fvttTTSLastSpeakAt || 0);
       try {
-        await game.settings.set(MODULE, "typingVoice", true);
+        // 1.6.129: typingVoice 这个设定从未注册(读出来恒 undefined), 不再设置它; 打字朗读只由 triggerMode 控制
         await game.settings.set(MODULE, "triggerMode", "typing");
         await game.settings.set(MODULE, "minLength", 1);
       } catch (e) { /* noop */ }
@@ -4942,13 +4965,14 @@ window.runFinalTest = async function runFinalTest() {
       let w = 0;
       while (w < 60 && !(Number(window.__fvttTTSLastSpeakAt || 0) > _tBefore)) { await new Promise(r => setTimeout(r, 200)); w++; }
       const _okK = Number(window.__fvttTTSLastSpeakAt || 0) > _tBefore;
-      push("- **K 打字停顿朗读**（真实 input + 防抖）: " + (_okK ? "✓ 触发了朗读" : "✗ 未触发") + "（" + (w * 0.2).toFixed(1) + "s 内）");
+      push("- **K 打字停顿朗读**（真实 input + 防抖）: " + (_okK ? "✓ 触发了朗读" : "✗ 未触发") + "（" + (w * 0.2).toFixed(1) + "s 内）"
+        + (getCfg().enabled ? "" : " | 朗读总开关=关"));
       if (!_okK) fails.push("K打字朗读");
       try { ta2.value = ""; } catch (e) { /* noop */ }
       try {
-        await game.settings.set(MODULE, "typingVoice", !!_oldTyping);
-        await game.settings.set(MODULE, "triggerMode", _oldMode || "chat");
-        await game.settings.set(MODULE, "minLength", Number(_oldMin) || 4);
+        await game.settings.set(MODULE, "triggerMode", _oldMode || "both");
+        await game.settings.set(MODULE, "minLength", Number(_oldMin) || 1);
+        if (Number.isFinite(Number(_oldDeb))) await game.settings.set(MODULE, "typingDebounce", Number(_oldDeb));
       } catch (e) { /* noop */ }
     }
   } catch (e) { push("- K 打字朗读异常: " + String((e && e.message) || e).slice(0, 80)); fails.push("K打字朗读异常"); }
@@ -4968,24 +4992,30 @@ window.runFinalTest = async function runFinalTest() {
         while (w < 320 && !btn.classList.contains("done")) { await new Promise(r => setTimeout(r, 250)); w++; }
         const _done = btn.classList.contains("done");
         const _pa = (typeof preloadAudio !== "undefined") ? preloadAudio : null;
-        push("- L 预加载: " + (_done ? "✓ 预合成完成" : "✗ 未完成") + " | 缓存音频=" + ((_pa && _pa.url) ? "✓" : "✗") + "（" + (w * 0.25).toFixed(1) + "s）");
+        const _tnow = stripStageDirections(String(ta3.value || "").trim());
+        // 1.6.129 诊断: AI 润色会把预合成文本换成润色稿 → 必须用 srcText 匹配(否则"已预加载"再点不发送)
+        const _match = preloadHit(_tnow);
+        push("- L 预加载: " + (_done ? "✓ 预合成完成" : "✗ 未完成") + " | 缓存音频=" + ((_pa && _pa.url) ? "✓" : "✗") + "（" + (w * 0.25).toFixed(1) + "s）"
+          + " | 再点可发送=" + (_match ? "✓" : "✗")
+          + (_match ? "" : "（输入一致=" + ((_pa && String(_pa.srcText || _pa.text || "") === _tnow) ? "是" : "否")
+            + " 声音签名=" + ((_pa && _pa.watchKey === makeWatchKey()) ? "未变" : "已变") + "）"));
         if (!_done || !(_pa && _pa.url)) fails.push("L预加载");
         if (_done) {
           const _mBefore = (game.messages && game.messages.contents) ? game.messages.contents.length : 0;
-          btn.click();   // done 状态再点 = 直接发送
+          btn.click();   // done 状态再点 = 直接发送(文字已改则先重合成再发送)
           let w2 = 0, _mNew = null;
-          while (w2 < 100) {
+          while (w2 < 300) {
             const arr = (game.messages && game.messages.contents) || [];
             if (arr.length > _mBefore) { _mNew = arr[arr.length - 1]; break; }
             await new Promise(r => setTimeout(r, 200)); w2++;
           }
           if (_mNew && _mNew.id) _testMsgIds.push(_mNew.id);
           let w3 = 0, _aud = false;
-          while (w3 < 100) {
+          while (w3 < 150) {
             try { const mm = game.messages.get(_mNew && _mNew.id); const f = mm && mm.flags && mm.flags[MOD]; if (f && (f.audioUrl || f.audioData)) { _aud = true; break; } } catch (e) { /* noop */ }
             await new Promise(r => setTimeout(r, 200)); w3++;
           }
-          push("- L 预加载→发送: 消息=" + (_mNew ? "✓" : "✗") + " 音频写回=" + (_aud ? "✓" : "✗"));
+          push("- L 预加载→发送: 消息=" + (_mNew ? "✓" : "✗") + " 音频写回=" + (_aud ? "✓" : "✗") + "（" + (w2 * 0.2).toFixed(1) + "s）");
           if (!_mNew || !_aud) fails.push("L预加载发送");
           try { if (ta3.value) ta3.value = ""; } catch (e) { /* noop */ }
         }
@@ -5091,8 +5121,9 @@ window.runFinalTest = async function runFinalTest() {
     if (_secTxt) push("- 耗时明细: " + _secTxt);
   } catch (e) { /* noop */ }
   push("");
-  // 清理测试消息
-  if (_testMsgIds.length && getCfg().finalTestKeepMsgs !== true) {
+  // 清理测试消息(1.6.129: 原判断读 getCfg().finalTestKeepMsgs —— 该设定并不存在, 恒为 undefined;
+  //   改为运行时开关: 控制台执行 window.__fvttTTSKeepTestMsgs = true 可保留测试消息便于排查)
+  if (_testMsgIds.length && window.__fvttTTSKeepTestMsgs !== true) {
     let _del = 0;
     for (const _mid of _testMsgIds) { try { const m = game.messages.get(_mid); if (m && typeof m.delete === "function") { await m.delete(); _del++; } } catch (e) { /* noop */ } }
     push("- 已清理测试消息: " + _del + "/" + _testMsgIds.length + " 条");
