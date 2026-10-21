@@ -19,7 +19,7 @@ window.fetchAndRefreshModels = fetchAndRefreshModels;
 const MODULE = "gpt-sovits-tts";
 // 1.6.103 代码版本号: Foundry 的 game.modules.get(id).version 读的是"载入世界时的清单缓存",
 //   改了 manifest 不刷新会一直显示旧版本(用户多次看到 1.6.96 而实际代码已是新版) → 报告里同时打印两者, 便于确认真的在跑新代码
-const MOD_VERSION = "1.6.123";
+const MOD_VERSION = "1.6.124";
 const CHAT_STYLES = (typeof CONST !== "undefined" && (CONST.CHAT_MESSAGE_STYLES || CONST.CHAT_MESSAGE_TYPES)) || {};
 
 /* ============ 设置定义 ============ */
@@ -4695,7 +4695,7 @@ window.runFinalTest = async function runFinalTest() {
   push("- 时间: " + new Date().toLocaleString("zh-CN") + " | 执行者: " + opName + " | 当前角色: " + cn + " | 代码版本: " + MOD_VERSION + "(清单缓存显示 " + verTxt + ")");
   push("- 版本断言: 代码版本=" + MOD_VERSION + " | Foundry 清单缓存=" + verTxt + (String(verTxt) === String(MOD_VERSION) ? " ✓ 一致" : "（清单缓存落后属正常，只要下面的版本断言 ✓ 且工具栏出现 🩺 立绘诊断，就是在跑新代码）"));
   push("- 测试脚本: **v5**(模块 " + MOD_VERSION + " 内置) | 覆盖: 〇改动自检 · 环境与配置 · AI/Key · 语气提示 · 朗读提示词(强度) · 情绪参考音 · **多场景实测(6 条)** · 立绘实物 · 语气送达 · 代理合成 · 白名单/按钮/去重 · 需求对照");
-  push("  (v4: 把 1.6.96~1.6.111 所有未经实测的改动都拉进判定 —— 多场景语气/立绘、情绪占比 0=自动、四滑块 0=自动、代理合成、白名单、AI 去重、崩溃上报; 任一项不符都会进失败清单)");
+  push("  (v5: 把 1.6.96~1.6.123 所有改动都拉进判定 —— 多场景语气/立绘、情绪占比 0=自动(0.5 叠加)、四滑块 0=自动、代理合成、白名单、AI 去重、崩溃上报、省 token 机制(每句 1 次/快路径 0 次)、看门狗脚本是否还在; 任一项不符都会进失败清单)");
   push("");
   push("## 一、环境与配置");
   let engOk = false;
@@ -4882,7 +4882,19 @@ window.runFinalTest = async function runFinalTest() {
         } catch (e) { return null; }
       })();
       const _txtG = "今天的事情，就交给我吧。";
-      const _emosG = [{ key: "angry", label: "生气" }, { key: "calm", label: "平静" }, { key: "joy", label: "开心" }];
+      const _emosG = (() => {
+      try {
+        const _cG = (quickChars && quickChars.chars || []).find(x => x.name === cn);
+        const _slotsG = ((_cG && _cG.emotions) || []).filter(e => e && e.key);
+        const _seG = (() => { try { return styleEmotionKey(getStylePrompt(cn) || ""); } catch (e) { return ""; } })();
+        const _stySlot = _seG ? findEmotionSlot(_seG, cn) : null;
+        const out = [];
+        if (_stySlot && _stySlot.key) out.push({ key: _stySlot.key, label: _stySlot.label || _stySlot.key });
+        _slotsG.forEach(e => { if (out.length < 4 && !out.some(x => x.key === e.key)) out.push({ key: e.key, label: e.label || e.key }); });
+        if (out.length >= 2) return out;
+      } catch (e) { /* noop */ }
+      return [{ key: "angry", label: "生气" }, { key: "calm", label: "平静" }, { key: "joy", label: "开心" }];
+    })();
       const _callG = async (prompt) => {
         try {
           const r = await svcRequest(cfg.serverUrl, "POST", "/llm", {
@@ -4897,7 +4909,7 @@ window.runFinalTest = async function runFinalTest() {
       const _testP = _gmP || "用愤怒、压着火气的语气说话";   // 未填时用示例做对照
       const _base0 = await _callG("");
       const _withP = await _callG(_testP);
-      push("- 对照(同一句「" + _txtG.slice(0, 10) + "…」· 选项 生气/平静/开心):");
+      push("- 对照(同一句「" + _txtG.slice(0, 10) + "…」· 选项 " + _emosG.map(x => String(x.label || x.key).slice(0, 6)).join("/") + "):");
       push("   · 无语气提示 → 情绪=" + (_base0.emotion || "(失败)"));
       push("   · 有语气提示「" + _testP.slice(0, 18) + "」→ 情绪=" + (_withP.emotion || "(失败)") + " | 指令已注入=" + (_withP.injected ? "✓" : "✗"));
       const _changed = !!(_base0.emotion && _withP.emotion && _base0.emotion !== _withP.emotion);
@@ -5076,7 +5088,8 @@ window.runFinalTest = async function runFinalTest() {
         + " | 润色=" + ((_fNow.polishText || "").trim() ? "✓" : "—")
         + " | 合成=" + (aud || "超时")
         + " | 参考音=" + ((_spNow.aux && _spNow.aux.length) ? "✓" : "无") + " 占比=" + (_spNow.mix == null ? "?" : _spNow.mix) + " 语速=" + Number(_spNow.spd || 1).toFixed(2)
-        + " | 立绘=" + (_av ? String(_av).slice(-24) : "无") + headTxt);
+        + " | 立绘=" + (_av ? String(_av).slice(-24) : "无") + headTxt
+        + (sc.manualSlot ? "（手动选槽不调 AI, 故无润色属正常）" : ""));
       // —— 断言(每条场景都查) ——
       if (!aud) fails.push(sc.label + "合成");
       if (sc.expect && _emoSema !== sc.expect) fails.push(sc.label + "语气语义(" + _emoSema + "≠" + sc.expect + ")");
@@ -5390,7 +5403,7 @@ window.runFinalTest = async function runFinalTest() {
   } catch (e) { push("- ✗ 降级实测异常: " + String((e && e.message) || e).slice(0, 80)); fails.push("参考音降级异常"); }
 
   _mark("代理/白名单"); push("## 四、结论");
-  push("- 测试脚本: v4(代码版本 " + MOD_VERSION + ", 清单缓存 " + verTxt + ") | 耗时: " + Math.round((Date.now() - t0) / 1000) + "s | LLM: " + (llmOk ? "AI链路(判语气+润色+选立绘)已启用" : "规则降级(无AI: 文本规则/提示词基调; 情绪差异靠情绪参考音, 默认零 DSP 不变调)"));
+  push("- 测试脚本: v5(代码版本 " + MOD_VERSION + ", 清单缓存 " + verTxt + ") | 耗时: " + Math.round((Date.now() - t0) / 1000) + "s | LLM: " + (llmOk ? "AI链路(判语气+润色+选立绘)已启用" : "规则降级(无AI: 文本规则/提示词基调; 情绪差异靠情绪参考音, 默认零 DSP 不变调)"));
   push("- 关键项: " + (fails.length ? ("⚠ 存在问题 → " + fails.join("、")) : "全部通过 ✓"));
   // 1.6.104 耗时明细(哪一段慢一目了然): 上次 475s 就靠这个定位到"AI 探测重试 + 首次合成排队"
   try {
