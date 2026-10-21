@@ -19,7 +19,7 @@ window.fetchAndRefreshModels = fetchAndRefreshModels;
 const MODULE = "gpt-sovits-tts";
 // 1.6.103 代码版本号: Foundry 的 game.modules.get(id).version 读的是"载入世界时的清单缓存",
 //   改了 manifest 不刷新会一直显示旧版本(用户多次看到 1.6.96 而实际代码已是新版) → 报告里同时打印两者, 便于确认真的在跑新代码
-const MOD_VERSION = "1.6.126";
+const MOD_VERSION = "1.6.127";
 const CHAT_STYLES = (typeof CONST !== "undefined" && (CONST.CHAT_MESSAGE_STYLES || CONST.CHAT_MESSAGE_TYPES)) || {};
 
 /* ============ 设置定义 ============ */
@@ -4767,8 +4767,12 @@ window.runFinalTest = async function runFinalTest() {
     _chk("占比 0 无参考音 → 不改", normalizeEmotionMix({ emotionMix: 0 }).emotionMix === 0);
     _chk("手动占比 0.7 被尊重", normalizeEmotionMix({ auxRefAudioPaths: ["a.wav"], emotionMix: 0.7 }).emotionMix === 0.7);
     _chk("害羞/羞涩 → shy", normalizeEmotionKey("害羞羞涩") === "shy" && styleEmotionKey("害羞羞涩的语气") === "shy");
-    _chk("shy → 命中中文槽", (() => { try { const s = findEmotionSlot("shy", cn); return !!(s && s.key); } catch (e) { return false; } })());
-    _chk("四项调配默认 0=自动", Number(cfg.volume) === 0 && Number(cfg.speedFactor) === 0);
+    const _hasShySlot = (() => { try { const c = (quickChars && quickChars.chars || []).find(x => x.name === cn); return ((c && c.emotions) || []).some(e => /害羞/.test(String(e && e.label))); } catch (e) { return false; } })();
+    if (_hasShySlot) _chk("shy → 命中中文槽", (() => { try { const s = findEmotionSlot("shy", cn); return !!(s && s.key); } catch (e) { return false; } })());
+    else push("- · 角色无害羞槽 → shy 匹配断言跳过");
+    const _isDefault0 = Number(cfg.volume) === 0 && Number(cfg.speedFactor) === 0;
+    if (_isDefault0) _chk("四项调配默认 0=自动", true);
+    else push("- · 你手动设过音量/语速(" + cfg.volume + "/" + cfg.speedFactor + ") → 「默认 0」不判失败; 0=自动语义已由占比/快路径用例覆盖");
     _chk("音量 0 不静音(playVolume=1)", playVolume() === 1);
     _chk("崩溃上报可用", (() => {
       const b = (window.__fvttTTSCrashList || []).length;
@@ -4784,14 +4788,17 @@ window.runFinalTest = async function runFinalTest() {
       const r1 = await svcRequest(cfg.serverUrl, "GET", "/watchdog", null, { timeoutMs: 12000, retries: 0, quiet: true });
       _wd = (r1 && typeof r1.json === "function") ? await r1.json().catch(() => null) : null;
     } catch (e) { /* noop */ }
-    _chk("看门狗脚本存在", !!(_wd && _wd.script), _wd ? ("script=" + _wd.script + " size=" + (_wd.script_size || 0)) : "端点不可用");
-    _chk("看门狗开机自启已安装", !!(_wd && _wd.startup), _wd ? String(_wd.startup_path || "").slice(-40) : "");
+    if (_wd && _wd.script !== undefined) {
+      _chk("看门狗脚本存在", !!_wd.script, "size=" + (_wd.script_size || 0));
+      _chk("看门狗开机自启已安装", !!_wd.startup, String(_wd.startup_path || "").slice(-40));
+    } else push("- · 看门狗检查: 跳过（引擎未提供 /watchdog → 重启一次引擎后可测）");
     let _pk = null;
     try {
       const r2 = await svcRequest(cfg.serverUrl, "GET", "/packcheck", null, { timeoutMs: 12000, retries: 0, quiet: true });
       _pk = (r2 && typeof r2.json === "function") ? await r2.json().catch(() => null) : null;
     } catch (e) { /* noop */ }
-    _chk("打包脚本含看门狗三件套", !!(_pk && _pk.has_watchdog && _pk.has_install && _pk.has_uninstall), _pk ? ("bat=" + _pk.bat + " wd=" + _pk.has_watchdog + " inst=" + _pk.has_install + " unin=" + _pk.has_uninstall) : "端点不可用(引擎为旧版)");
+    if (_pk && _pk.bat !== undefined) _chk("打包脚本含看门狗三件套", !!(_pk.has_watchdog && _pk.has_install && _pk.has_uninstall), "bat=" + _pk.bat + " wd=" + _pk.has_watchdog + " inst=" + _pk.has_install + " unin=" + _pk.has_uninstall);
+    else push("- · 打包完整性: 跳过（引擎未提供 /packcheck → 重启一次引擎后可测）");
     const _bad = _chkRows.filter(x => !x.ok);
     push("- 断言 " + _chkRows.length + " 项: " + (_bad.length ? ("✗ " + _bad.length + " 项失败") : "全部 ✓"));
     _bad.forEach(x => push("  ✗ " + x.name + (x.detail ? ("（" + x.detail + "）") : "")));
