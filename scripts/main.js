@@ -19,7 +19,7 @@ window.fetchAndRefreshModels = fetchAndRefreshModels;
 const MODULE = "gpt-sovits-tts";
 // 1.6.103 代码版本号: Foundry 的 game.modules.get(id).version 读的是"载入世界时的清单缓存",
 //   改了 manifest 不刷新会一直显示旧版本(用户多次看到 1.6.96 而实际代码已是新版) → 报告里同时打印两者, 便于确认真的在跑新代码
-const MOD_VERSION = "1.6.125";
+const MOD_VERSION = "1.6.126";
 const CHAT_STYLES = (typeof CONST !== "undefined" && (CONST.CHAT_MESSAGE_STYLES || CONST.CHAT_MESSAGE_TYPES)) || {};
 
 /* ============ 设置定义 ============ */
@@ -556,6 +556,7 @@ async function synthSafe(runner, txt, lang, opts) {
 /* ============ 核心: 朗读 ============ */
 async function speak(text, { lang = null, sender = "", refAudioPath = null, promptText = null, promptLang = null, speed = null, volume = null, auxRefAudioPaths = null, emotionMix = null, emotion = null, broadcast = false, messageId = "", skipAiEmotion = false, role = null, aiDirect = false } = {}) {
   const cfg = getCfg();
+  try { window.__fvttTTSLastSpeakAt = Date.now(); } catch (e) { /* noop */ }   // 1.6.126 埋点: 验证打字朗读/预加载真的走到 speak
   if (!cfg.enabled) return false;
   // 调试: 记录每次朗读调用(来源/语言), 排查"日语+中文重复读"
   try { console.debug("[gpt-sovits-tts] speak call", { text: String(text).slice(0, 40), lang, broadcast, messageId, from: (new Error().stack || "").split("\n")[2] || "" }); } catch (e) { /* noop */ }
@@ -4682,783 +4683,407 @@ window.runFinalTest = async function runFinalTest() {
   let verTxt = "?"; try { verTxt = game.modules.get(MOD) ? game.modules.get(MOD).version : "?"; } catch (e) { /* noop */ }
   let opName = ""; try { opName = (game.user && game.user.name) || ""; } catch (e) { /* noop */ }
   const cfg = getCfg();
-  const style = (() => { try { return getStylePrompt(cn) || ""; } catch (e) { return ""; } })();
   const fails = [];
-  // 1.6.104 分段耗时: 一处跑 4~8 分钟的测试必须能看出"时间花在哪"(上次用户跑 475s 却不知慢在哪)
-  const _secMs = {};
-  let _secT = Date.now();
+  const _secMs = {}; let _secT = Date.now();
   const _mark = (k) => { try { const n = Date.now(); _secMs[k] = Math.round((n - _secT) / 1000); _secT = n; } catch (e) { /* noop */ } };
   const _note = (s) => { try { ui.notifications.info(s); } catch (e) { /* noop */ } };
 
-  push("# GPT-SoVITS TTS 最终测试报告");
-  push("");
-  push("- 时间: " + new Date().toLocaleString("zh-CN") + " | 执行者: " + opName + " | 当前角色: " + cn + " | 代码版本: " + MOD_VERSION + "(清单缓存显示 " + verTxt + ")");
-  push("- 版本断言: 代码版本=" + MOD_VERSION + " | Foundry 清单缓存=" + verTxt + (String(verTxt) === String(MOD_VERSION) ? " ✓ 一致" : "（清单缓存落后属正常，只要下面的版本断言 ✓ 且工具栏出现 🩺 立绘诊断，就是在跑新代码）"));
-  push("- 测试脚本: **v5**(模块 " + MOD_VERSION + " 内置) | 覆盖: 〇改动自检 · 环境与配置 · AI/Key · 语气提示 · 朗读提示词(强度) · 情绪参考音 · **多场景实测(6 条)** · 立绘实物 · 语气送达 · 代理合成 · 白名单/按钮/去重 · 需求对照");
-  push("  (v5: 把 1.6.96~1.6.123 所有改动都拉进判定 —— 多场景语气/立绘、情绪占比 0=自动(0.5 叠加)、四滑块 0=自动、代理合成、白名单、AI 去重、崩溃上报、省 token 机制(每句 1 次/快路径 0 次)、看门狗脚本是否还在; 任一项不符都会进失败清单)");
-  push("");
-  push("## 一、环境与配置");
-  let engOk = false;
-  try {
-    const rs = await svcRequest(cfg.serverUrl, "GET", "/status", null, { timeoutMs: 8000, retries: 0 });
-    const sj = (rs && typeof rs.json === "function") ? await rs.json().catch(() => ({})) : {};
-    engOk = !!(rs && rs.ok && sj && sj.ok);
-    push("- 引擎连通: " + (engOk
-      ? ("✓ 服务=" + String(sj.service || "") + " | 激活角色=" + String((sj.character && sj.character.name) || "?") + " | device=" + String(sj.device || ""))
-      : ("✗ " + String((sj && sj.message) || ("http " + (rs && rs.status))))));
-  } catch (e) {
-    push("- 引擎连通: ✗ 连不上(" + String((e && e.message) || e).slice(0, 70) + ")");
-  }
-  if (!engOk) fails.push("引擎连通");
-  if (cfg.llmEnabled && cfg.llmKey && window.__fvttTTSLlmBroken === true) { try { await probeLLMOnce(); } catch (e) { /* noop */ } }
-  const llmOk = !!(cfg.llmEnabled && cfg.llmKey) && window.__fvttTTSLlmBroken !== true;
-  push("- LLM: " + (llmOk ? "可用✓" : ((cfg.llmEnabled && cfg.llmKey) ? ("禁用 — " + String(window.__fvttTTSLlmErr || "?").slice(0, 150)) : "未配置(设置里开 AI 并填 key)")));
-  push("- LLM 配置: base=" + String(cfg.llmBaseUrl || "(空)").slice(0, 50) + " | model=" + String(cfg.llmModel || "(空)") + " | key=" + maskKey(cfg.llmKey));
-  // 1.6.79 AI 调用统计(引擎侧真实计数): 直接回答"到底有没有调动 AI / 为什么服务商没花费"
-  try {
-    const _rs = await svcRequest(cfg.serverUrl, "GET", "/llm/stats", null, { timeoutMs: 8000, retries: 0 });
-    const _sj = (_rs && typeof _rs.json === "function") ? await _rs.json().catch(() => ({})) : {};
-    const _st = (_sj && _sj.stats) || null;
-    if (_st) {
-      push("- AI 调用统计(引擎侧): 累计 " + _st.calls + " 次（成功 " + _st.ok + " / 失败 " + _st.fail + "）"
-        + (_st.last_at ? (" | 最近一次 " + new Date(_st.last_at * 1000).toLocaleTimeString("zh-CN") + " model=" + String(_st.last_model || "")) : "")
-        + (_st.last_err ? (" | 最近失败: " + String(_st.last_err).slice(0, 150)) : ""));
-      if (!_st.calls) push("  ⚠ 引擎从未收到 AI 请求 → 客户端在探测/调用前就跳过了（LLM 被标记不可用 / 未启用 / 未填 key）。失败请求(401/模型不存在)不会产生花费。");
-    } else push("- AI 调用统计: 引擎未返回统计(可能是旧引擎)");
-  } catch (e) { push("- AI 调用统计: 查询失败(" + String((e && e.message) || e).slice(0, 60) + ")"); }
-  push("- 朗读提示词: " + (style || "(未填)") + " | AI润色=" + (cfg.llmPolish ? "开" : "关"));
-  // 1.6.111 调配项(0=自动: 交给 AI/提示词/引擎)
-  try {
-    push("- 调配(0=自动): 音量=" + (Number(cfg.volume) > 0 ? Number(cfg.volume).toFixed(2) : "自动")
-      + " · 语速=" + (Number(cfg.speedFactor) > 0 ? Number(cfg.speedFactor).toFixed(2) : "自动"));
-  } catch (e) { /* noop */ }
-  // 1.6.97 语气提示已并入"朗读提示词"(每角色/每玩家独立) — 报告里说明分工
-  try {
-    push("- 语气提示: 由「朗读提示词」承担（每角色/每位玩家独立；上行为空则无语气提示）");
-  } catch (e) { /* noop */ }
-  // 1.6.74 明确"合成压力在哪台机器": 本机直连=用自己的引擎; GM代理=委托给语音生成者
-  try {
-    const _su = String(cfg.serverUrl || "");
-    const _isLocal = /127\.0\.0\.1|localhost/i.test(_su);
-    const _by = (() => { try { return String(window.__fvttTTSLastSynthBy || ""); } catch (e) { return ""; } })();
-    const _cdTxt = (window.__fvttTTSCanDirect === true)
-      ? ("本机直连(自己合成 → 压力在本机" + (_isLocal ? ", 用本机引擎" : ", 用 " + _su) + ")")
-      : (window.__fvttTTSCanDirect === false ? "代理合成(委托 → 压力在对方那台机器)" : "探测中(页面刚加载)");
-    push("- 合成方式: " + _cdTxt + (_by ? (" | 最近一次由「" + _by + "」的电脑合成(按语音生成者分配)") : ""));
-  } catch (e) { /* noop */ }
-  // 1.6.102 立绘展示方式: =indicator/none 时消息里本来就不插图, 会让"没有立绘"看起来像 bug
-  try {
-    const _pm = String(cfg.portraitMode || "");
-    const _pmOk = (_pm === "message" || _pm === "both");
-    push("- 立绘展示方式: " + (_pm || "(空)") + (_pmOk ? " ✓(消息内插图)" : " ⚠ 不会在消息内插立绘 → 语音设置里改成「消息内/both」"));
-  } catch (e) { /* noop */ }
-  push("");
-  // 1.6.81 AI / Key 专项测试: 验证 key 有效性、base 端点、当前模型可用性, 并在当前模型不可用时自动找可用模型
-  // 1.6.112 〇: 本轮(1.6.96~1.6.111)改动自检 —— 纯逻辑, 不联网, 不依赖引擎
-  push("");
-  push("## 一·0、本轮改动自检(纯逻辑, 不联网)");
-  push("");
-  const _chk = (name, ok, detail) => { push("- " + (ok ? "✓ " : "✗ ") + name + (detail ? ("（" + detail + "）") : "")); if (!ok) fails.push(name); return ok; };
-  try {
-    const _o1 = normalizeEmotionMix({ auxRefAudioPaths: ["a.wav"], emotionMix: 0 });
-    _chk("情绪占比 0 + 有参考音 → 按 0.5(基础音+情绪叠加)", _o1.emotionMix === 0.5, "mix=" + _o1.emotionMix);
-    const _o2 = normalizeEmotionMix({ emotionMix: 0 });
-    _chk("情绪占比 0 且无参考音 → 不误改", _o2.emotionMix === 0);
-    const _o3 = normalizeEmotionMix({ auxRefAudioPaths: ["a.wav"], emotionMix: 0.5 });
-    _chk("用户手动占比 0.7 → 尊重(不改)", (function () { const _o = normalizeEmotionMix({ auxRefAudioPaths: ["a.wav"], emotionMix: 0.7 }); return _o.emotionMix === 0.7; })());
-  } catch (e) { _chk("情绪占比规范化", false, String((e && e.message) || e).slice(0, 50)); }
-  try {
-    _chk("「害羞/羞涩」→ shy", normalizeEmotionKey("害羞羞涩") === "shy" && styleEmotionKey("害羞羞涩的语气") === "shy");
-    _chk("「害羞，脸红」→ shy", normalizeEmotionKey("害羞，脸红") === "shy");
-    const _hasShy = (() => { try { const c = (quickChars && quickChars.chars || []).find(x => x.name === cn); return ((c && c.emotions) || []).some(e => /害羞/.test(String(e && e.label))); } catch (e) { return false; } })();
-    if (_hasShy) {
-      const _shySlot = (() => { try { return findEmotionSlot("shy", cn); } catch (e) { return null; } })();
-      _chk("英语枚举 shy → 命中中文情绪槽", !!(_shySlot && _shySlot.key), _shySlot ? String(_shySlot.key) : "未命中");
-    } else push("- · 角色「" + cn + "」没有害羞槽 → 该断言跳过");
-  } catch (e) { _chk("shy 映射", false, String((e && e.message) || e).slice(0, 40)); }
-  try {
-    const _cfg0 = getCfg();
-    _chk("四项调配默认 0 = 自动", Number(_cfg0.volume) === 0 && Number(_cfg0.speedFactor) === 0, "音量=" + _cfg0.volume + " 语速=" + _cfg0.speedFactor);
-    _chk("音量 0 不会静音(playVolume→1.0)", playVolume() === 1, "playVolume=" + playVolume());
-  } catch (e) { _chk("调配默认值", false); }
-  try {
-    _chk("立绘候选链函数就绪(toAvatarUrl/applyEmotionAvatar)", typeof toAvatarUrl === "function" && typeof applyEmotionAvatar === "function");
-    _chk("立绘诊断可用(fvttTTSDiag)", typeof window.fvttTTSDiag === "function");
-    const _crashOk = (() => {
-      const _b = (window.__fvttTTSCrashList || []).length;
-      const _prev = window.__fvttTTSCrashNotified;
-      window.__fvttTTSCrashNotified = true;   // 测试期间不要弹错误通知
-      window.__fvttTTSCrashSilent = true;     // 1.6.125 也不要在控制台打红字(那条 finaltest-probe 会吓人)
-      try { reportSpeakCrash(new Error("finaltest-probe")); } catch (e) { /* noop */ }
-      window.__fvttTTSCrashNotified = _prev;
-      window.__fvttTTSCrashSilent = false;
-      return (window.__fvttTTSCrashList || []).length > _b;
-    })();
-    _chk("朗读崩溃上报可用(reportSpeakCrash)", _crashOk);
-    _chk("代码版本常量", /^[0-9]+\.[0-9]+\.[0-9]+$/.test(String(MOD_VERSION)), "MOD_VERSION=" + MOD_VERSION);
-  } catch (e) { _chk("工具函数自检", false); }
-
-  _mark("环境与配置");
-  _note("① AI/Key 探测中(每个模型一次真实调用, 可能 20~60s)…");
-  push("## 一·A、AI / Key 专项测试");
-  push("");
-  try {
-    if (!cfg.llmEnabled) push("- AI 开关: ✗ 未启用（语音设置 → AI 接入 → 填好后点「保存 AI 配置」）");
-    else if (!cfg.llmKey) push("- 密钥: ✗ 未填写（语音设置 → AI 接入 → 密钥）");
-    else {
-      push("- 配置: base=" + String(cfg.llmBaseUrl || "(空)") + " | model=" + String(cfg.llmModel || "(空)") + " | key=" + maskKey(cfg.llmKey));
-      // ① 模型列表(同时验证 base 端点 + key 有效性)
-      let _models = [];
-      try {
-        const _mr = await svcRequest(cfg.serverUrl, "POST", "/llm/models", { base: cfg.llmBaseUrl, key: cfg.llmKey }, { timeoutMs: 20000, retries: 0 });
-        const _mj = (_mr && typeof _mr.json === "function") ? await _mr.json().catch(() => ({})) : {};
-        if (_mr && _mr.ok && _mj && _mj.ok) {
-          _models = (_mj.models || []).slice(0, 8);
-          push("- 模型列表: ✓ key 有效（服务返回 " + (_mj.models || []).length + " 个模型: " + _models.slice(0, 6).join(", ") + (_models.length > 6 ? " …" : "") + "）");
-        } else {
-          const _m = String((_mj && _mj.message) || ("http " + (_mr && _mr.status))).slice(0, 170);
-          push("- 模型列表: ✗ " + _m);
-          if (/401|invalid api key|unauthorized|authentication/i.test(_m)) push("  → **密钥无效/过期**（服务商不会扣费）");
-          else if (/非 JSON|<!doctype|html/i.test(_m)) push("  → **base 地址错误**（该路径不是 API 端点）");
-        }
-      } catch (e) { push("- 模型列表: ✗ 请求失败 " + String((e && e.message) || e).slice(0, 90)); }
-      // ② 当前模型实测(真实 chat 请求)
-      let _curOk = false, _curMsg = "";
-      try {
-        const _pr = await (typeof window.probeModelUsable === "function" ? window.probeModelUsable(cfg.llmModel) : Promise.resolve(null));
-        _curOk = !!(_pr && _pr.ok);
-        _curMsg = String((_pr && _pr.reason) || "");
-        push("- 当前模型实测（" + String(cfg.llmModel || "?") + "）: " + (_curOk ? "✓ 可用（AI 判语气/润色/选立绘会生效）" : ("✗ " + _curMsg.slice(0, 170))));
-      } catch (e) { push("- 当前模型实测: ✗ " + String((e && e.message) || e).slice(0, 90)); }
-      // ③ 当前模型不可用 → 从服务商列表里自动找可用模型
-      let _first = "";
-      if (!_curOk && _models.length) {
-        // 1.6.104 自动找可用模型: 只探最多 2 个 + 15s 超时 + 不重试(避免测试本身跑到 5~8 分钟)
-        const _cand = _models.slice(0, 2);
-        const _marks = [];
-        for (const _m2 of _cand) {
-          try {
-            const _p2 = await (typeof window.probeModelUsable === "function" ? window.probeModelUsable(_m2, { timeoutMs: 15000, retry: false }) : Promise.resolve(null));
-            if (_p2 && _p2.ok) { _marks.push(_m2 + " ✓" + (_p2.retried ? "(重试后成功)" : "")); if (!_first) _first = _m2; }
-            else _marks.push(_m2 + " ✗ " + String((_p2 && _p2.reason) || "").slice(0, 50));
-          } catch (e) { _marks.push(_m2 + " ✗"); }
-        }
-        push("- 自动找可用模型: " + _marks.join(" / ") + (_first ? (" → **建议改用 " + _first + "**（语音设置 → AI 接入 → 模型下拉）") : " → 没有可用模型（key 可能无额度/无权限）"));
-        // 1.6.104 复核: 当前模型在重试中又能用 → 属瞬时失败, 不计失败
-        //   (实测报告出现过自相矛盾: "当前模型 ✗ http 0" 紧接 "自动找: 同一模型 ✓")
-        if (_first && _first === String(cfg.llmModel || "")) {
-          _curOk = true;
-          push("  → **复核**: 当前模型重试后可用 ✓ → 上面的 ✗ 属瞬时失败(引擎忙/网络抖动), **不计入失败**");
-        }
-      }
-      // ④ 引擎侧调用统计(1.6.79)
-      try {
-        const _sr2 = await svcRequest(cfg.serverUrl, "GET", "/llm/stats", null, { timeoutMs: 8000, retries: 0 });
-        const _sj2 = (_sr2 && typeof _sr2.json === "function") ? await _sr2.json().catch(() => ({})) : {};
-        const _st2 = (_sj2 && _sj2.stats) || null;
-        if (_st2) push("- 引擎侧统计: 累计 " + _st2.calls + " 次（成功 " + _st2.ok + " / 失败 " + _st2.fail + "）"
-          + (Number(_st2.in_tokens || 0) > 0 ? (" | token 累计 输入 " + _st2.in_tokens + " · 输出 " + _st2.out_tokens + "（最近一次 " + (_st2.last_in || 0) + "/" + (_st2.last_out || 0) + "）") : "")
-          + (_st2.last_err ? (" | 最近失败: " + String(_st2.last_err).slice(0, 130)) : ""));
-      } catch (e) { /* noop */ }
-      // ⑤ 结论
-      push("- **AI 结论**: " + (_curOk ? "✓ AI 链路可用" : (_models.length ? "✗ 当前模型不可用，但 key 有效 → 换一个可用模型即可" : "✗ 无法调用（先确认 key 有效、base 正确）")));
-      if (!_curOk) fails.push("AI/Key");
-    }
-  } catch (e) { push("- AI/Key 测试异常: " + String((e && e.message) || e).slice(0, 90)); }
-  push("");
-  // 1.6.95 语气提示实测: 证明「单句语气提示是否真的影响 AI 判定」+「AI 是否真的被调用」
-  _mark("AI/Key"); push("### 语气提示实测（是否生效 / 是否真的调动 AI）");
-  push("");
-  try {
-    // 1.6.97 语气提示 = 当前角色的"朗读提示词"(每玩家独立); 未填时用示例做对照以便验证功能
-    const _gmP = (() => { try { return String(getStylePrompt(cn) || "").trim(); } catch (e) { return ""; } })();
-    push("- 当前语气提示（朗读提示词）: " + (_gmP || "(未填 · 用示例对照)"));
-    if (!(cfg.llmEnabled && cfg.llmKey)) {
-      push("- 跳过: LLM 未配置/未启用（语气提示只在 AI 可用时生效）");
-    } else {
-      const _statBefore = await (async () => {
-        try {
-          const r = await svcRequest(cfg.serverUrl, "GET", "/llm/stats", null, { timeoutMs: 8000, retries: 0 });
-          const j = (r && typeof r.json === "function") ? await r.json().catch(() => ({})) : {};
-          return (j && j.stats) || null;
-        } catch (e) { return null; }
-      })();
-      const _txtG = "今天的事情，就交给我吧。";
-      const _emosG = (() => {
-      try {
-        const _cG = (quickChars && quickChars.chars || []).find(x => x.name === cn);
-        const _slotsG = ((_cG && _cG.emotions) || []).filter(e => e && e.key);
-        const _seG = (() => { try { return styleEmotionKey(getStylePrompt(cn) || ""); } catch (e) { return ""; } })();
-        const _stySlot = _seG ? findEmotionSlot(_seG, cn) : null;
-        const out = [];
-        if (_stySlot && _stySlot.key) out.push({ key: _stySlot.key, label: _stySlot.label || _stySlot.key });
-        _slotsG.forEach(e => { if (out.length < 4 && !out.some(x => x.key === e.key)) out.push({ key: e.key, label: e.label || e.key }); });
-        if (out.length >= 2) return out;
-      } catch (e) { /* noop */ }
-      return [{ key: "angry", label: "生气" }, { key: "calm", label: "平静" }, { key: "joy", label: "开心" }];
-    })();
-      const _callG = async (prompt) => {
-        try {
-          const r = await svcRequest(cfg.serverUrl, "POST", "/llm", {
-            base: cfg.llmBaseUrl || "https://api.openai.com/v1", key: cfg.llmKey, model: cfg.llmModel || "gpt-4o-mini",
-            text: _txtG, emotions: _emosG, gm_prompt: String(prompt || ""), debug: true,
-          }, { timeoutMs: 20000, retries: 0 });
-          const j = (r && typeof r.json === "function") ? await r.json().catch(() => ({})) : {};
-          const dbg = String((j && j.debug_prompt) || "");
-          return { ok: !!(r && r.ok && j && j.ok), emotion: String((j && j.emotion) || ""), injected: /主持人语气指令/.test(dbg) };
-        } catch (e) { return { ok: false, emotion: "", injected: false, err: String((e && e.message) || e) }; }
-      };
-      const _testP = _gmP || "用愤怒、压着火气的语气说话";   // 未填时用示例做对照
-      const _base0 = await _callG("");
-      const _withP = await _callG(_testP);
-      push("- 对照(同一句「" + _txtG.slice(0, 10) + "…」· 选项 " + _emosG.map(x => String(x.label || x.key).slice(0, 6)).join("/") + "):");
-      push("   · 无语气提示 → 情绪=" + (_base0.emotion || "(失败)"));
-      push("   · 有语气提示「" + _testP.slice(0, 18) + "」→ 情绪=" + (_withP.emotion || "(失败)") + " | 指令已注入=" + (_withP.injected ? "✓" : "✗"));
-      const _changed = !!(_base0.emotion && _withP.emotion && _base0.emotion !== _withP.emotion);
-      push("   → " + (_changed
-        ? ("✓ 语气提示改变了 AI 判定（" + _base0.emotion + " → " + _withP.emotion + "）")
-        : (_withP.injected
-          ? "⚠ 指令已注入但判定未变（该台词/选项可能本就偏此语气，可换更强的语气词再测）"
-          : "⚠ 未检测到指令注入（确认已重载世界、引擎为 1.6.94+）")));
-      if (!_withP.ok) fails.push("语气提示实测");
-      const _statAfter = await (async () => {
-        try {
-          const r = await svcRequest(cfg.serverUrl, "GET", "/llm/stats", null, { timeoutMs: 8000, retries: 0 });
-          const j = (r && typeof r.json === "function") ? await r.json().catch(() => ({})) : {};
-          return (j && j.stats) || null;
-        } catch (e) { return null; }
-      })();
-      const _dc = (_statBefore && _statAfter) ? (Number(_statAfter.calls) - Number(_statBefore.calls)) : null;
-      push("- AI 真实调用: " + (_dc === null
-        ? "(统计不可用)"
-        : ("本次实测期间引擎收到 " + _dc + " 次 LLM 请求 " + (_dc >= 2 ? "✓ 确实调动了 AI" : "⚠ 少于预期(应≥2)"))));
-      if (_dc !== null && _dc < 2) fails.push("AI调用计数");
-    }
-  } catch (e) { push("- 语气提示实测异常: " + String((e && e.message) || e).slice(0, 90)); }
-  push("");
-  let _strengthOk = null;   // 1.6.112 记录强度实测结果(供需求对照)
-  _mark("语气提示"); push("## 二、朗读提示词(是否生效)");
-  if (!style) {
-    push("- ⚠ **未填写朗读提示词** → 引擎侧整段跳过提示词逻辑: 语速固定 spd=1.00、不做切分/停顿调整(与提示词无关)。");
-    push("- 填写位置: 语音设置 → 当前角色 → 朗读提示词(例: 严肃认真 / 愤怒 / 温柔缓慢 / 更活泼)。");
-  } else {
-    const _kw0 = styleKeywordParams(style, 20);
-    const _st0 = styleStrengthOf(cn) / 100;
-    const _cur = 1.0 + ((_kw0.speed || 1.0) - 1.0) * _st0;
-    const _ss = [];
-    [0, 25, 50, 100].forEach(pct => {
-      const spd = _kw0.speed ? (1 + (_kw0.speed - 1) * (pct / 100)) : 1.0;
-      _ss.push(pct + "%→spd=" + spd.toFixed(2));
-    });
-    push("- 提示词=\"" + style + "\" | 关键词" + (_kw0.speed ? ("命中语速=" + _kw0.speed) : "未命中语速") + " | 当前强度=" + Math.round(_st0 * 100) + "% → 本次 spd=" + _cur.toFixed(2) + (_kw0.split ? (" | 切分=" + _kw0.split) : "") + (_kw0.frag ? (" | 停顿frag=" + (_kw0.frag * _st0).toFixed(2)) : ""));
-    if (Math.round(_st0 * 100) <= 0) push("- ⚠ 强度=0% → 按设计**不改变语速/停顿**（提示词只影响 AI 判语气/立绘）；想听出语速变化，请把强度滑块调到 50%+");
-    push("- 强度插值表: " + _ss.join(" | ") + (_kw0.split ? " | 切分: <25% 不启用" : ""));
-    try {
-      const _sE = styleEmotionKey(style);
-      push("- 提示词→情绪基调: " + (_sE ? (_sE + " (命中提示词里的情绪词 → 该情绪决定立绘分组/参考音选择)") : "(提示词里无明确情绪词 → 情绪按台词文本规则判定)"));
-    } catch (e) { /* noop */ }
-    // 1.6.69 端到端实测: 同一句固定文本, 用 "强度0%(spd=1.00)" 与 "当前强度" 各合成一次, 比较音频时长
-    //   —— 时长按 1/spd 变化即证明提示词真的改变了朗读(不是只显示在报告里)
-    // 1.6.100 强度=0% 时语速按设计就是 1.00(无可比差异) → 跳过实测, 不再误记为失败
-    if (Math.round(_st0 * 100) <= 0) {
-      push("- 提示词实测: 跳过（强度=0% 时语速按设计不变，无可比差异；把强度调到 50%+ 才会实测）");
-    } else try {
-      const _txt = "提示词强度验证测试句，一二三四五六七八九十。";
-      const r1 = await gptSovitsSynth(_txt, "zh", { serverUrl: cfg.serverUrl, speedFactor: 1.0, mediaType: "mp3", asBlob: true, role: cn });
-      const r2 = await gptSovitsSynth(_txt, "zh", { serverUrl: cfg.serverUrl, speedFactor: _cur, mediaType: "mp3", asBlob: true, role: cn });
-      const u1 = (r1 && r1.blob) ? URL.createObjectURL(r1.blob) : "";
-      const u2 = (r2 && r2.blob) ? URL.createObjectURL(r2.blob) : "";
-      const a1 = u1 ? await analyzeAudioHead(u1) : null;
-      const a2 = u2 ? await analyzeAudioHead(u2) : null;
-      try { if (u1) URL.revokeObjectURL(u1); if (u2) URL.revokeObjectURL(u2); } catch (e) { /* noop */ }
-      if (a1 && a2 && a1.dur > 0) {
-        const _diff = (a2.dur - a1.dur) / a1.dur * 100;
-        const _okp = Math.abs(_diff) > 1.5;
-        _strengthOk = _okp;   // 1.6.112 供"需求对照"引用
-        push("- **提示词实测**: 强度0%(spd=1.00) 时长=" + a1.dur.toFixed(2) + "s vs 当前(spd=" + _cur.toFixed(2) + ") 时长=" + a2.dur.toFixed(2) + "s → 差异 " + (_diff >= 0 ? "+" : "") + _diff.toFixed(1) + "% " + (_okp ? "✓ 提示词确实生效" : "⚠ 差异不明显(强度太低, 或该提示词未命中关键词)"));
-        if (!_okp) fails.push("提示词生效");
-      } else push("- 提示词实测: 跳过(音频解析失败)");
-    } catch (e) { push("- 提示词实测: 跳过(" + String((e && e.message) || e).slice(0, 50) + ")"); }
-  }
-  // 1.6.70 精简(参考 Shinsekai 理念: 不做基础设施自检堆砌, 只看"实际朗读链路是否达到期望"):
-  //   已稳定项(引擎连通/合成播放/立绘切换/多模型/句首音量)不再逐条铺开, 只留 1 条实际朗读做健全性验证;
-  //   篇幅集中到当前还没解决的三件事 —— ① 提示词是否真的生效 ② 情绪是否有参考音(真换声线) ③ AI(LLM)链路
-  push("");
-  _mark("朗读提示词"); push("## 二·B、情绪参考音(决定\"情绪是否真的换声音\")");
-  push("");
-  try {
-    const _cc = (quickChars && quickChars.chars || []).find(x => x.name === cn) || null;
-    const _emos = (_cc && _cc.emotions) || [];
-    const _withRef = _emos.filter(e => e && (e.ref_audio_path || e.ref));
-    if (_withRef.length) {
-      push("- 角色「" + cn + "」情绪槽 " + _emos.length + " 个, 其中 **" + _withRef.length + " 个带参考音频** → 情绪差异 = 真换声线(同 Shinsekai): " + _withRef.slice(0, 8).map(e => (e.label || e.key || "")).join(" / "));
-    } else {
-      push("- ⚠ 角色「" + cn + "」**没有带参考音频的情绪槽** → 情绪不改变声线(只有文本/语速差异, 且默认零 DSP 不变调)。");
-      push("- 要像 Shinsekai 那样\"不同情绪不同声音\": 语音设置 → 情绪槽 → 给各情绪绑定该角色的样本音频。");
-    }
-  } catch (e) { push("- 情绪参考音: 读取失败"); }
-  push("");
-  _note("④ 多场景实测中(每条: AI 判语气 + 合成 + 写回, 约 5~15s)…"); _mark("情绪参考音");
-  push("## 三、多场景实测(每条都走真实链路: 发送 → AI判定 → 合成 → 写回)");
-  push("");
-  push("覆盖: ①提示词=害羞 ②提示词=愤怒 ③提示词=温柔 ④无提示词(AI自由判) ⑤手动选语气槽 ⑥AI直出(强度0, 语速交给AI)");
-  push("(所有场景均以「四项调配=0(自动)」发送, 同时验证 1.6.111 的 0=自动 语义)");
-  const _slotKeyOf = (re) => { try { const c = (quickChars && quickChars.chars || []).find(x => x.name === cn); const s = ((c && c.emotions) || []).find(e => re.test(String((e && e.label) || ""))); return (s && s.key) || ""; } catch (e) { return ""; } };
-  const scenes = [
-    { label: "①害羞", style: "害羞羞涩的语气", lang: "zh", text: "今天的事情，就交给我吧。我会认真处理的。", strength: 50, expect: "shy" },
-    { label: "②愤怒", style: "用愤怒、压着火气的语气说话", lang: "zh", text: "今天的事情，就交给我吧。我会认真处理的。", strength: 50, expect: "angry" },
-    { label: "③温柔", style: "温柔、轻声细语地说", lang: "zh", text: "今天的事情，就交给我吧。我会认真处理的。", strength: 50, expect: "joy" },
-    { label: "④无提示词", style: "", lang: "zh", text: "真是太糟糕了，我完全不能接受！", strength: 50, expect: "" },
-    { label: "⑤手动语气槽", style: "", lang: "zh", text: "今天的事情，就交给我吧。", strength: 0, manualSlot: (_slotKeyOf(/生气/) || "voice_03"), expect: "angry" },
-    { label: "⑥AI直出", style: "音量很低、缓慢而悲伤地说", lang: "zh", text: "没关系……我早就知道了。", strength: 0, aiDirect: true, expect: "sad" },
-  ];
+  const _testMsgIds = [];
   const _profSnap = (() => { try { return JSON.stringify(loadVoiceProfile()); } catch (e) { return ""; } })();
   const _origStyle = (() => { try { return getStylePrompt(cn) || ""; } catch (e) { return ""; } })();
-  window.__fvttTTSAiLineDiag = true;
-  window.__fvttTTSAiLineDiagList = [];
-  window.__fvttTTSAiLineEnterList = [];
-  let _lastMsgId = "";   // 立绘/头像实测用: 最后一条场景的消息
-  let _scenesDone = 0;   // 1.6.117 已跑完的场景数(用于平均 token)
-  const _testMsgIds = [];   // 1.6.118 测试产生的一次性消息, 结束统一删除(不污染聊天记录)
-  // 1.6.117 token 统计快照(多场景前后对比, 量化"省了多少")
-  const _tok0 = (() => { try { return JSON.parse(JSON.stringify(window.__fvttTTSTokenStats || {})); } catch (e) { return {}; } })();
-  const _sceneRows = [];
+  const _delMsg = async (id) => { try { const m = game.messages.get(id); if (m && typeof m.delete === "function") await m.delete(); } catch (e) { /* noop */ } };
+  const _chkRows = [];
+  const _chk = (name, ok, detail) => { _chkRows.push({ name: String(name), ok: !!ok, detail: String(detail || "") }); if (!ok) fails.push(String(name)); return !!ok; };
+  const _stat = async () => {
+    try {
+      const r = await svcRequest(cfg.serverUrl, "GET", "/llm/stats", null, { timeoutMs: 8000, retries: 0, quiet: true });
+      const j = (r && typeof r.json === "function") ? await r.json().catch(() => ({})) : {};
+      return (j && j.stats) || null;
+    } catch (e) { return null; }
+  };
+  // 造一条"发送框同款"消息并等音频写回（返回 {id, audio, flags, ms}）
+  const _sendLine = async (text, extra, waitMs) => {
+    let _curEmo = "";
+    try { const _c = (loadVoiceProfile().chars || {})[cn] || {}; _curEmo = String(_c.emotion || ""); } catch (e) { /* noop */ }
+    const fl = Object.assign({
+      fromModSend: true, role: cn, lang: "zh",
+      emotion: _curEmo ? normalizeEmotionKey(_curEmo) : "",
+      speed: 0, emotionMix: 0, emotionMod: 0,
+    }, extra || {});
+    let msg = null;
+    const _t = Date.now();
+    try { msg = await ChatMessage.create({ content: text, speaker: { alias: cn }, flags: { [MOD]: fl } }); }
+    catch (e) { return { id: "", audio: false, error: String((e && e.message) || e) }; }
+    if (msg && msg.id) _testMsgIds.push(msg.id);
+    let w = 0, audio = false;
+    while (w < Math.max(10, Math.round((waitMs || 40000) / 200))) {
+      try {
+        const mm = game.messages.get(msg.id);
+        const f = mm && mm.flags && mm.flags[MOD];
+        if (f && (f.audioUrl || f.audioData)) { audio = true; break; }
+      } catch (e) { /* noop */ }
+      await new Promise(r => setTimeout(r, 200)); w++;
+    }
+    const fNow = (() => { try { const m2 = game.messages.get(msg.id); return (m2 && m2.flags && m2.flags[MOD]) || {}; } catch (e) { return {}; } })();
+    return { id: msg && msg.id, audio: audio, flags: fNow, ms: Date.now() - _t };
+  };
+
+  push("# GPT-SoVITS TTS 最终测试报告（v6 精简版）");
+  push("");
+  push("- 时间: " + new Date().toLocaleString("zh-CN") + " | 执行者: " + opName + " | 角色: " + cn);
+  push("- 版本断言: 代码=" + MOD_VERSION + " | 清单缓存=" + verTxt + (String(verTxt) === String(MOD_VERSION) ? " ✓ 一致" : "（缓存落后可忽略，看代码版本）"));
+  push("- v6 覆盖: 引擎前置拦截 · 回归冒烟(0 成本断言) · 多场景 6 条 · **发送框真实路径/AI直出** · **打字停顿朗读** · **AI 预加载→再点发送** · **长句润色** · **翻译端点** · **其他角色音色** · **打包完整性**");
+  push("");
+
+  // ============ ① 引擎前置：不通就直接出报告，不再空转几百秒 ============
+  _mark("引擎前置");
+  let engOk = false, engDetail = "";
   try {
-    for (let i = 0; i < scenes.length; i++) {
-      const sc = scenes[i];
-      // 每条场景: 设置该场景的朗读提示词 + 强度(手动槽场景额外选中该槽)
+    const rs = await svcRequest(cfg.serverUrl, "GET", "/status", null, { timeoutMs: 8000, retries: 0, quiet: true });
+    const sj = (rs && typeof rs.json === "function") ? await rs.json().catch(() => ({})) : {};
+    engOk = !!(rs && rs.ok && sj && sj.ok);
+    engDetail = engOk ? ("服务=" + String(sj.service || "") + " device=" + String(sj.device || "") + " 角色=" + String((sj.character && sj.character.name) || "?")) : String((sj && sj.message) || "无响应");
+  } catch (e) { engDetail = String((e && e.message) || e); }
+  if (!engOk) {
+    push("## 引擎未启动 → 测试中止");
+    push("");
+    push("- " + engDetail);
+    push("- 处理: 双击 `engine\\启动引擎(无窗口).vbs`（或运行 `engine\\安装看门狗自启.bat` 让它以后自动起来），等状态灯变绿再重跑");
+    const md0 = L.join("\n");
+    try { console.warn("[gpt-sovits-tts][最终测试]\n" + md0); } catch (e) { /* noop */ }
+    try { ui.notifications.error("引擎未启动，最终测试已中止（不会空转）"); } catch (e) { /* noop */ }
+    return { markdown: md0, saved: "", fails: ["引擎未启动"] };
+  }
+  push("## 一、环境（只保留结论）");
+  push("- 引擎连通 ✓ " + engDetail + " | LLM=" + ((cfg.llmEnabled && cfg.llmKey) ? "已配置" : "未配置") + " | 立绘=" + cfg.portraitMode + " | 调配(0=自动) 音量=" + (Number(cfg.volume) > 0 ? cfg.volume : "自动") + " 语速=" + (Number(cfg.speedFactor) > 0 ? cfg.speedFactor : "自动"));
+  push("");
+
+  // ============ ② 回归冒烟：0 成本断言（旧版逐条铺开的项目压缩成一行汇总）============
+  _mark("回归冒烟");
+  push("## 二、回归冒烟（0 成本断言，失败才展开）");
+  push("");
+  try {
+    _chk("占比 0+参考音 → 0.5 叠加", normalizeEmotionMix({ auxRefAudioPaths: ["a.wav"], emotionMix: 0 }).emotionMix === 0.5);
+    _chk("占比 0 无参考音 → 不改", normalizeEmotionMix({ emotionMix: 0 }).emotionMix === 0);
+    _chk("手动占比 0.7 被尊重", normalizeEmotionMix({ auxRefAudioPaths: ["a.wav"], emotionMix: 0.7 }).emotionMix === 0.7);
+    _chk("害羞/羞涩 → shy", normalizeEmotionKey("害羞羞涩") === "shy" && styleEmotionKey("害羞羞涩的语气") === "shy");
+    _chk("shy → 命中中文槽", (() => { try { const s = findEmotionSlot("shy", cn); return !!(s && s.key); } catch (e) { return false; } })());
+    _chk("四项调配默认 0=自动", Number(cfg.volume) === 0 && Number(cfg.speedFactor) === 0);
+    _chk("音量 0 不静音(playVolume=1)", playVolume() === 1);
+    _chk("崩溃上报可用", (() => {
+      const b = (window.__fvttTTSCrashList || []).length;
+      const p1 = window.__fvttTTSCrashNotified, p2 = window.__fvttTTSCrashSilent;
+      window.__fvttTTSCrashNotified = true; window.__fvttTTSCrashSilent = true;
+      try { reportSpeakCrash(new Error("selftest")); } catch (e) { /* noop */ }
+      window.__fvttTTSCrashNotified = p1; window.__fvttTTSCrashSilent = p2;
+      return (window.__fvttTTSCrashList || []).length > b;
+    })());
+    // 看门狗 / 打包完整性（引擎侧读文件）
+    let _wd = null;
+    try {
+      const r1 = await svcRequest(cfg.serverUrl, "GET", "/watchdog", null, { timeoutMs: 12000, retries: 0, quiet: true });
+      _wd = (r1 && typeof r1.json === "function") ? await r1.json().catch(() => null) : null;
+    } catch (e) { /* noop */ }
+    _chk("看门狗脚本存在", !!(_wd && _wd.script), _wd ? ("script=" + _wd.script + " size=" + (_wd.script_size || 0)) : "端点不可用");
+    _chk("看门狗开机自启已安装", !!(_wd && _wd.startup), _wd ? String(_wd.startup_path || "").slice(-40) : "");
+    let _pk = null;
+    try {
+      const r2 = await svcRequest(cfg.serverUrl, "GET", "/packcheck", null, { timeoutMs: 12000, retries: 0, quiet: true });
+      _pk = (r2 && typeof r2.json === "function") ? await r2.json().catch(() => null) : null;
+    } catch (e) { /* noop */ }
+    _chk("打包脚本含看门狗三件套", !!(_pk && _pk.has_watchdog && _pk.has_install && _pk.has_uninstall), _pk ? ("bat=" + _pk.bat + " wd=" + _pk.has_watchdog + " inst=" + _pk.has_install + " unin=" + _pk.has_uninstall) : "端点不可用(引擎为旧版)");
+    const _bad = _chkRows.filter(x => !x.ok);
+    push("- 断言 " + _chkRows.length + " 项: " + (_bad.length ? ("✗ " + _bad.length + " 项失败") : "全部 ✓"));
+    _bad.forEach(x => push("  ✗ " + x.name + (x.detail ? ("（" + x.detail + "）") : "")));
+  } catch (e) { push("- 冒烟异常: " + String((e && e.message) || e).slice(0, 80)); }
+  push("");
+
+  // ============ ③ 多场景 6 条（核心功能，唯一保留的"重复执行"项）============
+  _note("① 多场景实测中（6 条，约 1~3 分钟）…");
+  _mark("多场景");
+  push("## 三、多场景实测（6 条真实链路）");
+  push("");
+  const _slotKeyOf = (re) => { try { const c = (quickChars && quickChars.chars || []).find(x => x.name === cn); const s = ((c && c.emotions) || []).find(e => re.test(String(e && e.label))); return (s && s.key) || ""; } catch (e) { return ""; } };
+  const scenes = [
+    { label: "①害羞", style: "害羞羞涩的语气", strength: 50, text: "今天的事情，就交给我吧。我会认真处理的。", expect: "shy" },
+    { label: "②愤怒", style: "用愤怒、压着火气的语气说话", strength: 50, text: "今天的事情，就交给我吧。我会认真处理的。", expect: "angry" },
+    { label: "③温柔", style: "温柔、轻声细语地说", strength: 50, text: "今天的事情，就交给我吧。我会认真处理的。", expect: "joy" },
+    { label: "④无提示词", style: "", strength: 50, text: "真是太糟糕了，我完全不能接受！", expect: "" },
+    { label: "⑤手动语气槽", style: "", strength: 0, text: "今天的事情，就交给我吧。", manualSlot: (_slotKeyOf(/生气/) || "voice_03"), expect: "angry" },
+    { label: "⑥AI直出", style: "音量很低、缓慢而悲伤地说", strength: 0, text: "没关系……我早就知道了。", aiDirect: true, expect: "sad" },
+  ];
+  let _scenesDone = 0;
+  const _sceneRows = [];
+  let _lastMsgId = "";
+  window.__fvttTTSAiLineDiag = true; window.__fvttTTSAiLineDiagList = []; window.__fvttTTSAiLineEnterList = [];
+  const _tok0 = (() => { try { return JSON.parse(JSON.stringify(window.__fvttTTSTokenStats || {})); } catch (e) { return {}; } })();
+  try {
+    for (const sc of scenes) {
       try {
         setStylePrompt(cn, sc.style || "");
         const profT = loadVoiceProfile();
-        profT.current = cn;
-        profT.chars = profT.chars || {};
+        profT.current = cn; profT.chars = profT.chars || {};
         const cT = profT.chars[cn] || (profT.chars[cn] = { name: cn });
         cT.styleStrength = sc.strength;
         if (!sc.manualSlot) { cT.emotion = ""; cT.auxRef = ""; }
         saveVoiceProfile(profT);
       } catch (e) { /* noop */ }
       if (sc.manualSlot) { try { await applyEmotion(sc.manualSlot, cn); } catch (e) { /* noop */ } }
-      // 造 flags: 与"发送框(doSubmitChat)"写入的字段保持一致(含 ref/auxRef/promptText),
-      //   但 speed/emotionMix/emotionMod 一律 0 → 顺带验证 1.6.111 的「0 = 自动」语义
       const _cv = (() => { try { return currentVoice() || {}; } catch (e) { return {}; } })();
-      const flT = {
-        fromModSend: true, role: cn, lang: sc.lang,
+      const r = await _sendLine(sc.text, {
         emotion: _cv.emotion ? normalizeEmotionKey(_cv.emotion) : "",
         ref: String(_cv.ref || ""), auxRef: String(_cv.auxRef || ""),
         promptText: String(_cv.promptText || ""), promptLang: String(_cv.promptLang || ""),
-        speed: 0, emotionMix: 0, emotionMod: 0,
         ...(sc.aiDirect ? { aiDirect: true } : {}),
-      };
-      let msg = null;
-      try { msg = await ChatMessage.create({ content: sc.text, speaker: { alias: cn }, flags: { [MOD]: flT } }); }
-      catch (e) { push("- [" + sc.label + "] 发送失败: " + String((e && e.message) || e).slice(0, 60)); fails.push(sc.label + "发送"); continue; }
-      if (msg && msg.id) { _lastMsgId = msg.id; _testMsgIds.push(msg.id); }
-      let waited = 0;
-      while (waited < 150 && !(window.__fvttTTSAiLineEnterList || []).some(p => p && p.mid === msg.id)) { await new Promise(r => setTimeout(r, 200)); waited++; }
-      const _entered = !!(window.__fvttTTSAiLineEnterList || []).some(p => p && p.mid === msg.id);
-      waited = 0;
-      while (waited < 175 && !(window.__fvttTTSAiLineDiagList || []).some(p => p && p.mid === msg.id)) { await new Promise(r => setTimeout(r, 200)); waited++; }
-      let aud = "", url3 = "";
-      waited = 0;
-      while (waited < 200) {
-        try {
-          const m2 = game.messages.get(msg.id);
-          const f2 = m2 && m2.flags && m2.flags[MOD];
-          if (f2 && f2.audioUrl) { aud = "✓"; url3 = String(f2.audioUrl); break; }
-        } catch (e) { /* noop */ }
-        await new Promise(r => setTimeout(r, 200)); waited++;
+      }, 40000);
+      if (r.id) { _lastMsgId = r.id; }
+      const f = r.flags || {};
+      const _sp = window.__fvttTTSLastSynthParams || {};
+      const slot = (() => { try { return findEmotionSlot(String(f.emotion || ""), cn); } catch (e) { return null; } })();
+      const semi = (() => { try { return slot ? normalizeEmotionKey(String(slot.label || slot.key || "")) : normalizeEmotionKey(String(f.emotion || "")); } catch (e) { return ""; } })();
+      const av = String(f.aiSprite || f.avatar || f.selSprite || "");
+      const slotAv = String((slot && slot.avatar) || "");
+      _scenesDone++;
+      push("- **" + sc.label + "**「" + (sc.style || "无提示词") + "」强度" + sc.strength + "% → 槽=" + String(f.emotion || "无") + "(" + (semi || "?") + ")"
+        + " | 合成=" + (r.audio ? "✓" : "✗") + " 参考音=" + ((_sp.aux && _sp.aux.length) ? "✓" : "无") + " 占比=" + (_sp.mix == null ? "?" : _sp.mix)
+        + " 语速=" + Number(_sp.spd || 1).toFixed(2)
+        + " | 润色=" + (String(f.polishText || "").trim() ? "✓" : "—") + " | 立绘=" + (av ? String(av).slice(-22) : "无"));
+      if (!r.audio) fails.push(sc.label + "合成");
+      if (sc.expect && semi !== sc.expect) fails.push(sc.label + "语气(" + semi + "≠" + sc.expect + ")");
+      if (slot && slot.ref_audio_path) {
+        if (!(_sp.aux && _sp.aux.length)) fails.push(sc.label + "参考音");
+        if (!(_sp.mix > 0)) fails.push(sc.label + "占比");
+        if (av && slotAv && av !== slotAv) fails.push(sc.label + "立绘≠槽");
       }
-      const _probe = (window.__fvttTTSAiLineDiagList || []).find(p => p && p.mid === msg.id) || {};
-      const _fNow = (() => { try { const m3 = game.messages.get(msg.id); return (m3 && m3.flags && m3.flags[MOD]) || {}; } catch (e) { return {}; } })();
-      const _spNow = window.__fvttTTSLastSynthParams || {};
-      const _slotNow = (() => { try { return findEmotionSlot(String(_fNow.emotion || ""), cn); } catch (e) { return null; } })();
-      const _emoSema = (() => { try { return _slotNow ? normalizeEmotionKey(String(_slotNow.label || _slotNow.key || "")) : normalizeEmotionKey(String(_fNow.emotion || "")); } catch (e) { return ""; } })();
-      const _av = String(_fNow.aiSprite || _fNow.avatar || _fNow.selSprite || "");
-      const _slotAv = String((_slotNow && _slotNow.avatar) || "");
-      let headTxt = "";
-      if (url3) {
-        const an = await analyzeAudioHead(url3);
-        if (an) {
-          const okH = (an.silentHead >= 0 && an.silentHead <= 0.08);
-          headTxt = " | 句首=" + an.rms20.toFixed(3) + "(静音头" + (an.silentHead < 0 ? "无" : an.silentHead.toFixed(3) + "s)") + (okH ? "✓" : "⚠");
-          if (!okH) fails.push(sc.label + "句首音量");
-        }
-      }
-      push("- **" + sc.label + "** 提示词=「" + (sc.style || "无") + "」强度" + sc.strength + "% → "
-        + (_probe.mid ? ("判定=" + (_probe.src || "-") + " 情绪槽=" + (_fNow.emotion || _probe.emo || "无")) : ("未探到(" + (_entered ? "已进hook" : "hook未触发") + ")"))
-        + "(" + (_emoSema || "?") + ")"
-        + " | 润色=" + ((_fNow.polishText || "").trim() ? "✓" : "—")
-        + " | 合成=" + (aud || "超时")
-        + " | 参考音=" + ((_spNow.aux && _spNow.aux.length) ? "✓" : "无") + " 占比=" + (_spNow.mix == null ? "?" : _spNow.mix) + " 语速=" + Number(_spNow.spd || 1).toFixed(2)
-        + " | 立绘=" + (_av ? String(_av).slice(-24) : "无") + headTxt
-        + (sc.manualSlot ? "（手动选槽不调 AI, 故无润色属正常）" : ""));
-      // —— 断言(每条场景都查) ——
-      if (!aud) fails.push(sc.label + "合成");
-      if (sc.expect && _emoSema !== sc.expect) fails.push(sc.label + "语气语义(" + _emoSema + "≠" + sc.expect + ")");
-      if (_slotNow && _slotNow.ref_audio_path) {
-        if (!(_spNow.aux && _spNow.aux.length)) fails.push(sc.label + "参考音未送达");
-        if (!(_spNow.mix > 0)) fails.push(sc.label + "占比未规范化");
-        if (_av && _slotAv && _av !== _slotAv) fails.push(sc.label + "立绘≠情绪槽");
-      }
-      if (!(_spNow.spd > 0)) fails.push(sc.label + "语速非法");
-      _scenesDone += 1;
-      _sceneRows.push({ label: sc.label, style: sc.style, strength: sc.strength, emo: _emoSema, slot: (_fNow.emotion || ""), av: _av, slotAv: _slotAv, aux: !!(_spNow.aux && _spNow.aux.length), mix: _spNow.mix, spd: _spNow.spd, aud: !!aud, polish: !!(_fNow.polishText || "").trim(), aiDecided: !!_fNow.aiDecided });
+      _sceneRows.push({ label: sc.label, emo: semi, av: av, slotAv: slotAv, audio: r.audio, polish: !!String(f.polishText || "").trim() });
     }
   } finally {
-    try {
-      const _tok1 = window.__fvttTTSTokenStats || {};
-      const _dm = (k) => Number(_tok1[k] || 0) - Number((_tok0 || {})[k] || 0);
-      const _dc = _dm("calls"), _di = _dm("inTok"), _do = _dm("outTok");
-      if (_dc > 0) push("");
-      if (_dc > 0) push("> 本段 AI 消耗: 调用 " + _dc + " 次 · 输入 ≈" + _di + " token · 输出 ≈" + _do + " token（平均每条 " + Math.round(_di / Math.max(1, _scenesDone || _dc)) + " 输入）");
-    } catch (e2) { /* noop */ }
     try { if (_profSnap) saveVoiceProfile(JSON.parse(_profSnap)); } catch (e) { /* noop */ }
     try { setStylePrompt(cn, _origStyle); } catch (e) { /* noop */ }
-    window.__fvttTTSAiLineDiag = false;
-    window.__fvttTTSAiLineDiagList = [];
-    window.__fvttTTSAiLineEnterList = [];
+    window.__fvttTTSAiLineDiag = false; window.__fvttTTSAiLineDiagList = []; window.__fvttTTSAiLineEnterList = [];
   }
+  // 立绘实物（只对最后一条消息做一次 DOM 检查）
+  try {
+    const el = _lastMsgId ? document.querySelector('.message[data-message-id="' + _lastMsgId + '"]') : null;
+    let w = 0;
+    while (w < 12 && !(el && el.querySelector(".fvtt-tts-emotion-avatar"))) { await new Promise(r => setTimeout(r, 200)); w++; }
+    const im = document.querySelector('.message[data-message-id="' + _lastMsgId + '"] .fvtt-tts-emotion-avatar');
+    const nw = im ? (im.naturalWidth || 0) : 0;
+    push("- 立绘实物（最后一条）: " + (im ? (nw > 0 ? ("✓ 已插入并解码 naturalWidth=" + nw + "px") : "✗ 元素在但没解码") : "✗ 未插入"));
+    if (!im || nw <= 0) fails.push("立绘实物");
+  } catch (e) { /* noop */ }
+  try {
+    const _tok1 = window.__fvttTTSTokenStats || {};
+    const _dm = (k) => Number(_tok1[k] || 0) - Number((_tok0 || {})[k] || 0);
+    push("> 本段 AI: 调用 " + _dm("calls") + " 次 · 输入≈" + _dm("inTok") + " · 输出≈" + _dm("outTok") + "（平均每条 " + Math.round(_dm("inTok") / Math.max(1, _scenesDone || _dm("calls"))) + " 输入）");
+  } catch (e) { /* noop */ }
+  push("");
 
-  // 1.6.102 立绘 / 头像实测(回归重点): 不只看 flags 有没有写, 而是查
-  //   ① 消息里的立绘路径能不能真的取到图(HTTP) ② 页面是否真的插了 <img> 且浏览器解码成功(naturalWidth>0)
-  //   ③ 消息头部玩家头像是否也被换成同一张 ④ 若没插, 打印未插入原因(applyEmotionAvatar 的诊断环形缓冲)
+  // ============ ④ 之前没测过的路径（本轮重点）============
+  push("## 四、新覆盖路径实测");
   push("");
-  _mark("实际朗读"); push("## 三·B、立绘 / 头像实测(回归重点: 「只有语音没有立绘」)");
-  push("");
+  _mark("新路径");
+
+  // J. 发送框真实路径 + AI 直出（走 doSubmitChat，不是手搓 flags）
   try {
-    const _ccB = (quickChars && quickChars.chars || []).find(x => x.name === cn) || null;
-    const _etB = String((_ccB && _ccB.emotion_tags) || "");
-    push("- 角色立绘库: " + ((_ccB && _ccB.sprites && _ccB.sprites.length) || 0) + " 张 | 情绪槽: " + (((_ccB && _ccB.emotions) || []).length) + " 个 | 情绪标注行: " + _etB.split(/\n+/).filter(l => /(立绘|sprite)/i.test(l)).length);
-    // ① 消息 flags
-    const _mB = _lastMsgId ? (game.messages.get(_lastMsgId) || null) : null;
-    const _fB = (_mB && _mB.flags && _mB.flags[MOD]) || {};
-    if (!_mB) {
-      push("- ✗ 没有拿到测试消息(实际朗读未生成) → 立绘无法检查");
-      fails.push("立绘消息");
-    } else {
-      const _avB = String(_fB.selSprite || _fB.aiSprite || _fB.avatar || "");
-      push("- 消息 flags: 立绘=" + (_avB ? String(_avB).slice(-44) : "(空)") + " | 情绪=" + String(_fB.emotion || "(未写)") + " | 音频=" + (_fB.audioUrl ? "url✓" : (_fB.audioData ? "内嵌✓" : "无")));
-      // 1.6.103 立绘按设计"跟随朗读": 音频没写回 → 立绘必然被拒, 先把因果写清楚(避免误判成图片问题)
-      if (!(_fB.audioUrl || _fB.audioData)) push("  ↳ ⚠ 音频没写回 → 立绘按设计不插入(先查合成/朗读链路, 见「三、实际朗读」的 合成= 与 F12 的朗读链路异常)");
-      // ② 路径可访问性(真正取一次)
-      if (!_avB) {
-        push("- ✗ 消息里没有任何立绘路径 → 前端无处取图");
-        fails.push("立绘路径");
-      } else {
-        try {
-          const _uB = toAvatarUrl(_avB);
-          const _rB = await fetch(_uB, { cache: "no-store" });
-          const _lenB = Number(_rB.headers.get("content-length") || 0);
-          push("- 图片可访问: " + (_rB.ok ? "✓" : "✗") + " http=" + _rB.status + (_lenB ? (" " + Math.round(_lenB / 1024) + "KB") : "") + " ← " + String(_uB).replace(window.location.origin, "").slice(-56));
-          if (!_rB.ok) fails.push("立绘图片");
-        } catch (e) { push("- 图片可访问: ✗ 请求失败 " + String((e && e.message) || e).slice(0, 60)); fails.push("立绘图片"); }
-      }
-      // ③ 页面 DOM: 是否插了图 + 是否解码成功(轮询 2.4s; 没插则主动补插一次再判)
-      const _readDom = () => {
-        try {
-          const el = document.querySelector('.message[data-message-id="' + _lastMsgId + '"]');
-          const im = el && el.querySelector(".fvtt-tts-emotion-avatar");
-          const hi = el && el.querySelector(".message-header img, .message-sender img");
-          return { el: !!el, found: !!im, nw: im ? (im.naturalWidth || 0) : -1, src: im ? String(im.getAttribute("src") || "") : "", head: hi ? String(hi.getAttribute("src") || "") : "" };
-        } catch (e) { return { el: false, found: false, nw: -1, src: "", head: "" }; }
-      };
-      let _dB = _readDom();
-      let _wB = 0;
-      while (_wB < 12 && (!_dB.found || _dB.nw <= 0)) {
-        await new Promise(r => setTimeout(r, 200)); _wB++;
-        _dB = _readDom();
-        if (!_dB.found && _wB === 6) {
-          // 页面可能没走渲染钩子(或消息在折叠区): 主动补插一次, 模拟"消息可见"时的行为
-          try { const _m5 = game.messages.get(_lastMsgId); if (_m5 && _m5.element) applyEmotionAvatar(_m5, _m5.element); } catch (e) { /* noop */ }
-        }
-      }
-      if (!_dB.el) { push("- 页面显示: 消息元素未渲染(聊天窗口里没有这条?) → 立绘无法肉眼核对, 不计入失败"); }
-      else if (!_dB.found) {
-        push("- ✗ 页面显示: 消息里**没有插立绘元素** → 视觉上就是「只有语音」");
-        fails.push("立绘显示");
-      } else if (_dB.nw <= 0) {
-        push("- ✗ 页面显示: 立绘元素在, 但浏览器**没能解码图片**(naturalWidth=0, 通常是 404/被拦截) ← " + _dB.src.slice(-50));
-        fails.push("立绘显示");
-      } else {
-        push("- ✓ 页面显示: 立绘已插入且解码成功(naturalWidth=" + _dB.nw + "px) ← " + _dB.src.slice(-50));
-      }
-      // ④ 头部头像
-      if (_dB.found && _dB.head) {
-        const _sameHead = (_dB.head === _dB.src) || (String(_dB.head).slice(-24) === String(_dB.src).slice(-24));
-        push("- 消息头部头像: " + (_sameHead ? "✓ 已随立绘替换" : "— 未替换(" + _dB.head.slice(-34) + ")"));
-      } else if (_dB.el) push("- 消息头部头像: 保持原样");
-      // ⑤ 若仍未插入 → 打印诊断环(说明为什么)
-      const _whyB = (window.__fvttTTSSpriteWhy || []).slice(-4);
-      if (_whyB.length) {
-        push("- 未插入原因(最近): " + _whyB.map(x => x.reason).join(" ｜ "));
-      }
-      push("- 提示: 任何时候想单独复查, 用 语音设置 → 底部「🩺 立绘诊断」或在 F12 执行 `await fvttTTSDiag()`");
-    }
-  } catch (e) { push("- 立绘/头像实测异常: " + String((e && e.message) || e).slice(0, 80)); fails.push("立绘实测"); }
-  // 1.6.109 三·C: 语气到底有没有送到引擎(决定"听起来跟提示词无关"的那一环)
-  _mark("立绘实测");
-  push("");
-  push("## 三·C、语气是否真的送到引擎(AI/提示词 选中的情绪 → 参考音)");
-  push("");
-  try {
-    const _sp = window.__fvttTTSLastSynthParams || null;
-    if (!_sp) {
-      push("- ⚠ 没抓到最近一次合成参数(可能本句走的是缓存/预加载) → 跳过");
-    } else {
-      const _emoFromFlags = (() => { try { const _mf = _lastMsgId ? (game.messages.get(_lastMsgId) || null) : null; return String(((_mf && _mf.flags && _mf.flags[MOD]) || {}).emotion || ""); } catch (e) { return ""; } })();
-      const _emoTxt = String(_sp.emotion || _emoFromFlags || "(未设)");
-      const _slotC = (() => { try { return findEmotionSlot(_emoTxt, cn); } catch (e) { return null; } })();
-      push("- 送给引擎: 情绪=" + _emoTxt + (_slotC ? ("（槽 " + (_slotC.key || "") + " " + String(_slotC.label || "").slice(0, 14) + "）") : "（无对应情绪槽）")
-        + " | 情绪参考音=" + ((_sp.aux && _sp.aux.length) ? String(_sp.aux[0]).slice(-40) : "(无)")
-        + " | 情绪占比=" + (_sp.mix == null ? "(未传)" : _sp.mix) + " | 语速=" + Number(_sp.spd || 1).toFixed(2));
-      if (_slotC && _slotC.ref_audio_path) {
-        if (!(_sp.aux && _sp.aux.length)) { push("  ✗ 选中了情绪槽却没送情绪参考音 → 声音不会变(链路 bug)"); fails.push("情绪参考音"); }
-        else if (!(_sp.mix > 0)) { push("  ✗ 情绪占比=" + _sp.mix + " → 引擎会按「纯默认」丢弃情绪参考音(声音不变)"); fails.push("情绪占比"); }
-        else push("  ✓ 情绪参考音已随请求送达(占比 " + _sp.mix + " → 引擎用该槽音频作参考)");
-      } else push("  · 本句情绪无对应情绪槽 → 只靠语速/提示词影响, 不是 bug");
-    }
-  } catch (e) { push("- 语气送达检查异常: " + String((e && e.message) || e).slice(0, 70)); }
-  push("");
-  // 1.6.121 三·I: "省 token 机制"实测 —— 直接看引擎侧调用计数, 不靠感觉
-  push("");
-  push("## 三·I、AI 省 token 机制实测(每句只 1 次调用 / 快路径 0 次)");
-  push("");
-  try {
-    const _statCalls = async () => {
-      try {
-        const r = await svcRequest(cfg.serverUrl, "GET", "/llm/stats", null, { timeoutMs: 8000, retries: 0 });
-        const j = (r && typeof r.json === "function") ? await r.json().catch(() => ({})) : {};
-        return (j && j.stats) || null;
-      } catch (e) { return null; }
-    };
-    const _send = async (text) => {
-      const m = await ChatMessage.create({ content: text, speaker: { alias: cn }, flags: { [MOD]: { fromModSend: true, role: cn, lang: "zh", emotion: "", speed: 0, emotionMix: 0, emotionMod: 0 } } });
-      if (m && m.id) _testMsgIds.push(m.id);
-      let w = 0;
-      let aud = "";
-      while (w < 200) {
-        try {
-          const mm = game.messages.get(m.id);
-          const f = mm && mm.flags && mm.flags[MOD];
-          if (f && f.audioUrl) { aud = String(f.audioUrl); break; }
-        } catch (e) { /* noop */ }
+    const ta = findChatTextarea();
+    if (!ta) { push("- J 发送框路径: 跳过（找不到聊天输入框）"); }
+    else {
+      const _before = (await _stat() || {}).calls;
+      ta.value = "发送框与AI直出路径测试。";
+      const _mBefore = (game.messages && game.messages.contents) ? game.messages.contents.length : 0;
+      await doSubmitChat(ta, { aiDirect: true });
+      let w = 0, _mNew = null;
+      while (w < 150) {
+        const arr = (game.messages && game.messages.contents) || [];
+        if (arr.length > _mBefore) { _mNew = arr[arr.length - 1]; break; }
         await new Promise(r => setTimeout(r, 200)); w++;
       }
-      return { id: m && m.id, audio: !!aud };
-    };
-    const _s0 = await _statCalls();
-    const _c0 = Number((_s0 && _s0.calls) || 0);
-    const _r1 = await _send("省 token 机制测试：正常模式。");
-    const _s1 = await _statCalls();
-    const _d1 = Number((_s1 && _s1.calls) || 0) - _c0;
-    push("- 正常模式发 1 句: 引擎收到 AI 调用 **" + Math.max(0, _d1) + " 次**（期望 1；0=命中 30 分钟缓存；≥2=仍有重复判定）" + (_r1.audio ? " | 合成 ✓" : " | 合成 ✗"));
-    if (_d1 >= 2) fails.push("每句只调1次AI");
-    if (_r1.audio === false) fails.push("省token测试合成");
-    // 零 token 快路径: 临时关闭 AI 润色 + 提示词已能定情绪 → 应 0 次调用
-    let _pol0 = null;
-    try { _pol0 = getCfg().llmPolish; } catch (e) { /* noop */ }
-    try { await game.settings.set(MODULE, "llmPolish", false); } catch (e) { /* noop */ }
-    await new Promise(r => setTimeout(r, 300));
-    const _sty0 = (() => { try { return getStylePrompt(cn) || ""; } catch (e) { return ""; } })();
-    let _se = "";
-    try { _se = styleEmotionKey(_sty0); } catch (e) { /* noop */ }
-    if (!_se) {
-      push("- 快路径: 跳过（当前朗读提示词不能确定情绪：\"" + _sty0.slice(0, 14) + "\"）");
-    } else {
-      const _c1 = Number((_s1 && _s1.calls) || 0);
-      const _r2 = await _send("省 token 机制测试：零 token 快路径。");
-      const _s2 = await _statCalls();
-      const _d2 = Number((_s2 && _s2.calls) || 0) - _c1;
-      push("- 关掉 AI 润色 + 提示词已定情绪（" + _se + "）再发 1 句: 引擎收到 AI 调用 **" + Math.max(0, _d2) + " 次**（期望 0；1=快路径没生效）" + (_r2.audio ? " | 合成 ✓" : " | 合成 ✗"));
-      if (_d2 > 0) fails.push("零token快路径");
-      if (!_r2.audio) fails.push("快路径合成");
-    }
-    try { if (_pol0 !== null) await game.settings.set(MODULE, "llmPolish", _pol0); } catch (e) { /* noop */ }
-    const _s3 = await _statCalls();
-    if (_s3) push("- 引擎侧 token: 累计输入 " + (_s3.in_tokens || 0) + " · 输出 " + (_s3.out_tokens || 0) + "（最近一次 " + (_s3.last_in || 0) + "/" + (_s3.last_out || 0) + "）");
-  } catch (e) { push("- 省 token 实测异常: " + String((e && e.message) || e).slice(0, 80)); }
-
-  // 1.6.112 三·D: 玩家端代理合成(玩家说话时的链路) —— GM 端直接调用代理核心做实测
-  push("");
-  _mark("语气送达");
-  push("## 三·D、玩家端代理合成实测(玩家说话 / iPad 走 socket 委托)");
-  push("");
-  try {
-    const _slotD = (() => { try { return findEmotionSlot("shy", cn) || findEmotionSlot("angry", cn); } catch (e) { return null; } })();
-    const _auxD = (_slotD && _slotD.ref_audio_path) ? ("fvtt_chars/" + cn + "/" + _slotD.ref_audio_path) : "";
-    const _fake = {
-      id: "finaltest-proxy-" + Date.now(),
-      flags: { [MOD]: { synthRequest: { text: "代理路径测试，玩家说话时的合成。", lang: "zh" }, role: cn, auxRef: _auxD, emotionMix: 0, emotion: String((_slotD && _slotD.key) || "") } },
-      update: async () => ({ ok: true }),
-    };
-    const _pr = await _proxySynthFor(_fake);
-    const _okD = !!(_pr && _pr.ok);
-    push("- 代理合成: " + (_okD ? "✓ 成功" : "✗ 失败") + " | 耗时=" + ((_pr && _pr.ms) || 0) + "ms | 音频=" + ((_pr && _pr.audioUrl) ? "有" : "无") + " | 传入情绪槽=" + String((_slotD && _slotD.key) || "(无)") + " 参考音=" + (_auxD ? "✓" : "无") + " 占比=0(自动)");
-    if (!_okD) fails.push("代理合成");
-  } catch (e) { push("- 代理合成异常: " + String((e && e.message) || e).slice(0, 70)); fails.push("代理合成异常"); }
-
-  // 1.6.112 三·E: 白名单 / 预加载按钮状态 / AI 去重
-  push("");
-  push("## 三·E、其他改动实测(朗读白名单 · 预加载按钮 · AI 去重)");
-  push("");
-  try {
-    const _mNo = await ChatMessage.create({ content: "白名单测试：这条不应该被朗读。", speaker: { alias: cn }, flags: { [MOD]: { role: cn, lang: "zh" } } });
-    if (_mNo && _mNo.id) _testMsgIds.push(_mNo.id);
-    await new Promise(r => setTimeout(r, 4500));
-    const _fNo = (() => { try { const mm = game.messages.get(_mNo.id); return (mm && mm.flags && mm.flags[MOD]) || {}; } catch (e) { return {}; } })();
-    const _noAudio = !(_fNo.audioUrl || _fNo.audioData);
-    push("- 朗读白名单(非模块发送框消息不朗读): " + (_noAudio ? "✓ 未生成音频" : "✗ 居然朗读了"));
-    if (!_noAudio) fails.push("朗读白名单");
-  } catch (e) { push("- 白名单测试异常: " + String((e && e.message) || e).slice(0, 60)); }
-  try {
-    const _btnOk = (() => { try { buildSendPop(); refreshPreloadBtn(); const b = sendPopEl && sendPopEl.querySelector(".fvtt-tts-sendpop-preload"); return !!b; } catch (e) { return false; } })();
-    push("- 预加载按钮状态复核(refreshPreloadBtn): " + (_btnOk ? "✓ 可用" : "✗ 异常"));
-    if (!_btnOk) fails.push("预加载按钮状态");
-  } catch (e) { /* noop */ }
-  try {
-    const _dedupe = _sceneRows.filter(r => r.aiDecided).length;
-    push("- AI 去重(aiDecided 标记, 避免每条重复调一次 /llm 选立绘): " + _dedupe + "/" + _sceneRows.length + " 条场景已标记" + (_dedupe > 0 ? " ✓" : "（LLM 降级时不会标记）"));
-    if (_sceneRows.length && _dedupe === 0) fails.push("AI去重");
-  } catch (e) { /* noop */ }
-
-  // 1.6.112 三·F: 引擎自动启动(看门狗)实测 —— 需要引擎为 1.6.112+ (否则 /watchdog 不存在, 跳过不判失败)
-  push("");
-  push("## 三·F、引擎自动启动(看门狗)实测");
-  push("");
-  try {
-    const _wr = await svcRequest(cfg.serverUrl, "GET", "/watchdog", null, { timeoutMs: 8000, retries: 0 });
-    const _wj = (_wr && typeof _wr.json === "function") ? await _wr.json().catch(() => ({})) : {};
-    if (_wr && _wr.ok && _wj && _wj.startup !== undefined) {
-      push("- Windows 启动项: " + (_wj.startup ? "✓ 已安装" : "✗ 未安装 → 运行 engine\\安装看门狗自启.bat") + "  ←  " + String(_wj.startup_path || "").slice(-46));
-      // 1.6.123 看门狗脚本本身是否还在(被杀软隔离 = 启动项指向空气 → 登入不会自动启动引擎)
-      if (_wj.script === false) {
-        push("- ✗ **watchdog.vbs 不见了**（启动项指向它，所以登入不会自动启动引擎）→ 多半被杀软隔离；运行 engine\\安装看门狗自启.bat 重建，并把 engine 目录加白名单");
-        fails.push("看门狗脚本缺失");
-      } else if (_wj.script === true) {
-        push("- 看门狗脚本: ✓ 存在（" + (Math.round(Number(_wj.script_size || 0) / 102.4) / 10) + " KB）");
+      if (_mNew && _mNew.id) _testMsgIds.push(_mNew.id);
+      let w2 = 0, _aud = false;
+      while (w2 < 200) {
+        try { const mm = game.messages.get(_mNew && _mNew.id); const f = mm && mm.flags && mm.flags[MOD]; if (f && (f.audioUrl || f.audioData)) { _aud = true; break; } } catch (e) { /* noop */ }
+        await new Promise(r => setTimeout(r, 200)); w2++;
       }
-      // 进程存活以"锁文件心跳"为准; 判不出来时按提示处理, 不误判失败(启动项才是硬要求)
-      push("- 看门狗进程: " + (_wj.watchdog_running ? "✓ 正在运行(锁文件心跳正常)" : "⚠ 未检出运行中(可能刚重启/被任务管理器结束) → 双击 engine\\watchdog.vbs 可手动起"));
-      push("- 最近判断(watchdog.log): " + (String(_wj.log_tail || "") ? String(_wj.log_tail).slice(-170) : "(无 watchdog.log)"));
-      if (!_wj.startup) fails.push("看门狗自启");
-
-    } else {
-      push("- ⚠ 引擎未提供 /watchdog(旧引擎) → 重启引擎后可测；本次跳过, 不计失败");
+      const _after = (await _stat() || {}).calls;
+      const _f = (() => { try { const mm = game.messages.get(_mNew && _mNew.id); return (mm && mm.flags && mm.flags[MOD]) || {}; } catch (e) { return {}; } })();
+      push("- **J 发送框 + AI 直出**（真实 doSubmitChat）: 消息=" + (_mNew ? "✓" : "✗") + " 音频=" + (_aud ? "✓" : "✗")
+        + " | aiDirect 标记=" + (_f.aiDirect ? "✓" : "—") + " | 本次 AI 调用=" + (Number.isFinite(_before) && Number.isFinite(_after) ? (_after - _before) : "?") + " 次");
+      if (!_mNew || !_aud) fails.push("J发送框路径");
     }
-  } catch (e) { push("- ⚠ /watchdog 查询失败(引擎可能是旧版本) → 重启引擎后可测；本次跳过"); }
+  } catch (e) { push("- J 发送框路径异常: " + String((e && e.message) || e).slice(0, 80)); fails.push("J发送框异常"); }
 
-  // 1.6.115 三·G: 短情绪参考音兜底(实测曾因"参考音不在 3~10 秒"整句 400 失败)
-  push("");
-  push("## 三·G、短情绪参考音实测(情绪样本不足 3 秒时不致命)");
-  push("");
+  // K. 打字停顿朗读（真实 input 事件 + 防抖）
   try {
-    const _cG = (quickChars && quickChars.chars || []).find(x => x.name === cn) || null;
-    const _slotsG = ((_cG && _cG.emotions) || []).filter(e => e && e.ref_audio_path);
-    const _probeSlot = _slotsG.find(e => /生气|鼓起脸颊/.test(String(e.label || ""))) || _slotsG[0] || null;
-    if (!_probeSlot) {
-      push("- 该角色没有带参考音的情绪槽 → 跳过");
-    } else {
-      const _auxG = ["fvtt_chars/" + cn + "/" + _probeSlot.ref_audio_path];
+    const ta2 = findChatTextarea();
+    const _cfgT = getCfg();
+    if (!ta2) push("- K 打字朗读: 跳过（找不到输入框）");
+    else {
+      const _oldTyping = _cfgT.typingVoice, _oldMode = _cfgT.triggerMode, _oldMin = _cfgT.minLength;
+      const _tBefore = Number(window.__fvttTTSLastSpeakAt || 0);
       try {
-        const _rfG = await svcRequest(cfg.serverUrl, "GET", "/refs?role=" + encodeURIComponent(cn), null, { timeoutMs: 12000, retries: 0 });
-        const _rjG = (_rfG && typeof _rfG.json === "function") ? await _rfG.json().catch(() => ({})) : {};
-        const _rcG = (_rjG && _rjG.chars && _rjG.chars[0]) || null;
-        if (_rcG && Array.isArray(_rcG.slots)) {
-          const _sh = _rcG.slots.filter(x => typeof (x && x.seconds) === "number" && x.seconds < 3);
-          push("- 该角色情绪参考音: " + _rcG.slots.length + " 槽，其中 **" + _sh.length + " 个短于 3 秒**（引擎会自动重复拼接兜底；建议替换成 3~10 秒的干净片段以获得最好音质）");
-        }
+        await game.settings.set(MODULE, "typingVoice", true);
+        await game.settings.set(MODULE, "triggerMode", "typing");
+        await game.settings.set(MODULE, "minLength", 1);
       } catch (e) { /* noop */ }
-      push("- 用情绪槽「" + String(_probeSlot.label || _probeSlot.key) + "」的参考音 + 占比 1 直接合成一句(不等聊天链路)");
+      try { attachTyping(); } catch (e) { /* noop */ }
+      await new Promise(r => setTimeout(r, 200));
       try {
-        const _rG = await gptSovitsSynth("短参考音兜底验证。", "zh", {
-          serverUrl: cfg.serverUrl, speedFactor: 1.0, mediaType: "mp3", asBlob: true, role: cn,
-          overrides: { auxRefAudioPaths: _auxG, emotionMix: 1.0, emotion: String(_probeSlot.key || "") },
-        });
-        const _szG = (_rG && _rG.blob) ? _rG.blob.size : 0;
-        push("- 合成结果: " + (_szG > 1000 ? ("✓ 成功 " + Math.round(_szG / 1024) + "KB") : "✗ 失败/空音频"));
-        if (!(_szG > 1000)) fails.push("短参考音合成");
-      } catch (e) {
-        push("- ✗ 合成失败: " + String((e && e.message) || e).slice(0, 120));
-        fails.push("短参考音合成");
-      }
-      push("- 说明: 引擎会把不足 3 秒的情绪样本重复拼接到 3~10 秒再用; 客户端再兜底一次(被拒则本句退化为默认音色, 不出错)");
+        ta2.value = "打字停顿朗读测试：这句话应该被直接读出来。";
+        ta2.dispatchEvent(new Event("input", { bubbles: true }));
+      } catch (e) { /* noop */ }
+      let w = 0;
+      while (w < 60 && !(Number(window.__fvttTTSLastSpeakAt || 0) > _tBefore)) { await new Promise(r => setTimeout(r, 200)); w++; }
+      const _okK = Number(window.__fvttTTSLastSpeakAt || 0) > _tBefore;
+      push("- **K 打字停顿朗读**（真实 input + 防抖）: " + (_okK ? "✓ 触发了朗读" : "✗ 未触发") + "（" + (w * 0.2).toFixed(1) + "s 内）");
+      if (!_okK) fails.push("K打字朗读");
+      try { ta2.value = ""; } catch (e) { /* noop */ }
+      try {
+        await game.settings.set(MODULE, "typingVoice", !!_oldTyping);
+        await game.settings.set(MODULE, "triggerMode", _oldMode || "chat");
+        await game.settings.set(MODULE, "minLength", Number(_oldMin) || 4);
+      } catch (e) { /* noop */ }
     }
-  } catch (e) { push("- 短参考音实测异常: " + String((e && e.message) || e).slice(0, 70)); }
+  } catch (e) { push("- K 打字朗读异常: " + String((e && e.message) || e).slice(0, 80)); fails.push("K打字朗读异常"); }
 
-  // 1.6.118 三·H: 参考音被引擎拒绝时的自动降级(用 stub 确定性验证逻辑: 退化为默认参考音, 不出错)
+  // L. AI 预加载 → 再点发送（预加载分支的占比规范化/写回）
+  try {
+    const ta3 = findChatTextarea();
+    if (!ta3) push("- L 预加载路径: 跳过（找不到输入框）");
+    else {
+      ta3.value = "预加载路径测试：先预合成再发送。";
+      const pop = buildSendPop();
+      const btn = pop && pop.querySelector(".fvtt-tts-sendpop-preload");
+      if (!btn) push("- L 预加载路径: 跳过（发送面板未就绪）");
+      else {
+        btn.click();
+        let w = 0;
+        while (w < 320 && !btn.classList.contains("done")) { await new Promise(r => setTimeout(r, 250)); w++; }
+        const _done = btn.classList.contains("done");
+        const _pa = (typeof preloadAudio !== "undefined") ? preloadAudio : null;
+        push("- L 预加载: " + (_done ? "✓ 预合成完成" : "✗ 未完成") + " | 缓存音频=" + ((_pa && _pa.url) ? "✓" : "✗") + "（" + (w * 0.25).toFixed(1) + "s）");
+        if (!_done || !(_pa && _pa.url)) fails.push("L预加载");
+        if (_done) {
+          const _mBefore = (game.messages && game.messages.contents) ? game.messages.contents.length : 0;
+          btn.click();   // done 状态再点 = 直接发送
+          let w2 = 0, _mNew = null;
+          while (w2 < 100) {
+            const arr = (game.messages && game.messages.contents) || [];
+            if (arr.length > _mBefore) { _mNew = arr[arr.length - 1]; break; }
+            await new Promise(r => setTimeout(r, 200)); w2++;
+          }
+          if (_mNew && _mNew.id) _testMsgIds.push(_mNew.id);
+          let w3 = 0, _aud = false;
+          while (w3 < 100) {
+            try { const mm = game.messages.get(_mNew && _mNew.id); const f = mm && mm.flags && mm.flags[MOD]; if (f && (f.audioUrl || f.audioData)) { _aud = true; break; } } catch (e) { /* noop */ }
+            await new Promise(r => setTimeout(r, 200)); w3++;
+          }
+          push("- L 预加载→发送: 消息=" + (_mNew ? "✓" : "✗") + " 音频写回=" + (_aud ? "✓" : "✗"));
+          if (!_mNew || !_aud) fails.push("L预加载发送");
+          try { if (ta3.value) ta3.value = ""; } catch (e) { /* noop */ }
+        }
+      }
+    }
+  } catch (e) { push("- L 预加载异常: " + String((e && e.message) || e).slice(0, 80)); fails.push("L预加载异常"); }
+
+  // M. 长句润色（预算/截断风险）
+  try {
+    const _long = "今天的事情就交给我吧，虽然我平时不太爱说话，也不太擅长和人打交道，但是既然已经答应了你，我就一定会认真处理到底，不会让你一个人承担这些麻烦。";
+    const rM = await _sendLine(_long, {}, 60000);
+    const polM = String((rM.flags && rM.flags.polishText) || "").trim();
+    push("- **M 长句润色**（" + _long.length + " 字）: 合成=" + (rM.audio ? "✓" : "✗") + " | 润色=" + (polM ? ("✓ " + polM.length + " 字") : "— 未返回(长句预算不足时属可接受降级)"));
+    if (!rM.audio) fails.push("M长句合成");
+  } catch (e) { push("- M 长句异常: " + String((e && e.message) || e).slice(0, 80)); fails.push("M长句异常"); }
+
+  // N. 翻译端点（AI 翻译，自动翻译开启时才会用）
+  try {
+    const rN = await svcRequest(cfg.serverUrl, "POST", "/llm/translate", {
+      base: cfg.llmBaseUrl || "https://api.openai.com/v1", key: cfg.llmKey, model: cfg.llmModel || "gpt-4o-mini",
+      text: "今天天气很好，我们出去散步吧。", to: "ja", gm_prompt: "",
+    }, { timeoutMs: 30000, retries: 0, quiet: true });
+    const jN = (rN && typeof rN.json === "function") ? await rN.json().catch(() => ({})) : {};
+    const tN = String((jN && jN.text) || "");
+    const _jp = /[\u3040-\u30ff]/.test(tN);
+    push("- **N AI 翻译端点**: " + ((rN && rN.ok && jN && jN.ok && tN) ? ("✓ 成功" + (_jp ? "(输出是日文)" : "(输出非日文, 请检查)") + " → " + tN.slice(0, 26)) : ("✗ " + String((jN && jN.message) || "无响应").slice(0, 80))));
+    if (!(rN && rN.ok && jN && jN.ok && tN)) fails.push("N翻译端点");
+  } catch (e) { push("- N 翻译端点异常: " + String((e && e.message) || e).slice(0, 80)); fails.push("N翻译异常"); }
+
+  // O. 其他角色音色（各 1 句；验证多角色模型切换/参考音）
+  _note("② 其他角色音色实测中（每角色 1 句，可能各有冷启动）…");
+  try {
+    const _all = (quickChars && quickChars.chars) || [];
+    const _others = _all.filter(x => x && x.name && x.name !== cn).slice(0, 3);
+    if (!_others.length) push("- O 其他角色: 只有一个角色，跳过");
+    for (const oc of _others) {
+      const _t = Date.now();
+      try {
+        const rr = await gptSovitsSynth("音色测试。", "zh", { serverUrl: cfg.serverUrl, speedFactor: 1.0, mediaType: "mp3", asBlob: true, role: oc.name });
+        const sz = (rr && rr.blob) ? rr.blob.size : 0;
+        const slots = ((oc.emotions) || []).length;
+        push("- **O 角色「" + oc.name + "」**: 合成=" + (sz > 1000 ? "✓ " + Math.round(sz / 1024) + "KB" : "✗") + " · 情绪槽=" + slots + (slots ? "" : "（无槽 → 不换声线，属数据限制）") + " · 耗时=" + Math.round((Date.now() - _t) / 1000) + "s");
+        if (!(sz > 1000)) fails.push("O角色音色(" + oc.name + ")");
+      } catch (e) { push("- O 角色「" + oc.name + "」: ✗ " + String((e && e.message) || e).slice(0, 70)); fails.push("O角色音色异常(" + oc.name + ")"); }
+    }
+  } catch (e) { /* noop */ }
   push("");
-  push("## 三·H、参考音被拒时的降级实测");
+
+  // ============ ⑤ 省 token 机制（保留 1 条，因为这是用户明确要求）============
+  _mark("新路径");
+  push("## 五、AI 调用次数（省 token 机制）");
   push("");
   try {
-    let _calls = 0, _sawNoAux = false;
-    const _stub = async (t2, l2, o2) => {
-      _calls += 1;
-      if (_calls === 1) throw new Error("TTS 服务返回 400: 参考音频在3~10秒范围外，请更换！");
-      const _ov2 = (o2 && o2.ov) || {};
-      _sawNoAux = !(Array.isArray(_ov2.auxRefAudioPaths) && _ov2.auxRefAudioPaths.length);
-      return { blob: { size: 12345 }, audioUrl: "" };
-    };
-    const _rH = await synthSafe(_stub, "降级路径验证。", "zh", { ov: { auxRefAudioPaths: ["x.wav"], emotionMix: 0.5, emotion: "voice_03" } });
-    const _okH = !!(_rH && _rH.blob && _rH.blob.size > 1000) && _sawNoAux && _calls === 2;
-    push("- 第一次被引擎拒绝(参考音 3~10 秒) → 自动去掉情绪参考音重试: " + (_okH ? "✓ 成功(共 " + _calls + " 次调用, 重试时已无 aux)" : "✗ 未按预期降级(调用 " + _calls + " 次, aux 仍存在=" + (_sawNoAux ? "否" : "是") + ")"));
-    if (!_okH) fails.push("参考音降级");
-  } catch (e) { push("- ✗ 降级实测异常: " + String((e && e.message) || e).slice(0, 80)); fails.push("参考音降级异常"); }
+    const s0 = await _stat(); const c0 = Number((s0 && s0.calls) || 0);
+    const r1 = await _sendLine("调用次数测试：正常模式。", {}, 40000);
+    const s1 = await _stat(); const d1 = Number((s1 && s1.calls) || 0) - c0;
+    push("- 正常 1 句: AI 调用 **" + Math.max(0, d1) + " 次**（期望 1；0=命中 30 分钟缓存；≥2=重复判定）" + (r1.audio ? " | 合成 ✓" : " | 合成 ✗"));
+    if (d1 >= 2) fails.push("每句只调1次");
+    if (!r1.audio) fails.push("调用次数测试合成");
+    const _sty = (() => { try { return getStylePrompt(cn) || ""; } catch (e) { return ""; } })();
+    const _se = (() => { try { return styleEmotionKey(_sty); } catch (e) { return ""; } })();
+    let _pol0 = null; try { _pol0 = getCfg().llmPolish; } catch (e) { /* noop */ }
+    if (!_se) push("- 快路径: 跳过（朗读提示词不能确定情绪）");
+    else {
+      try { await game.settings.set(MODULE, "llmPolish", false); } catch (e) { /* noop */ }
+      await new Promise(r => setTimeout(r, 300));
+      const c1 = Number(((await _stat()) || {}).calls || 0);
+      const r2 = await _sendLine("调用次数测试：零 token 快路径。", {}, 40000);
+      const c2 = Number(((await _stat()) || {}).calls || 0);
+      push("- 关润色+提示词定情绪(" + _se + ") 1 句: AI 调用 **" + Math.max(0, c2 - c1) + " 次**（期望 0）" + (r2.audio ? " | 合成 ✓" : " | 合成 ✗"));
+      if (c2 - c1 > 0) fails.push("零token快路径");
+      if (!r2.audio) fails.push("快路径合成");
+      try { if (_pol0 !== null) await game.settings.set(MODULE, "llmPolish", _pol0); } catch (e) { /* noop */ }
+    }
+    const s3 = await _stat();
+    if (s3) push("- 引擎侧 token 累计: 输入 " + (s3.in_tokens || 0) + " · 输出 " + (s3.out_tokens || 0) + "（最近一次 " + (s3.last_in || 0) + "/" + (s3.last_out || 0) + "）");
+  } catch (e) { push("- 调用次数实测异常: " + String((e && e.message) || e).slice(0, 80)); }
+  push("");
 
-  _mark("代理/白名单"); push("## 四、结论");
-  push("- 测试脚本: v5(代码版本 " + MOD_VERSION + ", 清单缓存 " + verTxt + ") | 耗时: " + Math.round((Date.now() - t0) / 1000) + "s | LLM: " + (llmOk ? "AI链路(判语气+润色+选立绘)已启用" : "规则降级(无AI: 文本规则/提示词基调; 情绪差异靠情绪参考音, 默认零 DSP 不变调)"));
+  // ============ ⑥ 结论 ============
+  _mark("结论");
+  push("## 六、结论");
+  push("- 测试脚本: v6(代码版本 " + MOD_VERSION + ") | 耗时: " + Math.round((Date.now() - t0) / 1000) + "s | 场景 " + _scenesDone + " 条 | 断言 " + _chkRows.length + " 项");
   push("- 关键项: " + (fails.length ? ("⚠ 存在问题 → " + fails.join("、")) : "全部通过 ✓"));
-  // 1.6.104 耗时明细(哪一段慢一目了然): 上次 475s 就靠这个定位到"AI 探测重试 + 首次合成排队"
   try {
     const _secTxt = Object.keys(_secMs).map(k => k + " " + _secMs[k] + "s").join(" · ");
-    const _tot = Math.round((Date.now() - t0) / 1000);
-    if (_secTxt) push("- 耗时明细: " + _secTxt + " (合计 " + _tot + "s)");
-    if (_tot > 240) push("  ⚠ 超过 4 分钟多半是: 某次 AI 探测走了重试(20s+45s)、外部 LLM 首字慢、或首次合成在排队 —— 看上面各段耗时定位");
+    if (_secTxt) push("- 耗时明细: " + _secTxt);
   } catch (e) { /* noop */ }
-  // 1.6.112 需求对照(逐条) — 用本次实测数据逐项判定, 不靠感觉
   push("");
-  push("## 五、需求对照(逐条实测)");
-  push("");
-  try {
-    const _rows = _sceneRows || [];
-    const _req = [];
-    _req.push(["AI 随台词自动切换立绘", _rows.length > 0 && _rows.every(r => !!r.av)]);
-    _req.push(["AI 随台词切换语气/声音(情绪参考音送达)", _rows.filter(r => r.aux).length >= Math.max(1, _rows.length - 1)]);
-    _req.push(["立绘与朗读提示词同步(立绘=该情绪槽的图)", _rows.every(r => !r.slotAv || r.av === r.slotAv)]);
-    _req.push(["情绪占比 0 = 自动(引擎不再丢弃参考音)", _rows.every(r => (r.mix == null) || r.mix > 0)]);
-    _req.push(["四项调配默认 0 = 自动", Number(getCfg().volume) === 0 && Number(getCfg().speedFactor) === 0]);
-    _req.push(["朗读音量 0 不静音", playVolume() === 1]);
-    _req.push(["提示词强度可影响语速(0% 与 50% 对比)", _strengthOk === null ? "未测" : _strengthOk]);
-    _req.push(["AI 判语气/润色/选立绘链路可用", !!llmOk]);
-    _req.push(["AI 润色在多场景里真实生效", _rows.some(r => r.polish)]);
-    try { if (Number(window.__fvttTTSPolishRejected || 0) > 0) push("- 注: 有 " + window.__fvttTTSPolishRejected + " 次 AI 润色因「改写过大」被安全校验丢弃（属保护机制，不是失败）"); } catch (e) { /* noop */ }
-    _req.push(["关键词情绪(害羞/愤怒/温柔/悲伤)能被识别", _rows.length > 0 && _rows.filter(r => r.emo).length >= _rows.length - 1]);
-    _req.push(["玩家端代理合成可用(玩家/iPad 也能有声)", !fails.some(f => String(f).indexOf("代理合成") >= 0)]);
-    _req.push(["非模块发送框消息不朗读(白名单)", !fails.some(f => String(f) === "朗读白名单")]);
-    _req.push(["立绘实物检查(页面真的插了图且解码成功)", !fails.some(f => String(f) === "立绘显示")]);
-    _req.forEach(([n, ok]) => push("- " + (ok === true ? "✓ " : (ok === "未测" ? "· " : "✗ ")) + n + (ok === "未测" ? "（本次跳过）" : "")));
-  } catch (e) { push("- 需求对照生成失败: " + String((e && e.message) || e).slice(0, 60)); }
-
-  // 1.6.118 清理测试消息(用户确认: 删掉)
+  // 清理测试消息
   if (_testMsgIds.length && getCfg().finalTestKeepMsgs !== true) {
     let _del = 0;
-    for (const _mid of _testMsgIds) {
-      try {
-        const _mm = game.messages.get(_mid);
-        if (_mm && typeof _mm.delete === "function") { await _mm.delete(); _del++; }
-      } catch (e) { /* noop */ }
-    }
-    try { push("- 已清理测试消息: " + _del + "/" + _testMsgIds.length + " 条（不污染聊天记录）"); } catch (e) { /* noop */ }
+    for (const _mid of _testMsgIds) { try { const m = game.messages.get(_mid); if (m && typeof m.delete === "function") { await m.delete(); _del++; } } catch (e) { /* noop */ } }
+    push("- 已清理测试消息: " + _del + "/" + _testMsgIds.length + " 条");
   }
-  push("- 报告文件: engine\\final_test_report.md (模块 engine 目录下; 覆盖式写入, 始终为最近一次结果)");
+  push("- 报告文件: engine\\final_test_report.md");
   const md = L.join("\n");
   try { console.warn("[gpt-sovits-tts][最终测试]\n" + md); } catch (e) { /* noop */ }
   let saved = "";
   try {
-    const r = await svcRequest(cfg.serverUrl, "POST", "/diag", { type: "final-test", report: md }, { timeoutMs: 20000, retries: 0 });
+    const r = await svcRequest(cfg.serverUrl, "POST", "/diag", { type: "final-test", report: md }, { timeoutMs: 20000, retries: 0, quiet: true });
     const j = (r && typeof r.json === "function") ? await r.json().catch(() => ({})) : {};
     saved = (j && j.saved) || "";
   } catch (e) { /* noop */ }
-  ui.notifications.info("最终测试完成(耗时 " + Math.round((Date.now() - t0) / 1000) + "s)。报告文件: " + (saved || "engine\\final_test_report.md"));
+  try { ui.notifications.info("最终测试完成(" + Math.round((Date.now() - t0) / 1000) + "s)。报告: " + (saved || "engine\\final_test_report.md")); } catch (e) { /* noop */ }
   return { markdown: md, saved: saved, fails: fails };
 };
 

@@ -117,6 +117,7 @@ RESP:
 
 """
 
+import io
 import os
 import sys
 # 控制台/stdout 一律 UTF-8 容错(Windows 默认 GBK 会因 emoji 等非 BMP 字符崩溃: 'gbk' codec can't encode)
@@ -3446,6 +3447,30 @@ async def watchdog_state_endpoint():
                 out["watchdog_running"] = True
         except Exception:
             pass
+    except Exception as e:
+        out["ok"] = False
+        out["message"] = str(e)[:200]
+    return out
+
+
+# 1.6.126 分发完整性检查: 打包脚本是否把"看门狗三件套"一起发给别人
+@APP.get("/packcheck")
+async def packcheck_endpoint():
+    """{ok, bat, has_watchdog, has_install, has_uninstall, has_stop}"""
+    out = {"ok": True, "bat": False, "has_watchdog": False, "has_install": False, "has_uninstall": False, "has_stop": False}
+    try:
+        eng_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "engine")
+        bat = os.path.join(eng_dir, "打包引擎给别人.bat")
+        out["bat"] = os.path.exists(bat)
+        if out["bat"]:
+            try:
+                txt = io.open(bat, "r", encoding="gbk", errors="replace").read()
+            except Exception:
+                txt = io.open(bat, "r", encoding="utf-8", errors="replace").read()
+            out["has_watchdog"] = "watchdog.vbs" in txt
+            out["has_install"] = "安装看门狗自启.bat" in txt
+            out["has_uninstall"] = "卸载看门狗自启.bat" in txt
+            out["has_stop"] = "停止引擎.bat" in txt
     except Exception as e:
         out["ok"] = False
         out["message"] = str(e)[:200]
