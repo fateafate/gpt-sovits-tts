@@ -1466,6 +1466,7 @@ async function doSubmitChat(ta, opts = {}) {
     try {
       await ChatMessage.create(data);
       try { ta.value = ""; ta.focus(); } catch (e) { /* noop */ }
+      refreshPreloadBtn();   // 1.6.102 发送后输入框已清空 → 预加载按钮立即回到"AI 预加载"(不再一直显示已加载)
     } catch (err) {
       console.error("[gpt-sovits-tts] 消息创建失败:", err);
       notifyOnce(_L("ui.sendFail", "发送失败"), "warn");
@@ -1518,6 +1519,32 @@ async function applyEmotion(emotion, name) {
 
 function sendPopCurrentChars() {
   return (quickChars && quickChars.chars) || [];
+}
+
+// 1.6.102 预加载按钮状态复核(修"预加载发送之后按钮还显示 ✓已预加载 / 已加载完"):
+//   发送成功后 textarea 是程序清空的(.value=""), 不会触发 input 事件 → 旧逻辑只在"打字"时才重置按钮,
+//   于是一整局都停在"已预加载"。现在改成: 任何"打开面板/打字/发送完成"时都按
+//   「当前输入文字 + 声音签名(角色/语气/语言/语速)」重新算一次显示状态。
+function refreshPreloadBtn() {
+  try {
+    const pop = sendPopEl;
+    if (!pop) return;
+    const pb = pop.querySelector(".fvtt-tts-sendpop-preload");
+    if (!pb) return;
+    if (pb.classList.contains("loading")) return;   // 合成中不打扰进度显示
+    const ta = findChatTextarea();
+    const t = (ta && String(ta.value || "").trim()) ? stripStageDirections(String(ta.value || "").trim()) : "";
+    const ok = !!(t && preloadAudio && preloadAudio.url && preloadAudio.text === t && preloadAudio.watchKey === makeWatchKey());
+    if (ok) {
+      pb.textContent = _L("ui.preloadedBtn", "✓ 已预加载");
+      pb.title = _L("ui.preloadedSendTip", "音频已就绪，再点直接播出");
+      pb.classList.add("done");
+    } else {
+      pb.classList.remove("done");
+      pb.textContent = _L("ui.sendPopPreload", "AI 预加载");
+      pb.title = _L("ui.preloadHint", "预热 AI 并预合成当前这句话；再点一下直接发送(零等待)");
+    }
+  } catch (e) { /* noop */ }
 }
 
 function buildSendPop() {
@@ -1677,15 +1704,9 @@ function buildSendPop() {
       ui.notifications.warn(_L("ui.preloadFail", "预加载失败") + ": " + ((e && e.message) || "unknown"));
     }
   });
-  // 恢复预加载状态: 已预合成的音频(文字一致且角色/语气/语言未变)按钮直接显示 done, 再点即发送; 文字/签名变了 → 回到未预加载
+  // 恢复预加载状态(1.6.102 改为统一复核): 已预合成的音频(文字一致且角色/语气/语言未变)按钮直接显示 done, 再点即发送; 文字/签名变了 → 回到未预加载
   const preBtn = pop.querySelector(".fvtt-tts-sendpop-preload");
-  const _ta0 = findChatTextarea();
-  const _t0 = (_ta0 && String(_ta0.value || "").trim()) ? stripStageDirections(String(_ta0.value || "").trim()) : "";
-  if (preBtn && preloadAudio && preloadAudio.url && preloadAudio.text === _t0 && preloadAudio.watchKey === makeWatchKey()) {
-    preBtn.textContent = _L("ui.preloadedBtn", "✓ 已预加载");
-    preBtn.title = _L("ui.preloadedSendTip", "音频已就绪，再点直接播出");
-    preBtn.classList.add("done");
-  }
+  if (preBtn) refreshPreloadBtn();
   // 音量/语速(实时写设置)
   const vol = pop.querySelector(".fvtt-tts-sendpop-vol");
   const spd = pop.querySelector(".fvtt-tts-sendpop-speed");
@@ -2141,6 +2162,7 @@ function openSendPop() {
   renderSendPopEmotions();
   // 打开面板总是拉最新角色/情绪(服务端可能已更新槽/标签), 拉完重绘语气网格
   loadQuickChars({ force: true }).then(() => { try { renderSendPopEmotions(); } catch (e) { /* noop */ } }).catch(() => { /* noop */ });
+  refreshPreloadBtn();   // 1.6.102 每次打开面板都按当前输入重算"已预加载/空闲"(修发送后一直显示已加载)
   const ta = findChatTextarea();
   const fire = pop.querySelector(".fvtt-tts-sendpop-fire");
   if (fire) fire.disabled = !(ta && String(ta.value || "").trim());
@@ -2148,17 +2170,7 @@ function openSendPop() {
   if (ta && ta.dataset.fvttPreloadWatch !== "1") {
     ta.dataset.fvttPreloadWatch = "1";
     ta.addEventListener("input", () => {
-      try {
-        const pop2 = buildSendPop();
-        const pb = pop2.querySelector(".fvtt-tts-sendpop-preload");
-        if (!pb) return;
-        const tnow2 = String(ta.value || "").trim() ? stripStageDirections(String(ta.value || "").trim()) : "";
-        if (pb.classList.contains("done") && (!preloadAudio || preloadAudio.text !== tnow2)) {
-          pb.classList.remove("done");
-          pb.textContent = _L("ui.sendPopPreload", "AI 预加载");
-          pb.title = "";
-        }
-      } catch (e) { /* noop */ }
+      refreshPreloadBtn();   // 1.6.102 统一复核(打字 → 文字变化 → 按钮回到"AI 预加载")
     });
   }
 }
@@ -4348,6 +4360,8 @@ window.runFinalTest = async function runFinalTest() {
   push("# GPT-SoVITS TTS 最终测试报告");
   push("");
   push("- 时间: " + new Date().toLocaleString("zh-CN") + " | 执行者: " + opName + " | 当前角色: " + cn + " | 模块版本: " + verTxt);
+  push("- 测试脚本: **v3**(模块 " + verTxt + " 内置) | 覆盖: 环境与配置 · AI/Key 专项 · 语气提示 · 朗读提示词(强度) · 情绪参考音 · 实际朗读 · **立绘与头像实物检查**");
+  push("  (v3 新增: 立绘/头像实测 —— 不再只看 flags, 而是「路径能否取到图 + 页面是否真的插了图且解码成功」; 对应「只有语音没有立绘」回归)");
   push("");
   push("## 一、环境与配置");
   let engOk = false;
@@ -4392,6 +4406,12 @@ window.runFinalTest = async function runFinalTest() {
       ? ("本机直连(自己合成 → 压力在本机" + (_isLocal ? ", 用本机引擎" : ", 用 " + _su) + ")")
       : (window.__fvttTTSCanDirect === false ? "代理合成(委托 → 压力在对方那台机器)" : "探测中(页面刚加载)");
     push("- 合成方式: " + _cdTxt + (_by ? (" | 最近一次由「" + _by + "」的电脑合成(按语音生成者分配)") : ""));
+  } catch (e) { /* noop */ }
+  // 1.6.102 立绘展示方式: =indicator/none 时消息里本来就不插图, 会让"没有立绘"看起来像 bug
+  try {
+    const _pm = String(cfg.portraitMode || "");
+    const _pmOk = (_pm === "message" || _pm === "both");
+    push("- 立绘展示方式: " + (_pm || "(空)") + (_pmOk ? " ✓(消息内插图)" : " ⚠ 不会在消息内插立绘 → 语音设置里改成「消息内/both」"));
   } catch (e) { /* noop */ }
   push("");
   // 1.6.81 AI / Key 专项测试: 验证 key 有效性、base 端点、当前模型可用性, 并在当前模型不可用时自动找可用模型
@@ -4582,6 +4602,7 @@ window.runFinalTest = async function runFinalTest() {
   window.__fvttTTSAiLineDiag = true;
   window.__fvttTTSAiLineDiagList = [];
   window.__fvttTTSAiLineEnterList = [];
+  let _lastMsgId = "";   // 1.6.102 立绘/头像实测用: 记下本次实际朗读生成的消息
   try {
     for (let i = 0; i < scenes.length; i++) {
       const sc = scenes[i];
@@ -4598,6 +4619,7 @@ window.runFinalTest = async function runFinalTest() {
       let msg = null;
       try { msg = await ChatMessage.create({ content: sc.text, speaker: { alias: sc.role }, flags: { [MOD]: flT } }); }
       catch (e) { push("[" + sc.label + "] 发送失败: " + String((e && e.message) || e).slice(0, 60)); fails.push(sc.label + "发送"); continue; }
+      if (msg && msg.id) _lastMsgId = msg.id;
       let waited = 0;
       while (waited < 150 && !(window.__fvttTTSAiLineEnterList || []).some(p => p && p.mid === msg.id)) { await new Promise(r => setTimeout(r, 200)); waited++; }
       const _entered = !!(window.__fvttTTSAiLineEnterList || []).some(p => p && p.mid === msg.id);
@@ -4644,9 +4666,83 @@ window.runFinalTest = async function runFinalTest() {
     window.__fvttTTSAiLineDiagList = [];
     window.__fvttTTSAiLineEnterList = [];
   }
+  // 1.6.102 立绘 / 头像实测(回归重点): 不只看 flags 有没有写, 而是查
+  //   ① 消息里的立绘路径能不能真的取到图(HTTP) ② 页面是否真的插了 <img> 且浏览器解码成功(naturalWidth>0)
+  //   ③ 消息头部玩家头像是否也被换成同一张 ④ 若没插, 打印未插入原因(applyEmotionAvatar 的诊断环形缓冲)
+  push("");
+  push("## 三·B、立绘 / 头像实测(回归重点: 「只有语音没有立绘」)");
+  push("");
+  try {
+    const _ccB = (quickChars && quickChars.chars || []).find(x => x.name === cn) || null;
+    const _etB = String((_ccB && _ccB.emotion_tags) || "");
+    push("- 角色立绘库: " + ((_ccB && _ccB.sprites && _ccB.sprites.length) || 0) + " 张 | 情绪槽: " + (((_ccB && _ccB.emotions) || []).length) + " 个 | 情绪标注行: " + _etB.split(/\n+/).filter(l => /(立绘|sprite)/i.test(l)).length);
+    // ① 消息 flags
+    const _mB = _lastMsgId ? (game.messages.get(_lastMsgId) || null) : null;
+    const _fB = (_mB && _mB.flags && _mB.flags[MOD]) || {};
+    if (!_mB) {
+      push("- ✗ 没有拿到测试消息(实际朗读未生成) → 立绘无法检查");
+      fails.push("立绘消息");
+    } else {
+      const _avB = String(_fB.selSprite || _fB.aiSprite || _fB.avatar || "");
+      push("- 消息 flags: 立绘=" + (_avB ? String(_avB).slice(-44) : "(空)") + " | 情绪=" + String(_fB.emotion || "(未写)") + " | 音频=" + (_fB.audioUrl ? "url✓" : (_fB.audioData ? "内嵌✓" : "无")));
+      // ② 路径可访问性(真正取一次)
+      if (!_avB) {
+        push("- ✗ 消息里没有任何立绘路径 → 前端无处取图");
+        fails.push("立绘路径");
+      } else {
+        try {
+          const _uB = toAvatarUrl(_avB);
+          const _rB = await fetch(_uB, { cache: "no-store" });
+          const _lenB = Number(_rB.headers.get("content-length") || 0);
+          push("- 图片可访问: " + (_rB.ok ? "✓" : "✗") + " http=" + _rB.status + (_lenB ? (" " + Math.round(_lenB / 1024) + "KB") : "") + " ← " + String(_uB).replace(window.location.origin, "").slice(-56));
+          if (!_rB.ok) fails.push("立绘图片");
+        } catch (e) { push("- 图片可访问: ✗ 请求失败 " + String((e && e.message) || e).slice(0, 60)); fails.push("立绘图片"); }
+      }
+      // ③ 页面 DOM: 是否插了图 + 是否解码成功(轮询 2.4s; 没插则主动补插一次再判)
+      const _readDom = () => {
+        try {
+          const el = document.querySelector('.message[data-message-id="' + _lastMsgId + '"]');
+          const im = el && el.querySelector(".fvtt-tts-emotion-avatar");
+          const hi = el && el.querySelector(".message-header img, .message-sender img");
+          return { el: !!el, found: !!im, nw: im ? (im.naturalWidth || 0) : -1, src: im ? String(im.getAttribute("src") || "") : "", head: hi ? String(hi.getAttribute("src") || "") : "" };
+        } catch (e) { return { el: false, found: false, nw: -1, src: "", head: "" }; }
+      };
+      let _dB = _readDom();
+      let _wB = 0;
+      while (_wB < 12 && (!_dB.found || _dB.nw <= 0)) {
+        await new Promise(r => setTimeout(r, 200)); _wB++;
+        _dB = _readDom();
+        if (!_dB.found && _wB === 6) {
+          // 页面可能没走渲染钩子(或消息在折叠区): 主动补插一次, 模拟"消息可见"时的行为
+          try { const _m5 = game.messages.get(_lastMsgId); if (_m5 && _m5.element) applyEmotionAvatar(_m5, _m5.element); } catch (e) { /* noop */ }
+        }
+      }
+      if (!_dB.el) { push("- 页面显示: 消息元素未渲染(聊天窗口里没有这条?) → 立绘无法肉眼核对, 不计入失败"); }
+      else if (!_dB.found) {
+        push("- ✗ 页面显示: 消息里**没有插立绘元素** → 视觉上就是「只有语音」");
+        fails.push("立绘显示");
+      } else if (_dB.nw <= 0) {
+        push("- ✗ 页面显示: 立绘元素在, 但浏览器**没能解码图片**(naturalWidth=0, 通常是 404/被拦截) ← " + _dB.src.slice(-50));
+        fails.push("立绘显示");
+      } else {
+        push("- ✓ 页面显示: 立绘已插入且解码成功(naturalWidth=" + _dB.nw + "px) ← " + _dB.src.slice(-50));
+      }
+      // ④ 头部头像
+      if (_dB.found && _dB.head) {
+        const _sameHead = (_dB.head === _dB.src) || (String(_dB.head).slice(-24) === String(_dB.src).slice(-24));
+        push("- 消息头部头像: " + (_sameHead ? "✓ 已随立绘替换" : "— 未替换(" + _dB.head.slice(-34) + ")"));
+      } else if (_dB.el) push("- 消息头部头像: 保持原样");
+      // ⑤ 若仍未插入 → 打印诊断环(说明为什么)
+      const _whyB = (window.__fvttTTSSpriteWhy || []).slice(-4);
+      if (_whyB.length) {
+        push("- 未插入原因(最近): " + _whyB.map(x => x.reason).join(" ｜ "));
+      }
+      push("- 提示: 任何时候想单独复查, 用 语音设置 → 底部「🩺 立绘诊断」或在 F12 执行 `await fvttTTSDiag()`");
+    }
+  } catch (e) { push("- 立绘/头像实测异常: " + String((e && e.message) || e).slice(0, 80)); fails.push("立绘实测"); }
   push("");
   push("## 四、结论");
-  push("- 耗时: " + Math.round((Date.now() - t0) / 1000) + "s | LLM: " + (llmOk ? "AI链路(判语气+润色+选立绘)已启用" : "规则降级(无AI: 文本规则/提示词基调; 情绪差异靠情绪参考音, 默认零 DSP 不变调)"));
+  push("- 测试脚本: v3(模块 " + verTxt + ") | 耗时: " + Math.round((Date.now() - t0) / 1000) + "s | LLM: " + (llmOk ? "AI链路(判语气+润色+选立绘)已启用" : "规则降级(无AI: 文本规则/提示词基调; 情绪差异靠情绪参考音, 默认零 DSP 不变调)"));
   push("- 关键项: " + (fails.length ? ("⚠ 存在问题 → " + fails.join("、")) : "全部通过 ✓"));
   push("- 报告文件: engine\\final_test_report.md (模块 engine 目录下; 覆盖式写入, 始终为最近一次结果)");
   const md = L.join("\n");

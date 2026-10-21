@@ -435,8 +435,7 @@ export class VoiceManager {
     // AI 接入 (LLM 语气判断, 可选): 直接在面板顶部填写网址+密钥, 输入完自动检测模型并填充下拉
     let aiBase = "", aiKeySet = false, aiKeyVal = "", aiEnabled = false, aiModel = "", aiModels = [], _cfgTextLang = "", _gmMute = false;
     let _shBaseV = "", _shKeyV = "", _shModelV = "";   // 1.6.82 世界共享配置(会覆盖本机值, 需在 UI 明示)
-    // 1.6.89 主持人提示词(世界级): 世界设定/朗读规则 → 注入所有 AI 调用
-    const _gmPromptVal = (() => { try { return String(game.settings.get("gpt-sovits-tts", "gmPrompt") || ""); } catch (e) { return ""; } })();
+    // 1.6.102 清理: 1.6.97 起已无世界级「语气提示(gmPrompt)」设置, 这里不再读取(否则每次开面板都会读一个不存在的设置)
     try {
       // AI 接入区显示: GM 分发的世界共享配置优先(pl 只读, 面板如实反映共享生效状态)
       const _shB = game.settings.get("gpt-sovits-tts", "aiSharedBase") || "";
