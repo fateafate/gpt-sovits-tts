@@ -19,7 +19,7 @@ window.fetchAndRefreshModels = fetchAndRefreshModels;
 const MODULE = "gpt-sovits-tts";
 // 1.6.103 代码版本号: Foundry 的 game.modules.get(id).version 读的是"载入世界时的清单缓存",
 //   改了 manifest 不刷新会一直显示旧版本(用户多次看到 1.6.96 而实际代码已是新版) → 报告里同时打印两者, 便于确认真的在跑新代码
-const MOD_VERSION = "1.6.130";
+const MOD_VERSION = "1.6.131";
 const CHAT_STYLES = (typeof CONST !== "undefined" && (CONST.CHAT_MESSAGE_STYLES || CONST.CHAT_MESSAGE_TYPES)) || {};
 
 /* ============ 设置定义 ============ */
@@ -5202,9 +5202,22 @@ window.runFinalTest = async function runFinalTest() {
     if (d1 >= 2) fails.push("每句只调1次");
     if (!r1.audio) fails.push("调用次数测试合成");
     const _sty = (() => { try { return getStylePrompt(cn) || ""; } catch (e) { return ""; } })();
-    const _se = (() => { try { return styleEmotionKey(_sty); } catch (e) { return ""; } })();
+    let _se = (() => { try { return styleEmotionKey(_sty); } catch (e) { return ""; } })();
+    let _styTouched = false;
     let _pol0 = null; try { _pol0 = getCfg().llmPolish; } catch (e) { /* noop */ }
-    if (!_se) push("- 快路径: 跳过（朗读提示词不能确定情绪）");
+    // 1.6.130: 当前提示词定不了情绪时, 临时换成能定情绪的提示词把快路径测到(测完还原),
+    //   否则"省 token"这条关键能力会一直是"跳过"、没被验证过。
+    if (!_se) {
+      try {
+        if (typeof setStylePrompt === "function") {
+          setStylePrompt(cn, "害羞羞涩的语气");
+          const _se2 = styleEmotionKey("害羞羞涩的语气");
+          if (_se2) { _se = _se2; _styTouched = true; }
+        }
+      } catch (e) { /* noop */ }
+      if (_se) push("- · 当前朗读提示词不能定情绪 → 临时用「害羞羞涩的语气」实测快路径（测完自动还原你的提示词）");
+    }
+    if (!_se) push("- 快路径: 跳过（连临时提示词也定不出情绪）");
     else {
       try { await game.settings.set(MODULE, "llmPolish", false); } catch (e) { /* noop */ }
       await new Promise(r => setTimeout(r, 300));
@@ -5215,6 +5228,7 @@ window.runFinalTest = async function runFinalTest() {
       if (c2 - c1 > 0) fails.push("零token快路径");
       if (!r2.audio) fails.push("快路径合成");
       try { if (_pol0 !== null) await game.settings.set(MODULE, "llmPolish", _pol0); } catch (e) { /* noop */ }
+      if (_styTouched) { try { setStylePrompt(cn, _sty); } catch (e) { /* noop */ } }
     }
     const s3 = await _stat();
     if (s3) push("- 引擎侧 token 累计: 输入 " + (s3.in_tokens || 0) + " · 输出 " + (s3.out_tokens || 0) + "（最近一次 " + (s3.last_in || 0) + "/" + (s3.last_out || 0) + "）");
