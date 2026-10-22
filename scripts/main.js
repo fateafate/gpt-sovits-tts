@@ -4894,7 +4894,11 @@ window.runFinalTest = async function runFinalTest() {
       } catch (e) { _hc = null; }
       if (_hc && _hc.ok) {
         _chk("引擎 /health 可用", true, "api=" + (_hc.api_version || "?") + " stuck=" + (_hc.stuck_limit_s || "?") + "s busy=" + (_hc.busy || 0));
-        if (_hc.api_version && _hc.api_version !== MOD_VERSION) push("- · 引擎 api_version=" + _hc.api_version + " ≠ 模块 " + MOD_VERSION + "（不影响本机使用，重启一次引擎即可对齐）");
+        // 只在"引擎缺少 1.6.130 的关键能力"时提示(模块小版本号不必与引擎完全一致 —
+        // 模块只改前端时引擎版本会落后一档, 那不是问题, 别每次报告都喊)
+        const _vnum = (v) => String(v || "").split(".").map(n => parseInt(n, 10) || 0);
+        const _vlt = (a, b) => { const x = _vnum(a), y = _vnum(b); for (let i = 0; i < 3; i++) { if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) < (y[i] || 0); } return false; };
+        if (_hc.api_version && _vlt(_hc.api_version, "1.6.130")) push("- · ⚠ 引擎 api_version=" + _hc.api_version + "（早于 1.6.130）→ 重启一次引擎即可用上「合成不阻塞 + 卡死自愈」");
       } else push("- · 引擎 /health 不可用 → 引擎还没升级到 1.6.130（重启引擎即可；老引擎合成时整个服务会无响应）");
     }
     let _pk = null;
