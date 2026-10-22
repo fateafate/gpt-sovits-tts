@@ -19,7 +19,7 @@ window.fetchAndRefreshModels = fetchAndRefreshModels;
 const MODULE = "gpt-sovits-tts";
 // 1.6.103 代码版本号: Foundry 的 game.modules.get(id).version 读的是"载入世界时的清单缓存",
 //   改了 manifest 不刷新会一直显示旧版本(用户多次看到 1.6.96 而实际代码已是新版) → 报告里同时打印两者, 便于确认真的在跑新代码
-const MOD_VERSION = "1.6.131";
+const MOD_VERSION = "1.6.132";
 const CHAT_STYLES = (typeof CONST !== "undefined" && (CONST.CHAT_MESSAGE_STYLES || CONST.CHAT_MESSAGE_TYPES)) || {};
 
 /* ============ 设置定义 ============ */
@@ -568,7 +568,7 @@ async function synthSafe(runner, txt, lang, opts) {
 }
 
 /* ============ 核心: 朗读 ============ */
-async function speak(text, { lang = null, sender = "", refAudioPath = null, promptText = null, promptLang = null, speed = null, volume = null, auxRefAudioPaths = null, emotionMix = null, emotion = null, broadcast = false, messageId = "", skipAiEmotion = false, role = null, aiDirect = false } = {}) {
+async function speak(text, { lang = null, sender = "", refAudioPath = null, promptText = null, promptLang = null, speed = null, volume = null, auxRefAudioPaths = null, emotionMix = null, emotion = null, broadcast = false, messageId = "", skipAiEmotion = false, role = null, aiDirect = false, silentLocal = false } = {}) {
   const cfg = getCfg();
   try { window.__fvttTTSLastSpeakAt = Date.now(); } catch (e) { /* noop */ }   // 1.6.126 埋点: 验证打字朗读/预加载真的走到 speak
   if (!cfg.enabled) return false;
@@ -805,7 +805,14 @@ async function speak(text, { lang = null, sender = "", refAudioPath = null, prom
         // 不受本模块串行队列约束, 多条消息同时到达就"一起响"(重叠混乱)。
         // 改为 flags 写回单通道: 他端经 updateChatMessage 统一走模块 queue(串行, 一条播完下一条)。
         // 全员同声保留(写回同步全员), 只是本机内部不再重叠。sc20/26 测试自触发广播, 不受影响。
-        item = { play: () => audioPlay(url4, { volume: vol, push: false, onStart: _registerPlayed }), cleanup: () => { try { if (cleanupObj) URL.revokeObjectURL(cleanupObj); } catch (e) { /* noop */ } } };
+        // 1.6.132 silentLocal: 作者刚在"打字停顿朗读"里预读过同一句 → 发送时不再本地重播
+        //   (他人没听过预读, 照常经 flags 写回收听一遍; 作者标记 playedIds 防 updateChatMessage 再播)
+        if (silentLocal) {
+          _registerPlayed();
+          item = { play: () => { try { console.debug("[gpt-sovits-tts] 打字已预读同一句 → 发送不重复本地播放"); } catch (e) { /* noop */ } }, cleanup: () => { try { if (cleanupObj) URL.revokeObjectURL(cleanupObj); } catch (e) { /* noop */ } } };
+        } else {
+          item = { play: () => audioPlay(url4, { volume: vol, push: false, onStart: _registerPlayed }), cleanup: () => { try { if (cleanupObj) URL.revokeObjectURL(cleanupObj); } catch (e) { /* noop */ } } };
+        }
         if (messageId) {
           recentBroadcastIds.add(messageId);
           if (recentBroadcastIds.size > 12) {   // 只记最近 12 条, 防无限增长
@@ -1129,8 +1136,21 @@ function evaluateMessage(message) {
   return { text, lang: cfg.textLang, isSelf, speakerName: message.speaker?.alias || message.author?.name || "" };
 }
 
-async function maybeSpeak(message) {
-  const cfg = getCfg();
+/** 1.6.132 防重复朗读: 这句刚被打字停顿朗读预读过吗(30s 内、文本一致)?
+ *   typing 预读只发生在作者本机, 发送时作者若不跳过本地播放就会"预读一遍+发送一遍"=听两遍;
+ *   他人没听过预读, 所以只跳过作者本地播放, flags 写回/广播照常。 */
+function _wasTypingPreviewed(txt) {
+  try {
+    const t = String(txt || "").replace(/\s+/g, " ").trim();
+    if (!t) return false;
+    const lt = lastTypedSpoken;
+    if (!lt || !lt.text || !lt.ts) return false;
+    if (Date.now() - lt.ts > 30000) return false;
+    return String(lt.text).replace(/\s+/g, " ").trim() === t;
+  } catch (e) { return false; }
+}
+
+async function maybeSpeak(message) {  const cfg = getCfg();
   if (!cfg.enabled) return;
   // 1.6.42 朗读白名单: 只有通过本模块发送框发出的文字(fromModSend标记)才朗读;
   // 其他模组消息/普通聊天框直发/系统与机制消息一律不出声(打字停顿朗读不经过此判定, 属本模块显式朗读)
@@ -1335,6 +1355,9 @@ async function maybeSpeak(message) {
   //   原先写 flA(只在上面 try 块内 const 声明) → ReferenceError → 整个 maybeSpeak 中断 →
   //   「不合成 → 没有 audioUrl → 立绘关卡判定"未朗读"→ 不插立绘」= 用户看到的"只有语音/没有立绘"。
   const opts = { lang: flLang || decision.lang, sender: decision.speakerName, ...(overrides || {}), aiDirect: !!(fl && fl.aiDirect) };
+  // 1.6.132 防"打字预读+发送=作者听两遍": 同一句刚被打字停顿朗读预读过(30s 内) →
+  //   发送时作者不再本地重播(他人没听过预读, 照常经 flags 写回收听一遍)
+  const _heardTyping = _wasTypingPreviewed(String((message && message.content) || ""));
   // 预加载音频命中: 输入与预合成文本一致 且 角色/语气/语言/语速未变 → 作者直接播预合成音频并广播(跳过 AI 判断/重新合成, 零等待)
   // 切了角色或语气 → 签名不匹配 → 回落下方正常合成(重新按当前角色/语气合成, 绝不播旧声音)
   if (preloadHit(stripStageDirections(speakText)) && preloadAudio && preloadAudio.url) {
@@ -1350,9 +1373,13 @@ async function maybeSpeak(message) {
       } catch (e) { /* noop */ }
       if (window.__fvttTTSCanDirect === true) {
         if (message.id) { playedIds.add(message.id); setTimeout(() => { try { playedIds.delete(message.id); } catch (e) { /* noop */ } }, 30000); }   // 本地预载已播(防 flags 写回再播)
-        // 官方文件路径优先 + push 广播(全员官方通道); 无落盘才 dataUrl 本端播
         const _mpu = (() => { try { return _modulePath(preloadAudio.audioUrl || ""); } catch (e) { return ""; } })();
-        queue.enqueue({ play: () => audioPlay(_mpu || preloadAudio.dataUrl || preloadAudio.url, { volume: playVolume(), push: !!_mpu }) });
+        // 1.6.132: 这句刚被"打字停顿朗读"预读过 → 预加载命中也不再本地重播(作者只听预读那一次)
+        if (!_heardTyping) {
+          queue.enqueue({ play: () => audioPlay(_mpu || preloadAudio.dataUrl || preloadAudio.url, { volume: playVolume(), push: !!_mpu }) });
+        } else {
+          try { console.debug("[gpt-sovits-tts] 打字已预读同一句 → 预加载命中不重复本地播放"); } catch (e) { /* noop */ }
+        }
       } else {
         // 代理模式: 本机没直连引擎, 预载音频已在 flags 写回(等 pl 端 hook 从 30000 拉), 不重复发声
         try { if (message.id) pendingTts.set(message.id, { text: speakText, ts: Date.now() }); } catch (e) { /* noop */ }
@@ -1385,7 +1412,9 @@ async function maybeSpeak(message) {
       } catch (e) { /* noop */ }
       return;
     }
-    try { await speak(speakText, { ...opts, skipAiEmotion: true, broadcast: true, messageId: message.id || "" }); }
+    // 1.6.132 防重复: 同一句刚被打字停顿朗读预读过(30s 内) → 发送时作者本地不重播(他人照常听)
+    if (_heardTyping) { try { window.__fvttTTSLastSkipLocal = (window.__fvttTTSLastSkipLocal || 0) + 1; } catch (e) { /* noop */ } }
+    try { await speak(speakText, { ...opts, skipAiEmotion: true, broadcast: true, messageId: message.id || "", silentLocal: _heardTyping }); }
     catch (e) { console.warn("[gpt-sovits-tts] 朗读异常(已忽略):", e); }
   } else if (window.__fvttTTSCanDirect === false) {
     // 代理模式(非作者): 不设 15s 兜底合成(9881 不可达), 登记 pending — flags.audioUrl 同步到达即播放(updateChatMessage hook), 没到则静默等 GM
@@ -2723,7 +2752,10 @@ function attachTyping() {
       if (text.length < c.minLength) return;
       if (text === lastTypedSpoken.text && Date.now() - lastTypedSpoken.ts < 30000) return;
       lastTypedSpoken = { text, ts: Date.now() };
-      speak(text);
+      speak(text).then((ok) => {
+        // 预读失败(合成异常) → 撤销记录, 发送时该句仍会正常播放(不能因为"预读过"就吞掉发送的语音)
+        if (ok === false) { lastTypedSpoken = { text: "", ts: 0 }; }
+      }).catch(() => { lastTypedSpoken = { text: "", ts: 0 }; });
     }, c.typingDebounce);
   });
   ta.addEventListener("keydown", (ev) => {
@@ -4811,7 +4843,7 @@ window.runFinalTest = async function runFinalTest() {
   push("");
   push("- 时间: " + new Date().toLocaleString("zh-CN") + " | 执行者: " + opName + " | 角色: " + cn);
   push("- 版本断言: 代码=" + MOD_VERSION + " | 清单缓存=" + verTxt + (String(verTxt) === String(MOD_VERSION) ? " ✓ 一致" : "（缓存落后可忽略，看代码版本）"));
-  push("- v7 覆盖: 引擎前置拦截 · 回归冒烟(0 成本断言) · 多场景 6 条 · **发送框真实路径/AI直出** · **打字停顿朗读** · **AI 预加载→再点发送** · **长句润色** · **翻译端点** · **其他角色音色** · **打包完整性** · **看门狗(Python 版)自启** · **合成中 /health 仍秒回**");
+  push("- v7 覆盖: 引擎前置拦截 · 回归冒烟(0 成本断言) · 多场景 6 条 · **发送框真实路径/AI直出** · **打字停顿朗读** · **AI 预加载→再点发送** · **长句润色** · **翻译端点** · **其他角色音色** · **打包完整性** · **看门狗(Python 版)自启** · **合成中 /health 仍秒回** · **防重复(打字预读后发送不重播)**");
   push("");
 
   // ============ ① 引擎前置：不通就直接出报告，不再空转几百秒 ============
@@ -4868,6 +4900,19 @@ window.runFinalTest = async function runFinalTest() {
       window.__fvttTTSCrashNotified = p1; window.__fvttTTSCrashSilent = p2;
       return (window.__fvttTTSCrashList || []).length > b;
     })());
+    // 1.6.132 防重复朗读: 打字预读判定 — 同句 30s 内 → 发送跳过作者本地重播; 不同句/超时/空 → 不跳过
+    {
+      const _ltsSave = lastTypedSpoken;
+      try {
+        lastTypedSpoken = { text: "  测试 防重复 ", ts: Date.now() };
+        _chk("防重复: 同句30s内=跳过本地重播", _wasTypingPreviewed("测试 防重复") === true);
+        _chk("防重复: 不同句=不跳过", _wasTypingPreviewed("另一句") === false);
+        lastTypedSpoken = { text: "测试", ts: Date.now() - 31000 };
+        _chk("防重复: 超过30s=不跳过", _wasTypingPreviewed("测试") === false);
+        lastTypedSpoken = { text: "", ts: 0 };
+        _chk("防重复: 无预读记录=不跳过", _wasTypingPreviewed("测试") === false);
+      } catch (e) { /* noop */ } finally { lastTypedSpoken = _ltsSave; }
+    }
     // 看门狗 / 打包完整性（引擎侧读文件）
     let _wd = null;
     try {
