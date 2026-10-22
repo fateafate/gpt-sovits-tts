@@ -4807,7 +4807,7 @@ window.runFinalTest = async function runFinalTest() {
     return { id: msg && msg.id, audio: audio, flags: fNow, ms: Date.now() - _t };
   };
 
-  push("# GPT-SoVITS TTS 最终测试报告（v6 精简版）");
+  push("# GPT-SoVITS TTS 最终测试报告（v7 精简版）");
   push("");
   push("- 时间: " + new Date().toLocaleString("zh-CN") + " | 执行者: " + opName + " | 角色: " + cn);
   push("- 版本断言: 代码=" + MOD_VERSION + " | 清单缓存=" + verTxt + (String(verTxt) === String(MOD_VERSION) ? " ✓ 一致" : "（缓存落后可忽略，看代码版本）"));
@@ -4824,13 +4824,20 @@ window.runFinalTest = async function runFinalTest() {
     engDetail = engOk ? ("服务=" + String(sj.service || "") + " device=" + String(sj.device || "") + " 角色=" + String((sj.character && sj.character.name) || "?")) : String((sj && sj.message) || "无响应");
   } catch (e) { engDetail = String((e && e.message) || e); }
   if (!engOk) {
-    push("## 引擎未启动 → 测试中止");
+    // 1.6.130: 分清"没启动 / 卡死 / 只是慢", 并给出可执行的下一步
+    const _h0 = await probeEngineHealth(cfg.serverUrl).catch(() => ({ state: "unknown" }));
+    const _stateTxt = (_h0.state === "refused") ? "连接被拒 = 引擎进程没在跑"
+      : (_h0.state === "hung") ? "端口在听但 HTTP 不响应 = 引擎卡死"
+        : (_h0.state === "up") ? "引擎 /health 正常（刚才只是瞬时失败）" : "无法判定（引擎地址/网络）";
+    push("## 引擎不可用 → 测试中止（不会空转）");
     push("");
-    push("- " + engDetail);
-    push("- 处理: 双击 `engine\\启动引擎(无窗口).vbs`（或运行 `engine\\安装看门狗自启.bat` 让它以后自动起来），等状态灯变绿再重跑");
+    push("- 判定: " + _stateTxt);
+    push("- /status 详情: " + engDetail);
+    push("- 常见原因: ①引擎没启动（看门狗还没拉起）②冷启动中（首次加载模型约 1~3 分钟）③引擎卡死（1.6.130 起会自愈退出，看门狗随后重启）");
+    push("- 处理: ①先等 1~3 分钟看状态灯是否变绿再重跑 ②仍不行→双击 `engine\\安装看门狗自启.bat`（装启动项并立刻拉起看门狗）或 `engine\\启动引擎(无窗口).vbs` ③查 `engine\\watchdog.log` 最后几行，确认看门狗在跑、有没有拉起记录");
     const md0 = L.join("\n");
     try { console.warn("[gpt-sovits-tts][最终测试]\n" + md0); } catch (e) { /* noop */ }
-    try { ui.notifications.error("引擎未启动，最终测试已中止（不会空转）"); } catch (e) { /* noop */ }
+    try { ui.notifications.error("引擎不可用（" + (_h0.state === "hung" ? "无响应/卡死" : "未启动") + "），最终测试已中止；等 1~3 分钟或运行 engine\\安装看门狗自启.bat 后重跑", { permanent: false }); } catch (e) { /* noop */ }
     return { markdown: md0, saved: "", fails: ["引擎未启动"] };
   }
   push("## 一、环境（只保留结论）");
