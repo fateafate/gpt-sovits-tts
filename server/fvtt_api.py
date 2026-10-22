@@ -1753,11 +1753,13 @@ async def tts_handle(req: dict):
     streaming_mode = streaming_mode or return_fragment
 
 
-    try:
+    # 1.6.130 ★ 关键改造: 真正的推理/后处理放到工作线程(asyncio.to_thread) + 串行锁。
+    #   以前这里在 async def 里直接跑同步 GPU 推理 → 事件循环被整段占住: 合成期间 /status 也不响应,
+    #   一旦某次推理在 CUDA 内卡死, 整个 HTTP 服务永久无响应(端口还在 listen, 看门狗查不出来)。
+    #   现在: 事件循环永远空闲(/status、/health 秒回), 同一时刻只跑一个合成(GPU 安全)。
+    def _tts_blocking():
         tts_generator = _pipe.run(req)
-
         if streaming_mode:
-
             def streaming_generator(tts_generator: Generator, media_type: str):
                 if_frist_chunk = True
                 for sr, chunk in tts_generator:
@@ -1767,7 +1769,6 @@ async def tts_handle(req: dict):
                         if_frist_chunk = False
                     yield pack_audio(BytesIO(), chunk, sr, media_type).getvalue()
 
-            # _media_type = f"audio/{media_type}" if not (streaming_mode and media_type in ["wav", "raw"]) else f"audio/x-{media_type}"
             return StreamingResponse(
                 streaming_generator(
                     tts_generator,
@@ -1775,34 +1776,36 @@ async def tts_handle(req: dict):
                 ),
                 media_type=f"audio/{media_type}",
             )
-
-        else:
-            # 文本清洗(括号动作描写剥离) + 引擎内部切分(cut5) + 硬件自适应 batch 并行
-            # (=Shinsekai 同款参数: 多段同时推理, 而不是逐句串行 → 长文本 2~4 倍提速)
-            _text_raw = _clean_tts_text(req.get("text") or "")
-            req["text"] = _text_raw
-            sr, audio_data = next(tts_generator)   # 引擎内部按切分+batch 并行合成, 返回整段
-            audio_data = _limit_peak(_boost_head(_lift_weak_head(_trim_lead_silence_arr(_to_float_audio(audio_data), sr), sr), sr))   # 归一化 → 裁纯静音 → 弱起软提升 → 头部增益 → 防削波
-            # 1.6.63 末端头部清理(兜底): 语音起点对齐裁剪 + 开头弱音软提升, 保证"开头几个字听得见"
-            if _hf_clean is not None:
-                try:
-                    audio_data = _hf_clean(audio_data, sr)
-                except Exception:
-                    pass
-            audio_data = pack_audio(BytesIO(), audio_data, sr, media_type).getvalue()
-            # 1.6.65 情绪后处理: 默认不做任何 DSP(严格 Shinsekai — 情绪靠参考音频); 仅当 emotion_fx>0 时施加轻微语速/音量(永不变调)
+        # 文本清洗(括号动作描写剥离) + 引擎内部切分(cut5) + 硬件自适应 batch 并行
+        # (=Shinsekai 同款参数: 多段同时推理, 而不是逐句串行 → 长文本 2~4 倍提速)
+        _text_raw = _clean_tts_text(req.get("text") or "")
+        req["text"] = _text_raw
+        sr, audio_data = next(tts_generator)   # 引擎内部按切分+batch 并行合成, 返回整段
+        audio_data = _limit_peak(_boost_head(_lift_weak_head(_trim_lead_silence_arr(_to_float_audio(audio_data), sr), sr), sr))   # 归一化 → 裁纯静音 → 弱起软提升 → 头部增益 → 防削波
+        # 1.6.63 末端头部清理(兜底): 语音起点对齐裁剪 + 开头弱音软提升, 保证"开头几个字听得见"
+        if _hf_clean is not None:
             try:
-                _eff = float(req.get("emotion_fx", -1))
+                audio_data = _hf_clean(audio_data, sr)
             except Exception:
-                _eff = -1.0
-            if _eff < 0:
-                _eff = DEFAULT_EMOTION_FX
-            audio_data = _apply_emotion_fx(audio_data, req.get("emotion") or "", _eff)
-            if want_mp3:
-                mp3_bytes = _wav_to_mp3(audio_data)
-                if mp3_bytes:
-                    return _respond_with_file(mp3_bytes, "audio/mpeg", req)
-            return _respond_with_file(audio_data, f"audio/{media_type}", req)
+                pass
+        audio_data = pack_audio(BytesIO(), audio_data, sr, media_type).getvalue()
+        # 1.6.65 情绪后处理: 默认不做任何 DSP(严格 Shinsekai — 情绪靠参考音频); 仅当 emotion_fx>0 时施加轻微语速/音量(永不变调)
+        try:
+            _eff = float(req.get("emotion_fx", -1))
+        except Exception:
+            _eff = -1.0
+        if _eff < 0:
+            _eff = DEFAULT_EMOTION_FX
+        audio_data = _apply_emotion_fx(audio_data, req.get("emotion") or "", _eff)
+        if want_mp3:
+            mp3_bytes = _wav_to_mp3(audio_data)
+            if mp3_bytes:
+                return _respond_with_file(mp3_bytes, "audio/mpeg", req)
+        return _respond_with_file(audio_data, f"audio/{media_type}", req)
+
+    try:
+        async with _tts_lock():
+            return await asyncio.to_thread(_tts_blocking)
     except Exception as e:
         # 失败落盘(400 详情): 排查并发/多角色窗口下玩家端合成失败 — 引擎侧确认收到请求及具体原因
         try:
@@ -1823,6 +1826,71 @@ async def control(command: str = None):
 
 _SWITCHING = False   # 角色模型切换中(tts 拒绝, 防用错模型合成)
 _TTS_BUSY = 0        # 正在合成的请求数(switch 等待其归零, 防合成中换模型错角色)
+
+# ---- 1.6.130 稳定性: 合成不再阻塞事件循环 + 卡死自愈 ----
+# 事故背景(2026/10/22): 引擎跑到一半卡死 —— 进程在、9881 在 listen, 但 /status 永久超时
+#   (因为 tts_handle 是 async def 却直接跑同步 GPU 推理, 事件循环被整个占住; 一旦某次推理在
+#    CUDA 里卡住, 整个 HTTP 服务就再也不响应)。表现: 模块报"引擎未启动", 看门狗只查端口监听
+#   也看不出问题 → 必须重启引擎才能恢复。
+# 修法: ① 推理放线程(asyncio.to_thread) + 串行锁 → 事件循环永远空闲, /status//health 永远秒回;
+#       ② 单次合成超过 _TTS_STUCK_LIMIT 秒 = GPU 死锁 → 落盘日志后 os._exit, 让看门狗立刻重启。
+_TTS_START_TS = 0.0        # 当前这轮合成开始时间(0 = 没有合成在进行)
+_TTS_STUCK_LIMIT = 240     # 单次合成最长容忍秒数(正常长句约 10~20s, 240s 只会是死锁)
+_TTS_LOCK = None           # 合成串行锁(asyncio.Lock, 惰性创建)
+_BOOT_TS = time.time()
+API_VERSION = "1.6.130"    # fvtt_api.py 自身版本(与模块版本对齐; /health、/status 会带上, 便于确认引擎是否已升级)
+
+
+def _tts_lock():
+    """合成串行锁(惰性创建): 同一时刻只跑一个 GPU 推理, 与"事件循环不被阻塞"改造配套。"""
+    global _TTS_LOCK
+    if _TTS_LOCK is None:
+        _TTS_LOCK = asyncio.Lock()
+    return _TTS_LOCK
+
+
+_TTS_MONITOR_STARTED = False
+
+
+def _ensure_tts_monitor():
+    """惰性启动"合成卡死自愈"后台协程(在第一个 /tts 请求里创建, 保证有运行中的事件循环)。"""
+    global _TTS_MONITOR_STARTED
+    if _TTS_MONITOR_STARTED:
+        return
+    _TTS_MONITOR_STARTED = True
+    try:
+        asyncio.get_running_loop().create_task(_tts_stuck_monitor())
+    except Exception:
+        _TTS_MONITOR_STARTED = False
+
+
+async def _tts_stuck_monitor():
+    """单次合成超过 _TTS_STUCK_LIMIT 秒 = GPU 死锁/驱动挂死 → 落盘日志后直接退出进程,
+    让看门狗(engine\\watchdog.vbs)发现"进程没了且 9881 不监听" → 立刻重新拉起。
+    正常长句约 10~20 秒, 240 秒的阈值不会误杀。"""
+    while True:
+        try:
+            await asyncio.sleep(20)
+            if _TTS_BUSY > 0 and _TTS_START_TS > 0 and (time.time() - _TTS_START_TS) > _TTS_STUCK_LIMIT:
+                _el = round(time.time() - _TTS_START_TS, 1)
+                try:
+                    with open(os.path.join(os.path.dirname(__file__), "tts-requests.log"), "a", encoding="utf-8") as _lf:
+                        _lf.write("[%s] [tts-stuck] 合成已阻塞 %ss (>%ss) → 主动退出, 交给看门狗重启\n" % (
+                            time.strftime("%H:%M:%S"), _el, _TTS_STUCK_LIMIT))
+                        _lf.flush()
+                except Exception:
+                    pass
+                try:
+                    with open(os.path.join(os.path.dirname(__file__), "engine.log"), "a", encoding="utf-8") as _lg:
+                        _lg.write("[tts-stuck] blocking %ss -> exit for watchdog restart\n" % _el)
+                        _lg.flush()
+                except Exception:
+                    pass
+                os._exit(3)
+        except asyncio.CancelledError:
+            return
+        except Exception:
+            pass
 
 
 @APP.get("/tts")
@@ -1904,14 +1972,17 @@ async def tts_post_endpoint(request: TTS_Request):
 
 async def _tts_guard(req):
     """tts 互斥: 模型切换中拒绝; 合成期间计数(switch 等待其结束, 防合成中换模型导致错角色声音)."""
-    global _SWITCHING, _TTS_BUSY
+    global _SWITCHING, _TTS_BUSY, _TTS_START_TS
     if _SWITCHING:
         return JSONResponse(status_code=503, content={"ok": False, "message": "角色模型切换中，请稍候重试"})
     _TTS_BUSY += 1
+    _TTS_START_TS = time.time()
+    _ensure_tts_monitor()   # 1.6.130: 卡死自愈守护(第一次 /tts 时启动)
     try:
         return await tts_handle(req)
     finally:
         _TTS_BUSY -= 1
+        _TTS_START_TS = 0.0
 
 
 # Edge-TTS 在线合成(多引擎并行): 低配服务器/免部署角色用 — 服务器通过 edge_tts 库转发微软在线音色,
@@ -2049,6 +2120,7 @@ async def status():
     return {
         "ok": True,
         "service": "GPT-SoVITS (fvtt_api.py)",
+        "api_version": API_VERSION,
         "version": getattr(tts_config, "version", None),
         "device": str(getattr(tts_config, "device", "")),
         "is_half": bool(getattr(tts_config, "is_half", False)),
@@ -2058,6 +2130,30 @@ async def status():
         "synth_cache": {"size": len(_SYNTH_CACHE), "max": _SYNTH_CACHE_MAX},
         "character": char,
         "pool": {"size": len(TTS_POOL), "max": MAX_MODEL_POOL, "active": list(TTS_POOL.keys())},
+        # 1.6.130: 让客户端/看门狗区分"离线"与"正在合成(忙)"
+        "busy": _TTS_BUSY,
+        "tts_busy_s": (round(time.time() - _TTS_START_TS, 1) if (_TTS_BUSY > 0 and _TTS_START_TS > 0) else 0),
+        "uptime_s": round(time.time() - _BOOT_TS, 1),
+        "pid": os.getpid(),
+    }
+
+
+@APP.get("/health")
+async def health():
+    """1.6.130 极轻量健康探针(看门狗用): 只要进程和事件循环活着就秒回, 不做任何重活。
+
+    与 /status 的区别: 不读配置、不探测网卡、不遍历角色 → 即使正在合成(忙)也能立刻回答。
+    看门狗据此判断「端口在听但不响应 = 挂死」; 模块据此区分「引擎未启动 / 无响应 / 忙碌」。
+    """
+    return {
+        "ok": True,
+        "service": "gpt-sovits-tts-engine",
+        "api_version": API_VERSION,
+        "pid": os.getpid(),
+        "uptime_s": round(time.time() - _BOOT_TS, 1),
+        "busy": _TTS_BUSY,
+        "tts_busy_s": (round(time.time() - _TTS_START_TS, 1) if (_TTS_BUSY > 0 and _TTS_START_TS > 0) else 0),
+        "stuck_limit_s": _TTS_STUCK_LIMIT,
     }
 
 
@@ -3414,24 +3510,27 @@ async def watchdog_state_endpoint():
                 out["log_tail"] = " / ".join(lines)[-400:]
             except Exception:
                 pass
-        # 1.6.123 看门狗脚本本身是否存在(被 Windows Defender 隔离 → 登入不会自动启动引擎)
+        # 1.6.123/1.6.130 看门狗脚本本身是否存在(被杀软删掉 → 登入不会自动启动引擎)
         try:
-            _p_script = os.path.join(eng_dir, "watchdog.vbs")
+            _p_script = os.path.join(eng_dir, "watchdog.py")
             out["script"] = os.path.exists(_p_script)
             out["script_size"] = (os.path.getsize(_p_script) if out["script"] else 0)
+            out["script_path"] = _p_script
         except Exception:
             pass
         try:
             ap = os.environ.get("APPDATA", "")
             if ap:
                 sp = os.path.join(ap, "Microsoft", "Windows", "Start Menu", "Programs", "Startup")
-                lnk = os.path.join(sp, "gpt-sovits-tts-watchdog.vbs")
+                lnk = os.path.join(sp, "gpt-sovits-tts-watchdog.lnk")
                 out["startup_path"] = lnk
                 out["startup"] = os.path.exists(lnk)
+                # 旧版 .vbs 启动项(1.6.129-): 存在说明还是老安装, 已被杀软删脚本的话启动项是死的
+                out["legacy_startup"] = os.path.exists(os.path.join(sp, "gpt-sovits-tts-watchdog.vbs"))
         except Exception:
             pass
         # 看门狗是否在跑: 以「锁文件心跳」为准(看门狗每 5 秒刷新 watchdog.lock, 25 秒内有更新=活着);
-        # wmic 命令行判断在部分系统/编码下不可靠, 仅作补充
+        # 8) 再加一层 python 进程核对(pythonw + watchdog.py)
         try:
             lp2 = os.path.join(eng_dir, "watchdog.lock")
             if os.path.exists(lp2):
@@ -3439,12 +3538,15 @@ async def watchdog_state_endpoint():
         except Exception:
             pass
         try:
-            import subprocess
-            cp = subprocess.run(["wmic", "process", "where", "name='wscript.exe'", "get", "CommandLine", "/format:list"],
-                                capture_output=True, timeout=8)
-            txt = (cp.stdout or b"").decode("utf-8", "replace") + (cp.stderr or b"").decode("utf-8", "replace")
-            if "watchdog.vbs" in txt:
-                out["watchdog_running"] = True
+            import psutil
+            for _p in psutil.process_iter(["pid", "name", "cmdline"]):
+                try:
+                    _i = _p.info or {}
+                    if "pythonw" in (_i.get("name") or "").lower() and "watchdog.py" in " ".join(_i.get("cmdline") or []):
+                        out["watchdog_proc"] = int(_i.get("pid") or 0)
+                        break
+                except Exception:
+                    continue
         except Exception:
             pass
     except Exception as e:
@@ -3467,7 +3569,7 @@ async def packcheck_endpoint():
                 txt = io.open(bat, "r", encoding="gbk", errors="replace").read()
             except Exception:
                 txt = io.open(bat, "r", encoding="utf-8", errors="replace").read()
-            out["has_watchdog"] = "watchdog.vbs" in txt
+            out["has_watchdog"] = ("watchdog.py" in txt) or ("watchdog.vbs" in txt)
             out["has_install"] = "安装看门狗自启.bat" in txt
             out["has_uninstall"] = "卸载看门狗自启.bat" in txt
             out["has_stop"] = "停止引擎.bat" in txt

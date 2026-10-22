@@ -19,7 +19,7 @@ window.fetchAndRefreshModels = fetchAndRefreshModels;
 const MODULE = "gpt-sovits-tts";
 // 1.6.103 代码版本号: Foundry 的 game.modules.get(id).version 读的是"载入世界时的清单缓存",
 //   改了 manifest 不刷新会一直显示旧版本(用户多次看到 1.6.96 而实际代码已是新版) → 报告里同时打印两者, 便于确认真的在跑新代码
-const MOD_VERSION = "1.6.129";
+const MOD_VERSION = "1.6.130";
 const CHAT_STYLES = (typeof CONST !== "undefined" && (CONST.CHAT_MESSAGE_STYLES || CONST.CHAT_MESSAGE_TYPES)) || {};
 
 /* ============ 设置定义 ============ */
@@ -1428,6 +1428,45 @@ async function maybeSpeak(message) {
 
 /* ============ 状态灯 ============ */
 let _statusRetryT = null;
+
+/** 1.6.130 引擎健康探针(轻量: /health 秒回, 不做重活)。
+ *  返回值:
+ *    { state: "up",       busy, ttsBusyS }  引擎在线(可能正在合成)
+ *    { state: "busy" }                      端口在、也在回答, 只是 /status 恰好慢(合成中)
+ *    { state: "refused" }                   连接被拒 = 进程没起来(等看门狗拉起)
+ *    { state: "hung" }                      连上了但一直不回 = 进程在但卡死(需要重启)
+ *    { state: "unknown" }                   其他(旧版引擎没有 /health)
+ *  判定"卡死"的关键是耗时: 连接被拒是"立刻失败", 卡死会一直等到超时。 */
+async function probeEngineHealth(serverUrl, timeoutMs = 2500) {
+  const base = String(serverUrl || "").replace(/\/+$/, "");
+  if (!base) return { state: "unknown" };
+  const t0 = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
+  try {
+    const ac = (typeof AbortController !== "undefined") ? new AbortController() : null;
+    const tid = setTimeout(() => { try { if (ac) ac.abort(); } catch (e) { /* noop */ } }, timeoutMs);
+    let resp;
+    try {
+      resp = await fetch(base + "/health", { signal: ac ? ac.signal : undefined, cache: "no-store" });
+    } finally { clearTimeout(tid); }
+    const ms = ((typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now()) - t0;
+    if (resp && resp.ok) {
+      let j = {};
+      try { j = await resp.json(); } catch (e) { /* noop */ }
+      return { state: "up", busy: Number(j.busy || 0), ttsBusyS: Number(j.tts_busy_s || 0), ms };
+    }
+    if (resp && (resp.status === 404 || resp.status === 405)) return { state: "unknown", ms };   // 旧引擎没有 /health
+    return { state: "hung", ms, status: resp && resp.status };
+  } catch (e) {
+    const ms = ((typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now()) - t0;
+    const msg = String((e && e.message) || e || "");
+    // abort = 到点还没回 → 连上了但不响应(卡死); TypeError/Failed to fetch 且很快失败 → 进程没起来
+    const aborted = /abort/i.test(msg);
+    if (aborted) return { state: "hung", ms, reason: "timeout" };
+    if (ms < (timeoutMs * 0.6)) return { state: "refused", ms, reason: msg };
+    return { state: "unknown", ms, reason: msg };
+  }
+}
+
 async function checkStatus(force = false) {
   const cfg = getCfg();
   if (!cfg.enabled && !force) return;
@@ -1447,18 +1486,34 @@ async function checkStatus(force = false) {
   const r = await gptSovitsStatus(cfg.serverUrl).catch(() => ({ ok: false, data: null }));
   // 1.6.107 引擎离线/恢复提示(只提醒一次 + 告诉怎么自动启动): 以前引擎没开时只会在控制台刷
   //   "直连TTS失败(重试3次仍败): .../config"，用户不知道该开引擎
+  // 1.6.130 区分三种情况(用户被"引擎未启动"误导过: 其实引擎在跑, 只是卡死不响应):
+  //   连接被拒 = 真没启动(看门狗会在 Foundry 起来后自动拉起, 约 1~2 分钟)
+  //   连上但不回 = 进程在但卡死(引擎会自愈退出 + 看门狗重启, 约 1~2 分钟)
+  //   /health 说 busy = 正在合成, 不算故障, 不打扰
   try {
     const _wasDown = window.__fvttTTSEngineDown === true;
     if (!r.ok) {
-      window.__fvttTTSEngineDown = true;
-      if (!_wasDown && window.__fvttTTSEngineDownWarned !== true) {
-        window.__fvttTTSEngineDownWarned = true;
-        try {
-          ui.notifications.warn("TTS 引擎未启动(" + cfg.serverUrl + ")：装了 engine\\安装看门狗自启.bat 时，它会在 Foundry 起来后自动静默启动引擎；没有就双击 engine\\启动引擎(无窗口).vbs", { permanent: false });
-        } catch (e2) { /* noop */ }
+      // 先探 /health: 排除"只是 /status 慢"和"卡死 vs 未启动"
+      const _h = await probeEngineHealth(cfg.serverUrl).catch(() => ({ state: "unknown" }));
+      if (_h.state === "up") {
+        // 引擎活着(/status 可能刚好在合成高峰超时) → 不算故障
+        window.__fvttTTSEngineDown = false;
+        window.__fvttTTSEngineDownWarned = false;
+        if (_wasDown) { try { ui.notifications.info("TTS 引擎已就绪 ✓ 可以正常朗读了"); } catch (e2) { /* noop */ } }
+      } else {
+        window.__fvttTTSEngineDown = true;
+        if (!_wasDown && window.__fvttTTSEngineDownWarned !== true) {
+          window.__fvttTTSEngineDownWarned = true;
+          const _url = cfg.serverUrl;
+          const _tip = (_h.state === "hung")
+            ? ("TTS 引擎无响应(" + _url + ")：进程还在但卡住了。引擎会自己退出、看门狗随后自动重启它（约 1~2 分钟，期间不用管）；急用可双击 engine\\停止引擎.bat 再双击 engine\\启动引擎(无窗口).vbs")
+            : ("TTS 引擎未启动(" + _url + ")：装了 engine\\安装看门狗自启.bat 时，它会在 Foundry 起来后自动静默启动引擎（约 1~2 分钟）；没有就双击 engine\\启动引擎(无窗口).vbs");
+          try { ui.notifications.warn(_tip, { permanent: false }); } catch (e2) { /* noop */ }
+        }
       }
     } else if (_wasDown) {
       window.__fvttTTSEngineDown = false;
+      window.__fvttTTSEngineDownWarned = false;   // 1.6.130: 恢复后重置, 再掉线还会提醒一次
       try { ui.notifications.info("TTS 引擎已就绪 ✓ 可以正常朗读了"); } catch (e2) { /* noop */ }
     }
   } catch (e) { /* noop */ }
