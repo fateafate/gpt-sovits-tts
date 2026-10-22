@@ -337,6 +337,7 @@
     "aiGot": "获取到模型",
     "close": "关闭",
     "preloadHint": "预热 AI 并预合成当前这句话；再点一下直接发送(零等待)",
+    "preloadDoneToast": "✓ 已预加载，发送即零等待",
     "speedTip": "0 = 自动（交给朗读提示词与 AI 决定语速）",
     "styleStr": "强度",
     "styleStrTip": "提示词强度：0%=不改变语速/停顿，100%=完全按提示词",

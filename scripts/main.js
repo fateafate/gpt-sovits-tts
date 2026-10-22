@@ -19,7 +19,7 @@ window.fetchAndRefreshModels = fetchAndRefreshModels;
 const MODULE = "gpt-sovits-tts";
 // 1.6.103 代码版本号: Foundry 的 game.modules.get(id).version 读的是"载入世界时的清单缓存",
 //   改了 manifest 不刷新会一直显示旧版本(用户多次看到 1.6.96 而实际代码已是新版) → 报告里同时打印两者, 便于确认真的在跑新代码
-const MOD_VERSION = "1.6.134";
+const MOD_VERSION = "1.6.135";
 const CHAT_STYLES = (typeof CONST !== "undefined" && (CONST.CHAT_MESSAGE_STYLES || CONST.CHAT_MESSAGE_TYPES)) || {};
 
 /* ============ 设置定义 ============ */
@@ -1967,6 +1967,7 @@ function buildSendPop() {
       btnP2.title = _L("ui.preloadedSendTip", "音频已就绪，再点直接播出");
       btnP2.classList.remove("loading");
       btnP2.classList.add("done");
+      try { if (!wasDone) notifyPreloadDone(tnow); } catch (e) { /* noop */ }   // 1.6.134 完成立即告知(wasDone=直接发送, 不提示"已预加载")
       // 合成完成只标记 done, 等待用户点击发送(不再自动发送; 再点即直接播出同一段零等待音频)
       // 1.6.129: wasDone = 上一轮已预加载过、这次因为文字/角色/语气变了而重合成 → 按"再点即发送"的承诺直接发送,
       //   否则用户点了没反应(最终测试 L 段"预加载→发送 消息✗"就是落在这条路径上)。
@@ -2697,6 +2698,17 @@ function updateMicUI() {
 }
 
 /* ============ 打字即读 ============ */
+/** 1.6.134 预加载完成提示(节流): 同一句 60s 内只提示一次; 发送面板没开时也能立刻知道"已就绪" */
+let lastPreloadNotified = { text: "", ts: 0 };
+function notifyPreloadDone(text) {
+  try {
+    const now = Date.now();
+    if (text && text === lastPreloadNotified.text && now - lastPreloadNotified.ts < 60000) return;
+    lastPreloadNotified = { text: text || "", ts: now };
+    ui.notifications.info(_L("ui.preloadDoneToast", "✓ 已预加载，发送即零等待"));
+  } catch (e) { /* noop */ }
+}
+
 /** 1.6.134 把"预读/预合成"得到的音频收进 preloadAudio(自动预加载核心, 与手动按钮共用) */
 async function adoptPreload(pv, rawText) {
   try {
@@ -2836,8 +2848,11 @@ function attachTyping() {
           try {
             // 1.6.134 顺手把预读播放的这段音频存成预加载 → 发送零等待(零额外合成/LLM)
             const pv = window.__fvttTTSLastTypingPreview;
-            if (pv && (pv.blob || pv.dataUri || pv.audioUrl)) await adoptPreload(pv, text);
-            try { refreshPreloadBtn(); } catch (e) { /* noop */ }
+            if (pv && (pv.blob || pv.dataUri || pv.audioUrl)) {
+              const hadOk = await adoptPreload(pv, text);
+              try { refreshPreloadBtn(); } catch (e) { /* noop */ }
+              if (hadOk) notifyPreloadDone(text);   // 1.6.134 完成立即告知(按钮没开面板也看得到)
+            }
           } catch (e) { /* noop */ }
         }).catch(() => { lastTypedSpoken = { text: "", ts: 0 }; });
       } else if (_autoOn) {
@@ -2845,7 +2860,7 @@ function attachTyping() {
         const stripT = stripStageDirections(text);
         if (!preloadHit(stripT)) {
           const r = await silentPreload(text);
-          try { if (r && r.ok) refreshPreloadBtn(); } catch (e) { /* noop */ }
+          try { if (r && r.ok) { refreshPreloadBtn(); notifyPreloadDone(stripT); } } catch (e) { /* noop */ }
         }
       }
     }, c.typingDebounce);

@@ -145,6 +145,9 @@ import json
 import urllib.request
 import urllib.error
 import asyncio   # 1.6.62 LLM 请求线程化(asyncio.to_thread): 防止外部 API 慢请求阻塞整个引擎事件循环
+# 1.6.134 陪跑子进程(ffmpeg/nvidia-smi 等控制台程序)一律隐藏新控制台窗口 — 引擎跑在 pythonw 下,
+#   不带 CREATE_NO_WINDOW 的话每次转码都会"闪出一个瞬间关闭的黑色弹窗"
+_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 # 1.6.63 音频头部修复(句首静音/弱起): 独立模块便于验证; 导入失败时优雅回退到本文件内旧实现
 try:
     from _headfix import trim_lead_silence_arr as _hf_trim, clean_head_final as _hf_clean
@@ -585,7 +588,7 @@ def _wav_to_mp3(wav_bytes, bitrate="64k"):
         if not ffmpeg:
             return None
         p = subprocess.run([ffmpeg, "-y", "-i", "pipe:0", "-f", "mp3", "-b:a", bitrate, "-vn", "pipe:1"],
-                           input=wav_bytes, capture_output=True, timeout=180)
+                           input=wav_bytes, capture_output=True, timeout=180, creationflags=_NO_WINDOW)
         return p.stdout if (p.returncode == 0 and p.stdout) else None
     except Exception:
         return None
@@ -1405,6 +1408,7 @@ def pack_aac(io_buffer: BytesIO, data: np.ndarray, rate: int):
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        creationflags=_NO_WINDOW,
     )
     out, _ = process.communicate(input=data.tobytes())
     io_buffer.write(out)
@@ -1544,7 +1548,7 @@ def _apply_emotion_fx(wav_bytes, emotion, strength=None):
             _i.close()
         _in, _out = _i.name, _i.name + ".out.wav"
         try:
-            subprocess.run([_ff, "-y", "-i", _in, "-af", _af, _out], capture_output=True, timeout=90)
+            subprocess.run([_ff, "-y", "-i", _in, "-af", _af, _out], capture_output=True, timeout=90, creationflags=_NO_WINDOW)
             if os.path.isfile(_out):
                 with open(_out, "rb") as _f:
                     data = _f.read()
@@ -1838,7 +1842,7 @@ _TTS_START_TS = 0.0        # 当前这轮合成开始时间(0 = 没有合成在�
 _TTS_STUCK_LIMIT = 240     # 单次合成最长容忍秒数(正常长句约 10~20s, 240s 只会是死锁)
 _TTS_LOCK = None           # 合成串行锁(asyncio.Lock, 惰性创建)
 _BOOT_TS = time.time()
-API_VERSION = "1.6.130"    # fvtt_api.py 自身版本(与模块版本对齐; /health、/status 会带上, 便于确认引擎是否已升级)
+API_VERSION = "1.6.135"    # fvtt_api.py 自身版本(与模块版本对齐; /health、/status 会带上, 便于确认引擎是否已升级)
 
 
 def _tts_lock():
@@ -2910,7 +2914,7 @@ def _convert_to_wav_16k(src_path, dst_path):
         ffmpeg = "ffmpeg"
     subprocess.run(
         [ffmpeg, "-y", "-i", src_path, "-ar", "16000", "-ac", "1", dst_path],
-        check=True, capture_output=True,
+        check=True, capture_output=True, creationflags=_NO_WINDOW,
     )
 
 
@@ -3889,7 +3893,7 @@ async def speedtest_gpu():
     try:
         _r = subprocess.run(
             ["nvidia-smi", "--query-gpu=utilization.gpu,memory.used,memory.total", "--format=csv,noheader,nounits"],
-            capture_output=True, text=True, timeout=8)
+            capture_output=True, text=True, timeout=8, creationflags=_NO_WINDOW)
         _line = (_r.stdout or "").strip().splitlines()
         if _line:
             _p = _line[0].split(",")

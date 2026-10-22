@@ -337,6 +337,7 @@
     "aiGot": "models fetched",
     "close": "Close",
     "preloadHint": "Warm up the AI and pre-synthesize this line; click again to send instantly (no wait).",
+    "preloadDoneToast": "✓ Pre-loaded — send will be instant",
     "speedTip": "0 = auto (speed decided by the read-aloud prompt and the AI)",
     "styleStr": "Strength",
     "styleStrTip": "Prompt strength: 0% = no speed/pause change, 100% = follow the prompt fully",
