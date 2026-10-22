@@ -19,7 +19,7 @@ window.fetchAndRefreshModels = fetchAndRefreshModels;
 const MODULE = "gpt-sovits-tts";
 // 1.6.103 代码版本号: Foundry 的 game.modules.get(id).version 读的是"载入世界时的清单缓存",
 //   改了 manifest 不刷新会一直显示旧版本(用户多次看到 1.6.96 而实际代码已是新版) → 报告里同时打印两者, 便于确认真的在跑新代码
-const MOD_VERSION = "1.6.133";
+const MOD_VERSION = "1.6.134";
 const CHAT_STYLES = (typeof CONST !== "undefined" && (CONST.CHAT_MESSAGE_STYLES || CONST.CHAT_MESSAGE_TYPES)) || {};
 
 /* ============ 设置定义 ============ */
@@ -56,6 +56,8 @@ const SETTINGS = [
   ["speedFactor",   { type: Number,  scope: "client", default: 0,                range: { min: 0, max: 2.0, step: 0.05 }, name: "settings.speedFactor.name", hint: "settings.speedFactor.hint" }],
   // 1.6.132 提示词强度默认 0 = 交给 AI 自己定(情绪/立绘由 AI 决定, 语速停顿不锁); >0 才手动指定提示词影响强度
   ["styleStrength", { type: Number,  scope: "client", default: 0,                range: { min: 0, max: 100, step: 5 },    name: "settings.styleStrength.name", hint: "settings.styleStrength.hint" }],
+  // 1.6.134 自动预加载: 打字停顿后自动把当前句子预合成好(发送零等待); 打字即读模式下直接复用预读音频, 零额外合成
+  ["autoPreload",   { type: Boolean, scope: "client", default: true,             name: "settings.autoPreload.name",       hint: "settings.autoPreload.hint" }],
   // 1.6.65 情绪效果强度(严格对齐 Shinsekai): 默认 0 = 完全不做 DSP 变调, 情绪差异靠"情绪参考音频"; 调高只加轻微语速/音量, 不变调
   ["emotionFxStrength", { type: Number, scope: "client", default: 0, range: { min: 0, max: 100, step: 5 }, name: "settings.emotionFxStrength.name", hint: "settings.emotionFxStrength.hint" }],
   ["volume",        { type: Number,  scope: "client", default: 0,                range: { min: 0, max: 1, step: 0.05 }, name: "settings.volume.name", hint: "settings.volume.hint" }],   // 1.6.111 0 = 自动(引擎默认响度)
@@ -267,14 +269,17 @@ function makeWatchKey() {
 /** 1.6.129 预加载命中判定: 预合成时若 AI 润色生效, 存进 preloadAudio.text 的是"润色稿",
  *  而用户输入框里仍是原文 → 原先用 text 比较永不相等 → 按钮显示"✓ 已预加载"但再点不发送
  *  (最终测试 L 段暴露: 预加载 ✓ 但 预加载→发送 消息✗)。
- *  srcText = 预合成时的输入原文; 匹配一律以它为准, text 只作展示与兜底。 */
+ *  srcText = 预合成时的输入原文; 匹配一律以它为准, text 只作展示与兜底。
+ *  1.6.134 修"润色生效时发送不走预加载": 发送时 maybeSpeak 拿到的 speakText 可能是 AI 润色稿,
+ *  也可能仍是原文(没润色/润色被安全校验拒绝) → 两种都必须能命中, 否则润色生效就白重新合成一遍。 */
 function preloadHit(t) {
   try {
     if (!preloadAudio || !preloadAudio.url) return false;
-    const want = String(t || "");
+    const want = String(t || "").replace(/\s+/g, " ").trim();
     if (!want) return false;
-    const key = String(preloadAudio.srcText || preloadAudio.text || "");
-    return key === want && preloadAudio.watchKey === makeWatchKey();
+    const keyA = String(preloadAudio.srcText || "").replace(/\s+/g, " ").trim();
+    const keyB = String(preloadAudio.text || "").replace(/\s+/g, " ").trim();
+    return (keyA === want || keyB === want) && preloadAudio.watchKey === makeWatchKey();
   } catch (e) { return false; }
 }
 
@@ -569,7 +574,7 @@ async function synthSafe(runner, txt, lang, opts) {
 }
 
 /* ============ 核心: 朗读 ============ */
-async function speak(text, { lang = null, sender = "", refAudioPath = null, promptText = null, promptLang = null, speed = null, volume = null, auxRefAudioPaths = null, emotionMix = null, emotion = null, broadcast = false, messageId = "", skipAiEmotion = false, role = null, aiDirect = false, silentLocal = false } = {}) {
+async function speak(text, { lang = null, sender = "", refAudioPath = null, promptText = null, promptLang = null, speed = null, volume = null, auxRefAudioPaths = null, emotionMix = null, emotion = null, broadcast = false, messageId = "", skipAiEmotion = false, role = null, aiDirect = false, silentLocal = false, isTypingPreview = false } = {}) {
   const cfg = getCfg();
   try { window.__fvttTTSLastSpeakAt = Date.now(); } catch (e) { /* noop */ }   // 1.6.126 埋点: 验证打字朗读/预加载真的走到 speak
   if (!cfg.enabled) return false;
@@ -873,6 +878,12 @@ async function speak(text, { lang = null, sender = "", refAudioPath = null, prom
         } catch (e) { /* 广播兜底: 仅本地播放 */ }
       } else {
         const res = await _synthSafe(finalText, finalLang, { spdIn: spd, ov: overrides, blobOnly: false, role: role || prof0.current });
+        // 1.6.134 打字预读捕获: 预读播放的这段音频直接存成预加载缓存(发送零等待, 零额外合成/LLM)
+        if (isTypingPreview) {
+          try {
+            window.__fvttTTSLastTypingPreview = { srcText: stripStageDirections(String(text || "")), text: finalText, lang: finalLang || "auto", blob: res.blob || null, dataUri: res.dataUri || "", url: res.url || "", audioUrl: res.audioUrl || "" };
+          } catch (e) { /* noop */ }
+        }
         // 官方文件路径优先(相对 /modules/... + push 广播全家官方通道); 无落盘才 blob/dataURI
         const mpx = (() => { try { return _modulePath(res.audioUrl || ""); } catch (e) { return ""; } })();
         const url = mpx || res.dataUri || res.url;
@@ -1765,6 +1776,8 @@ async function doSubmitChat(ta, opts = {}) {
       await ChatMessage.create(data);
       try { ta.value = ""; ta.focus(); } catch (e) { /* noop */ }
       refreshPreloadBtn();   // 1.6.102 发送后输入框已清空 → 预加载按钮立即回到"AI 预加载"(不再一直显示已加载)
+      // 1.6.134 发送即消费: 清掉本次预加载缓存, 按钮真正复位; 下一句由"自动预加载"在停顿时重新预合成
+      try { if (preloadAudio) { try { if (preloadAudio.url) URL.revokeObjectURL(preloadAudio.url); } catch (e) { /* noop */ } preloadAudio = null; } } catch (e) { /* noop */ }
     } catch (err) {
       console.error("[gpt-sovits-tts] 消息创建失败:", err);
       notifyOnce(_L("ui.sendFail", "发送失败"), "warn");
@@ -1947,56 +1960,9 @@ function buildSendPop() {
           window.__aiPreloaded = false;
         }
       }
-      // 按当前角色/语气/情绪占比预合成这段输入文本(与发送时的声音完全一致)
-      let stripP = tnow;
-      const profP = loadVoiceProfile();
-      const roleP = profP.current || "";
-      const emoP = profP.emotion || "";
-      const overridesP = {};
-      let aiEmoP = "";
-      if (emoP) {
-        const slotP = findEmotionSlot(emoP, roleP);
-        if (slotP) {
-          if (slotP.ref_audio_path) overridesP.auxRefAudioPaths = [`fvtt_chars/${roleP}/${slotP.ref_audio_path}`];
-          if (slotP.prompt_text) overridesP.promptText = slotP.prompt_text;
-          if (slotP.prompt_lang) overridesP.promptLang = slotP.prompt_lang;
-        }
-      } else if (cfgP2.llmEnabled && cfgP2.llmKey) {
-        // 无手动语气 → 与发送时一致: AI 判断语气(不改台词), 预合成音频带 AI 语气, 避免"预加载默认 vs 发送 AI 语气"听感不一
-        try {
-          const resP = await judgeAndPolishByLLM(stripP, roleP, !!cfgP2.llmPolish, "");
-          if (resP.ok && resP.emotion) {
-            // 1.6.52 与朗读一致: AI 润色文本也用于预合成音频(否则"预加载原文 vs 朗读润色稿"听感/内容不一)
-            if (resP.polish && cfgP2.llmPolish) stripP = resP.polish;
-            const slotP = findEmotionSlot(resP.emotion, roleP);
-            if (slotP) {
-              if (slotP.ref_audio_path) overridesP.auxRefAudioPaths = [`fvtt_chars/${roleP}/${slotP.ref_audio_path}`];
-              if (slotP.prompt_text) overridesP.promptText = slotP.prompt_text;
-              if (slotP.prompt_lang) overridesP.promptLang = slotP.prompt_lang;
-              aiEmoP = resP.emotion;
-            }
-          }
-        } catch (e) { /* AI 失败沿用默认 */ }
-      }
-      const curP = (profP.chars && profP.chars[roleP]) || {};
-      if (typeof curP.emotionMix === "number") overridesP.emotionMix = curP.emotionMix;
-      else if (aiEmoP && !(typeof overridesP.emotionMix === "number" && overridesP.emotionMix > 0)) overridesP.emotionMix = 0.5;   // 1.6.116 预加载同样: 基础音+情绪叠加
-      // 1.6.109/1.6.112 预加载合成同样规范化占比(单一来源 normalizeEmotionMix)
-      normalizeEmotionMix(overridesP);
-      // 1.6.99 AI 直出/预加载: 强度=0 时用提示词关键词语速(AI/提示词自己决定), 不再锁原速
-      let _spdP = Number(cfgP2.speedFactor) || 1;
-      try {
-        const _stP2 = styleStrengthOf(roleP) / 100;
-        if (_stP2 <= 0) {
-          const _kw2 = styleKeywordParams(getStylePrompt(roleP) || "", stripP.length);
-          if (_kw2.speed) _spdP = _kw2.speed;
-        }
-      } catch (e) { /* noop */ }
-      const { blob, audioUrl } = await gptSovitsSynth(stripP, cfgP2.textLang || "auto", { serverUrl: cfgP2.serverUrl, speedFactor: _spdP, overrides: Object.keys(overridesP).length ? overridesP : null, mediaType: "mp3", asBlob: true, role: roleP, skipDirect: window.__fvttTTSCanDirect !== true });
-      const objUrl = URL.createObjectURL(blob);
-      const b64 = await blobToBase64(blob);
-      if (preloadAudio && preloadAudio.url) { try { URL.revokeObjectURL(preloadAudio.url); } catch (e) { /* noop */ } }
-      preloadAudio = { text: stripP, srcText: tnow, lang: cfgP2.textLang || "auto", url: objUrl, audioUrl: audioUrl || "", dataUrl: `data:audio/mpeg;base64,${b64}`, mime: "audio/mpeg", ts: Date.now(), watchKey: makeWatchKey() };
+      // 预合成当前输入(手动按钮与自动预加载共用 synthPreloadCore, 与发送同款 AI 语气/润色/占比)
+      const rPP = await synthPreloadCore(tnow);
+      if (!rPP || !rPP.ok) throw new Error((rPP && rPP.message) || "preload fail");
       btnP2.textContent = _L("ui.preloadedBtn", "✓ 已预加载");
       btnP2.title = _L("ui.preloadedSendTip", "音频已就绪，再点直接播出");
       btnP2.classList.remove("loading");
@@ -2731,6 +2697,113 @@ function updateMicUI() {
 }
 
 /* ============ 打字即读 ============ */
+/** 1.6.134 把"预读/预合成"得到的音频收进 preloadAudio(自动预加载核心, 与手动按钮共用) */
+async function adoptPreload(pv, rawText) {
+  try {
+    if (!pv) return false;
+    const _src = stripStageDirections(String(rawText || ""));
+    let _url = pv.url || "";
+    let _dataUrl = pv.dataUri || "";
+    if (pv.blob) {
+      try { const o = URL.createObjectURL(pv.blob); if (o) _url = o; } catch (e) { /* noop */ }
+      if (!_dataUrl) { try { _dataUrl = "data:audio/mpeg;base64," + (await blobToBase64(pv.blob)); } catch (e) { /* noop */ } }
+    }
+    if (!_url && _dataUrl) _url = _dataUrl;
+    if (!_url) return false;
+    // 1.6.134 兜底: 只有 blob:objectURL 而没有 dataUrl 时, 拉一次转成 dataUrl —
+    //   预加载命中后 flags 写回靠 audioUrl/dataUrl 让其他端听到(纯 objectURL 只在作者本机有效)
+    if (!_dataUrl && /^blob:/.test(_url)) {
+      try {
+        const _fb = await fetch(_url);
+        if (_fb && _fb.ok) { const _bb = await _fb.blob(); if (_bb && _bb.size > 0) _dataUrl = "data:audio/mpeg;base64," + (await blobToBase64(_bb)); }
+      } catch (e) { /* noop */ }
+    }
+    if (preloadAudio && preloadAudio.url) { try { URL.revokeObjectURL(preloadAudio.url); } catch (e) { /* noop */ } }
+    preloadAudio = { text: pv.text || _src, srcText: _src, lang: pv.lang || "auto", url: _url, audioUrl: pv.audioUrl || "", dataUrl: _dataUrl, mime: "audio/mpeg", ts: Date.now(), watchKey: makeWatchKey() };
+    return true;
+  } catch (e) { return false; }
+}
+
+/** 1.6.134 预加载合成核心(手动按钮 / 自动预加载共用):
+ *  与发送完全同款: 手动语气槽 > AI 判语气(+安全校验后的润色稿) > 规则; 产出存进 preloadAudio */
+async function synthPreloadCore(stripT) {
+  try {
+    if (!stripT) return { ok: false, message: "empty" };
+    const cfgP2 = getCfg();
+    if (cfgP2.engine !== "gptsovits") return { ok: false, message: "engine" };
+    let stripP = stripT;
+    const profP = loadVoiceProfile();
+    const roleP = profP.current || "";
+    const emoP = profP.emotion || "";
+    const overridesP = {};
+    let aiEmoP = "";
+    if (emoP) {
+      const slotP = findEmotionSlot(emoP, roleP);
+      if (slotP) {
+        if (slotP.ref_audio_path) overridesP.auxRefAudioPaths = [`fvtt_chars/${roleP}/${slotP.ref_audio_path}`];
+        if (slotP.prompt_text) overridesP.promptText = slotP.prompt_text;
+        if (slotP.prompt_lang) overridesP.promptLang = slotP.prompt_lang;
+      }
+    } else if (cfgP2.llmEnabled && cfgP2.llmKey && window.__fvttTTSLlmBroken !== true) {
+      try {
+        const resP = await judgeAndPolishByLLM(stripP, roleP, !!cfgP2.llmPolish, "");
+        if (resP.ok && resP.emotion) {
+          // 1.6.134 与发送同款安全校验: 润色改动过大被拒 → 预加载也播原文(否则"预加载原文 vs 发送润色稿"匹配不上)
+          if (resP.polish && cfgP2.llmPolish) {
+            try { if (polishIsSafe(stripP, resP.polish)) stripP = resP.polish; } catch (e) { /* noop */ }
+          }
+          const slotP = findEmotionSlot(resP.emotion, roleP);
+          if (slotP) {
+            if (slotP.ref_audio_path) overridesP.auxRefAudioPaths = [`fvtt_chars/${roleP}/${slotP.ref_audio_path}`];
+            if (slotP.prompt_text) overridesP.promptText = slotP.prompt_text;
+            if (slotP.prompt_lang) overridesP.promptLang = slotP.prompt_lang;
+            aiEmoP = resP.emotion;
+          }
+        }
+      } catch (e) { /* AI 失败沿用手动/默认 */ }
+    }
+    const curP = (profP.chars && profP.chars[roleP]) || {};
+    if (typeof curP.emotionMix === "number") overridesP.emotionMix = curP.emotionMix;
+    else if (aiEmoP && !(typeof overridesP.emotionMix === "number" && overridesP.emotionMix > 0)) overridesP.emotionMix = 0.5;   // 1.6.116 预加载同样: 基础音+情绪叠加
+    try { normalizeEmotionMix(overridesP); } catch (e) { /* noop */ }
+    // 1.6.99 AI 直出/预加载: 强度=0 时用提示词关键词语速(AI/提示词自己决定), 不再锁原速
+    let _spdP = Number(cfgP2.speedFactor) || 1;
+    try {
+      const _stP2 = styleStrengthOf(roleP) / 100;
+      if (_stP2 <= 0) {
+        const _kw2 = styleKeywordParams(getStylePrompt(roleP) || "", stripP.length);
+        if (_kw2.speed) _spdP = _kw2.speed;
+      }
+    } catch (e) { /* noop */ }
+    const { blob, audioUrl } = await gptSovitsSynth(stripP, cfgP2.textLang || "auto", { serverUrl: cfgP2.serverUrl, speedFactor: _spdP, overrides: Object.keys(overridesP).length ? overridesP : null, mediaType: "mp3", asBlob: true, role: roleP, skipDirect: window.__fvttTTSCanDirect !== true });
+    if (!blob) return { ok: false, message: "no-blob" };
+    const objUrl = URL.createObjectURL(blob);
+    const b64 = await blobToBase64(blob);
+    if (preloadAudio && preloadAudio.url) { try { URL.revokeObjectURL(preloadAudio.url); } catch (e) { /* noop */ } }
+    preloadAudio = { text: stripP, srcText: stripT, lang: cfgP2.textLang || "auto", url: objUrl, audioUrl: audioUrl || "", dataUrl: `data:audio/mpeg;base64,${b64}`, mime: "audio/mpeg", ts: Date.now(), watchKey: makeWatchKey() };
+    return { ok: true };
+  } catch (e) { return { ok: false, message: String((e && e.message) || e) }; }
+}
+
+/** 1.6.134 纯发送模式: 打字停顿后静默预合成当前句子(不播放), 发送时直接播同一段(零等待) */
+async function silentPreload(rawText) {
+  try {
+    const stripT = stripStageDirections(String(rawText || ""));
+    if (!stripT) return { ok: false };
+    const r = await synthPreloadCore(stripT);
+    if (r && r.ok && preloadAudio && preloadAudio.url) {
+      // 合成期间用户改了文字/已发送 → 预加载作废(不存过期的)
+      try {
+        const el = document.getElementById("chat-message") || findChatTextarea();
+        const now = (el && el.value) ? stripStageDirections(el.value) : "";
+        if (now && now !== stripT) return { ok: false, stale: true };
+      } catch (e) { /* noop */ }
+      return { ok: true };
+    }
+    return r || { ok: false };
+  } catch (e) { return { ok: false }; }
+}
+
 function attachTyping() {
   const cfg = getCfg();
   // 1.6.129 修: 原来这里读 cfg.typingVoice(该设定从未注册, 读出来恒为 undefined) → 打字停顿朗读整条链路永不触发。
@@ -2743,20 +2816,38 @@ function attachTyping() {
   ta.dataset.fvttTtsAttached = "1";
   ta.addEventListener("input", () => {
     const c = getCfg();
-    if (c.triggerMode !== "typing" && c.triggerMode !== "both") return;
+    const _typingOn = (c.triggerMode === "typing" || c.triggerMode === "both");
+    // 1.6.134 自动预加载: 即使不开"打字即读"(send/manual), 停顿时也静默预合成 → 发送零等待
+    const _autoOn = (c.autoPreload !== false && c.engine === "gptsovits");
+    if (!_typingOn && !_autoOn) return;
     clearTimeout(typingTimer);
-    typingTimer = setTimeout(() => {
+    typingTimer = setTimeout(async () => {
       const el = document.getElementById("chat-message") || findChatTextarea();
       if (!el) return;
       const text = el.value.replace(/\s+/g, " ").trim();
       if (!text || text.startsWith("/")) return;
       if (text.length < c.minLength) return;
-      if (text === lastTypedSpoken.text && Date.now() - lastTypedSpoken.ts < 30000) return;
-      lastTypedSpoken = { text, ts: Date.now() };
-      speak(text).then((ok) => {
-        // 预读失败(合成异常) → 撤销记录, 发送时该句仍会正常播放(不能因为"预读过"就吞掉发送的语音)
-        if (ok === false) { lastTypedSpoken = { text: "", ts: 0 }; }
-      }).catch(() => { lastTypedSpoken = { text: "", ts: 0 }; });
+      if (_typingOn) {
+        if (text === lastTypedSpoken.text && Date.now() - lastTypedSpoken.ts < 30000) return;
+        lastTypedSpoken = { text, ts: Date.now() };
+        speak(text, { isTypingPreview: true }).then(async (ok) => {
+          // 预读失败(合成异常) → 撤销记录, 发送时该句仍会正常播放(不能因为"预读过"就吞掉发送的语音)
+          if (ok === false) { lastTypedSpoken = { text: "", ts: 0 }; return; }
+          try {
+            // 1.6.134 顺手把预读播放的这段音频存成预加载 → 发送零等待(零额外合成/LLM)
+            const pv = window.__fvttTTSLastTypingPreview;
+            if (pv && (pv.blob || pv.dataUri || pv.audioUrl)) await adoptPreload(pv, text);
+            try { refreshPreloadBtn(); } catch (e) { /* noop */ }
+          } catch (e) { /* noop */ }
+        }).catch(() => { lastTypedSpoken = { text: "", ts: 0 }; });
+      } else if (_autoOn) {
+        // 纯发送模式: 停顿时静默预合成(不播放) → 发送直接播同一段, 零等待
+        const stripT = stripStageDirections(text);
+        if (!preloadHit(stripT)) {
+          const r = await silentPreload(text);
+          try { if (r && r.ok) refreshPreloadBtn(); } catch (e) { /* noop */ }
+        }
+      }
     }, c.typingDebounce);
   });
   ta.addEventListener("keydown", (ev) => {

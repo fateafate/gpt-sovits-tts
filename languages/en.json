@@ -80,6 +80,10 @@
       "name": "Speak My Messages",
       "hint": "Disable to stop voicing your own messages."
     },
+    "autoPreload": {
+      "name": "Auto Pre-synthesize (Recommended)",
+      "hint": "Pre-synthesizes the current sentence after a typing pause, so sending is zero-wait. When typing-read is on, the preview audio is reused (no extra synthesis). Turn off to require clicking 🚀 AI Pre-load manually."
+    },
     "speakOthers": {
       "name": "Speak Others' Messages",
       "hint": "Disable to only hear your own (or the GM's) messages."
