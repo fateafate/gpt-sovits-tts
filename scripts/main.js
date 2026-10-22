@@ -19,7 +19,7 @@ window.fetchAndRefreshModels = fetchAndRefreshModels;
 const MODULE = "gpt-sovits-tts";
 // 1.6.103 代码版本号: Foundry 的 game.modules.get(id).version 读的是"载入世界时的清单缓存",
 //   改了 manifest 不刷新会一直显示旧版本(用户多次看到 1.6.96 而实际代码已是新版) → 报告里同时打印两者, 便于确认真的在跑新代码
-const MOD_VERSION = "1.6.132";
+const MOD_VERSION = "1.6.133";
 const CHAT_STYLES = (typeof CONST !== "undefined" && (CONST.CHAT_MESSAGE_STYLES || CONST.CHAT_MESSAGE_TYPES)) || {};
 
 /* ============ 设置定义 ============ */
@@ -54,7 +54,8 @@ const SETTINGS = [
   ["textLang",      { type: String,  scope: "client", default: "auto",           choices: { auto: "settings.textLang.auto", zh: "zh", ja: "ja", en: "en", ko: "ko", yue: "yue" }, name: "settings.textLang.name", hint: "settings.textLang.hint" }],
   // 1.6.111 「0 = 自动」: 语速/音量默认 0, 由朗读提示词/AI/引擎决定(用户要求: 默认全交给 AI)
   ["speedFactor",   { type: Number,  scope: "client", default: 0,                range: { min: 0, max: 2.0, step: 0.05 }, name: "settings.speedFactor.name", hint: "settings.speedFactor.hint" }],
-  ["styleStrength", { type: Number,  scope: "client", default: 50,               range: { min: 0, max: 100, step: 5 },    name: "settings.styleStrength.name", hint: "settings.styleStrength.hint" }],
+  // 1.6.132 提示词强度默认 0 = 交给 AI 自己定(情绪/立绘由 AI 决定, 语速停顿不锁); >0 才手动指定提示词影响强度
+  ["styleStrength", { type: Number,  scope: "client", default: 0,                range: { min: 0, max: 100, step: 5 },    name: "settings.styleStrength.name", hint: "settings.styleStrength.hint" }],
   // 1.6.65 情绪效果强度(严格对齐 Shinsekai): 默认 0 = 完全不做 DSP 变调, 情绪差异靠"情绪参考音频"; 调高只加轻微语速/音量, 不变调
   ["emotionFxStrength", { type: Number, scope: "client", default: 0, range: { min: 0, max: 100, step: 5 }, name: "settings.emotionFxStrength.name", hint: "settings.emotionFxStrength.hint" }],
   ["volume",        { type: Number,  scope: "client", default: 0,                range: { min: 0, max: 1, step: 0.05 }, name: "settings.volume.name", hint: "settings.volume.hint" }],   // 1.6.111 0 = 自动(引擎默认响度)
@@ -1866,7 +1867,7 @@ function buildSendPop() {
         <label class="fvtt-tts-sendpop-tuneline"><span title="${_L("ui.emotionMixTip", "0 = 自动：基础音作主参考 + 情绪音作附加参考叠加（保留角色音色）；100% = 情绪音单独作参考（音色会变，短样本可能不自然）")}">${_L("ui.emotionMix", "情绪占比")} <b class="fvtt-tts-sendpop-mixval">自动</b></span><input type="range" class="fvtt-tts-sendpop-mix" min="0" max="100" step="5" value="0"></label>
         <label class="fvtt-tts-sendpop-tuneline"><span title="${_L("ui.emotionModTip", "0 = 自动（按 AI 判断的情绪决定语速快慢）；>0 才手动指定调制强度")}">${_L("ui.emotionMod", "情感参数调制")} <b class="fvtt-tts-sendpop-modval">自动</b></span><input type="range" class="fvtt-tts-sendpop-mod" min="0" max="100" step="5" value="0"></label>
 <label class="fvtt-tts-sendpop-tuneline"><span title="${_L("ui.styleTip", "朗读提示词：如“更严肃认真、中间不要中断”。会翻译成语速/停顿等合成参数，角色独立记得。")}">${_L("ui.stylePrompt", "朗读提示词")}</span><input type="text" class="fvtt-tts-sendpop-style" placeholder="${_L("ui.stylePh", "如：更严肃认真，中间不要中断")}" maxlength="120"></label>
-        <div class="fvtt-tts-sendpop-tuneline"><span title="${_L("ui.styleStrTip", "提示词强度：0%=不改变语速/停顿，100%=完全按提示词")}">${_L("ui.styleStr", "强度")}</span><input type="range" class="fvtt-tts-sendpop-stylestr" min="0" max="100" step="5" value="50"><b class="fvtt-tts-sendpop-stylestrval">50%</b></div>
+        <div class="fvtt-tts-sendpop-tuneline"><span title="${_L("ui.styleStrTip", "提示词强度：0%=交给 AI 自动，100%=完全按提示词")}">${_L("ui.styleStr", "强度")}</span><input type="range" class="fvtt-tts-sendpop-stylestr" min="0" max="100" step="5" value="0"><b class="fvtt-tts-sendpop-stylestrval">0%</b></div>
       </div>
       <div class="fvtt-tts-sendpop-actions">
         <button type="button" class="fvtt-tts-sendpop-preload">🚀 ${_L("ui.sendPopPreload", "AI 预加载")}</button>
@@ -2076,7 +2077,7 @@ function buildSendPop() {
         const prof = loadVoiceProfile();
         prof.chars = prof.chars || {};
         const c = prof.chars[cn] || (prof.chars[cn] = { name: cn });
-        c.styleStrength = parseInt(styleStrIn.value, 10) || 50;
+        c.styleStrength = parseInt(styleStrIn.value, 10) || 0;   // 1.6.132 默认 0(交给 AI), 不再是 50
         try { saveVoiceProfile(prof); } catch (e) { /* noop */ }
       });
     }
@@ -4155,6 +4156,15 @@ Hooks.once("init", async () => {
 
 Hooks.once("ready", () => {
   setupAPI();
+  // 1.6.132 强度默认 50→0(交给 AI 自己调): 只迁移"仍是旧默认 50、从未手动改过"的客户端设置;
+  //   手动调过(≠50)的保持原样。每个浏览器 profile 只迁一次。
+  try {
+    if (Number(game.settings.get(MODULE, "styleStrength")) === 50 && window.localStorage.getItem("fvtt-tts-mig132-style0") !== "1") {
+      game.settings.set(MODULE, "styleStrength", 0).catch(() => { /* noop */ });
+      window.localStorage.setItem("fvtt-tts-mig132-style0", "1");
+      try { console.debug("[gpt-sovits-tts] 强度默认 50→0(交给 AI 自动), 已迁移本客户端"); } catch (e) { /* noop */ }
+    }
+  } catch (e) { /* noop */ }
   // Foundry v13 socket: 模块 socket 中继(module.<id>) — 各端匹配响应 + GM 端执行代理(合成/代写/报告落盘)
   try { installModuleSocket(); } catch (e) { /* noop */ }
   try { installGmProxy(); } catch (e) { /* noop */ }
@@ -4581,7 +4591,7 @@ window.runAIPromptTest = async function runAIPromptTest() {
     } catch (e) { /* noop */ }
     return "";
   };
-  const _origStre = (() => { try { const vp = loadVoiceProfile(); const cc = (vp.chars && vp.chars[cn]) || null; return (cc && typeof cc.styleStrength === "number") ? cc.styleStrength : (typeof cfg.styleStrength === "number" ? cfg.styleStrength : 50); } catch (e) { return 50; } })();
+  const _origStre = (() => { try { const vp = loadVoiceProfile(); const cc = (vp.chars && vp.chars[cn]) || null; return (cc && typeof cc.styleStrength === "number") ? cc.styleStrength : (typeof cfg.styleStrength === "number" ? cfg.styleStrength : 0); } catch (e) { return 0; } })();
   window.__fvttTTSAiLineDiag = true;
   window.__fvttTTSAiLineDiagList = [];
   window.__fvttTTSAiLineEnterList = [];
@@ -4843,7 +4853,7 @@ window.runFinalTest = async function runFinalTest() {
   push("");
   push("- 时间: " + new Date().toLocaleString("zh-CN") + " | 执行者: " + opName + " | 角色: " + cn);
   push("- 版本断言: 代码=" + MOD_VERSION + " | 清单缓存=" + verTxt + (String(verTxt) === String(MOD_VERSION) ? " ✓ 一致" : "（缓存落后可忽略，看代码版本）"));
-  push("- v7 覆盖: 引擎前置拦截 · 回归冒烟(0 成本断言) · 多场景 6 条 · **发送框真实路径/AI直出** · **打字停顿朗读** · **AI 预加载→再点发送** · **长句润色** · **翻译端点** · **其他角色音色** · **打包完整性** · **看门狗(Python 版)自启** · **合成中 /health 仍秒回** · **防重复(打字预读后发送不重播)**");
+  push("- v7 覆盖: 引擎前置拦截 · 回归冒烟(0 成本断言) · 多场景 6 条 · **发送框真实路径/AI直出** · **打字停顿朗读** · **AI 预加载→再点发送** · **长句润色** · **翻译端点** · **其他角色音色** · **打包完整性** · **看门狗(Python 版)自启** · **合成中 /health 仍秒回** · **防重复(打字预读后发送不重播)** · **强度默认 0=AI 自动**");
   push("");
 
   // ============ ① 引擎前置：不通就直接出报告，不再空转几百秒 ============
@@ -6123,7 +6133,9 @@ function applyEmotionAvatar(message, html) {
     // 立绘跟随朗读(1.6.6): 只有"实际合成/播放了语音"的消息才插立绘 — 纯文本/旁白/动作消息不插。
     // 判定: 消息 flags 已带音频(写回完成) 或 本端已播过该消息(playedIds / 已播 src)。
     // 新消息合成前渲染 → 无音频不插; 写回后 updateChatMessage 播放路径补插。
-    const hasAudio = !!(fl && (fl.audioData || fl.audioUrl || fl.selSprite || fl.spriteTest));   // 1.6.34 手动选立绘/立绘测试消息即使未朗读也插立绘
+    // 1.6.132 立绘先行: 本模块发送框发出的消息(fromModSend)必然朗读 → 渲染时立即插"当前已判定的立绘",
+    //   不等合成(合成约 1.5~2s)。立绘随后随 flags 写回(AI 最终情绪/槽立绘)自动细化, 同消息只插一次幂等。
+    const hasAudio = !!(fl && (fl.audioData || fl.audioUrl || fl.selSprite || fl.spriteTest)) || !!(fl && fl.fromModSend);   // 1.6.34 手动选立绘/立绘测试消息即使未朗读也插立绘
     const playedHere = (() => {
       try {
         if (message && message.id && playedIds.has(message.id)) return true;

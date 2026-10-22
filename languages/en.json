@@ -131,7 +131,7 @@
     },
     "styleStrength": {
       "name": "Reading Prompt Strength",
-      "hint": "0%: prompt does not change speed/pause; 100%: fully applies. Also adjustable per character."
+      "hint": "0% (default, recommended): let AI / the reading prompt decide emotion, speed and pauses automatically; >0% manually controls how strongly the prompt affects speed/pause (100% = fully apply). Per-character override available."
     },
     "emotionFxStrength": {
       "name": "Emotion FX Strength (DSP)",
