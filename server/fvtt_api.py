@@ -148,6 +148,22 @@ import asyncio   # 1.6.62 LLM 请求线程化(asyncio.to_thread): 防止外部 A
 # 1.6.134 陪跑子进程(ffmpeg/nvidia-smi 等控制台程序)一律隐藏新控制台窗口 — 引擎跑在 pythonw 下,
 #   不带 CREATE_NO_WINDOW 的话每次转码都会"闪出一个瞬间关闭的黑色弹窗"
 _NO_WINDOW = 0x08000000 if os.name == "nt" else 0
+# 1.6.136 全局兜底: 引擎进程内**所有**子进程(含 runtime 组件内部 spawn 的 ffmpeg/python/工具,
+#   不只是本文件直调的 5 处)一律隐藏新控制台窗口 — 否则每次冷启动/转码都会闪一次黑框。
+#   (subprocess.run/check_* 内部走 Popen, 替换模块级 Popen 即可全部覆盖)
+if os.name == "nt":
+    try:
+        _ORIG_POPEN = subprocess.Popen
+        def _no_window_popen(*args, **kwargs):
+            try:
+                kwargs["creationflags"] = int(kwargs.get("creationflags", 0) or 0) | _NO_WINDOW
+            except Exception:
+                pass
+            return _ORIG_POPEN(*args, **kwargs)
+        subprocess.Popen = _no_window_popen
+        print("[engine] 子进程隐藏窗口全局兜底已启用 (CREATE_NO_WINDOW)")
+    except Exception:
+        pass
 # 1.6.63 音频头部修复(句首静音/弱起): 独立模块便于验证; 导入失败时优雅回退到本文件内旧实现
 try:
     from _headfix import trim_lead_silence_arr as _hf_trim, clean_head_final as _hf_clean
@@ -1842,7 +1858,7 @@ _TTS_START_TS = 0.0        # 当前这轮合成开始时间(0 = 没有合成在�
 _TTS_STUCK_LIMIT = 240     # 单次合成最长容忍秒数(正常长句约 10~20s, 240s 只会是死锁)
 _TTS_LOCK = None           # 合成串行锁(asyncio.Lock, 惰性创建)
 _BOOT_TS = time.time()
-API_VERSION = "1.6.135"    # fvtt_api.py 自身版本(与模块版本对齐; /health、/status 会带上, 便于确认引擎是否已升级)
+API_VERSION = "1.6.136"    # fvtt_api.py 自身版本(与模块版本对齐; /health、/status 会带上, 便于确认引擎是否已升级)
 
 
 def _tts_lock():

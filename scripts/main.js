@@ -19,7 +19,7 @@ window.fetchAndRefreshModels = fetchAndRefreshModels;
 const MODULE = "gpt-sovits-tts";
 // 1.6.103 代码版本号: Foundry 的 game.modules.get(id).version 读的是"载入世界时的清单缓存",
 //   改了 manifest 不刷新会一直显示旧版本(用户多次看到 1.6.96 而实际代码已是新版) → 报告里同时打印两者, 便于确认真的在跑新代码
-const MOD_VERSION = "1.6.135";
+const MOD_VERSION = "1.6.136";
 const CHAT_STYLES = (typeof CONST !== "undefined" && (CONST.CHAT_MESSAGE_STYLES || CONST.CHAT_MESSAGE_TYPES)) || {};
 
 /* ============ 设置定义 ============ */
@@ -1508,6 +1508,29 @@ async function probeEngineHealth(serverUrl, timeoutMs = 2500) {
   }
 }
 
+/* ---------- 1.6.136 模型池预热(仿 Shinsekai: 服务启动即预载模型, 首句零等待) ---------- */
+let _warmPoolTs = {};
+/** 后台请求引擎把该角色模型预加载进常驻池: 重启后/切角后的第一句语音就不用现场加载(省 30s~几分钟).
+ *  只影响"请求里的角色≠引擎默认角色"的首次合成(那是唯一慢在模型加载的地方). 成功才节流(2分钟/角色). */
+async function warmModelPool(role) {
+  try {
+    if (!role) return;
+    if (game.user && !game.user.isGM && window.__fvttTTSCanDirect !== true) return;   // 代理模式: GM 端会预热, 非GM不重复打
+    const now = Date.now();
+    if (_warmPoolTs[role] && now - _warmPoolTs[role] < 120000) return;
+    const srv = String(getCfg().serverUrl || "http://127.0.0.1:9881").replace(/\/+$/, "");
+    if (!srv) return;
+    const fd = await fetch(srv + "/characters/preload", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ names: [role], max_workers: 2 }),
+    }).catch(() => null);
+    if (!fd || !fd.ok) return;                                  // 引擎未起/网络失败: 不节流, 下次触发再试
+    _warmPoolTs[role] = now;
+    try { const j = await fd.json().catch(() => null); if (j && j.loaded) console.debug("[gpt-sovits-tts] 模型池预热完成: " + role + " → " + JSON.stringify(j.loaded)); } catch (e) { /* noop */ }
+  } catch (e) { /* noop */ }
+}
+
 async function checkStatus(force = false) {
   const cfg = getCfg();
   if (!cfg.enabled && !force) return;
@@ -1541,6 +1564,7 @@ async function checkStatus(force = false) {
         window.__fvttTTSEngineDown = false;
         window.__fvttTTSEngineDownWarned = false;
         if (_wasDown) { try { ui.notifications.info("TTS 引擎已就绪 ✓ 可以正常朗读了"); } catch (e2) { /* noop */ } }
+        try { warmModelPool(String((loadVoiceProfile().current) || (quickChars && quickChars.active) || "")); } catch (e2) { /* noop */ }   // 1.6.136 引擎恢复即预热当前角色
       } else {
         window.__fvttTTSEngineDown = true;
         if (!_wasDown && window.__fvttTTSEngineDownWarned !== true) {
@@ -1559,6 +1583,7 @@ async function checkStatus(force = false) {
     }
   } catch (e) { /* noop */ }
   setStatus(r.ok, r.data);
+  if (r.ok) { try { warmModelPool(String((loadVoiceProfile().current) || (quickChars && quickChars.active) || "")); } catch (e) { /* noop */ } }   // 1.6.136 在线即预热当前角色(节流2分钟)
   // 服务不可用(启动/重启窗口 ~1-2 分钟)时快速重试, 恢复后状态灯自动回绿
   // 1.6.107 5s→15s: 引擎没启动时不要每 5 秒发一次请求(控制台/网络都清爽)
   if (!r.ok && !force) {
@@ -1826,6 +1851,7 @@ async function applyEmotion(emotion, name) {
     }
     await saveVoiceProfile(prof);
     renderQuickUI();
+    try { warmModelPool(charName); } catch (e) { /* noop */ }   // 1.6.136 切角/选语气即后台预热该角色(重启后首句零等待)
     return true;
   } catch (e) { console.error("[gpt-sovits-tts] 应用语气失败:", e); return false; }
 }
