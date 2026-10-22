@@ -1452,7 +1452,7 @@ async function probeEngineHealth(serverUrl, timeoutMs = 2500) {
     if (resp && resp.ok) {
       let j = {};
       try { j = await resp.json(); } catch (e) { /* noop */ }
-      return { state: "up", busy: Number(j.busy || 0), ttsBusyS: Number(j.tts_busy_s || 0), ms };
+      return { state: "up", busy: Number(j.busy || 0), ttsBusyS: Number(j.tts_busy_s || 0), ms, apiVersion: String(j.api_version || ""), stuckLimitS: Number(j.stuck_limit_s || 0) };
     }
     if (resp && (resp.status === 404 || resp.status === 405)) return { state: "unknown", ms };   // 旧引擎没有 /health
     return { state: "hung", ms, status: resp && resp.status };
@@ -4811,7 +4811,7 @@ window.runFinalTest = async function runFinalTest() {
   push("");
   push("- 时间: " + new Date().toLocaleString("zh-CN") + " | 执行者: " + opName + " | 角色: " + cn);
   push("- 版本断言: 代码=" + MOD_VERSION + " | 清单缓存=" + verTxt + (String(verTxt) === String(MOD_VERSION) ? " ✓ 一致" : "（缓存落后可忽略，看代码版本）"));
-  push("- v6 覆盖: 引擎前置拦截 · 回归冒烟(0 成本断言) · 多场景 6 条 · **发送框真实路径/AI直出** · **打字停顿朗读** · **AI 预加载→再点发送** · **长句润色** · **翻译端点** · **其他角色音色** · **打包完整性**");
+  push("- v7 覆盖: 引擎前置拦截 · 回归冒烟(0 成本断言) · 多场景 6 条 · **发送框真实路径/AI直出** · **打字停顿朗读** · **AI 预加载→再点发送** · **长句润色** · **翻译端点** · **其他角色音色** · **打包完整性** · **看门狗(Python 版)自启** · **合成中 /health 仍秒回**");
   push("");
 
   // ============ ① 引擎前置：不通就直接出报告，不再空转几百秒 ============
@@ -4869,8 +4869,27 @@ window.runFinalTest = async function runFinalTest() {
     } catch (e) { /* noop */ }
     if (_wd && _wd.script !== undefined) {
       _chk("看门狗脚本存在", !!_wd.script, "size=" + (_wd.script_size || 0));
+      // 1.6.130: 必须已经换成 watchdog.py（旧 watchdog.vbs 会被火绒判毒直接删掉 → 自启形同不存在）
+      _chk("看门狗已是 Python 版(watchdog.py)", /watchdog\.py$/i.test(String(_wd.script_path || "")), String(_wd.script_path || "").split("\\").pop() || "?");
       _chk("看门狗开机自启已安装", !!_wd.startup, String(_wd.startup_path || "").slice(-40));
+      if (_wd.legacy_startup) push("- · ⚠ 启动文件夹里还有旧 `.vbs` 启动项（会被杀软删掉而失效）→ 运行一次 `engine\\安装看门狗自启.bat` 升级成 .lnk");
+      if (_wd.watchdog_proc) push("- · 看门狗进程 pid=" + _wd.watchdog_proc);
     } else push("- · 看门狗检查: 跳过（引擎未提供 /watchdog → 重启一次引擎后可测）");
+    // 1.6.130 引擎新探针: /health 是否可用(能否区分"未启动 / 卡死 / 忙") + api_version
+    //   代理模式(玩家连不到 9881)下本端探测不到 → 跳过, 不误报"引擎未升级"
+    let _hc = null;
+    if (window.__fvttTTSCanDirect === false) push("- · 代理模式(本端不直连引擎) → /health 探针跳过，由 GM 侧验证");
+    else {
+      try {
+        const _hurl = String(cfg.serverUrl || "").replace(/\/+$/, "") + "/health";
+        const _hr = await fetch(_hurl, { cache: "no-store" });
+        _hc = _hr.ok ? await _hr.json().catch(() => null) : null;
+      } catch (e) { _hc = null; }
+      if (_hc && _hc.ok) {
+        _chk("引擎 /health 可用", true, "api=" + (_hc.api_version || "?") + " stuck=" + (_hc.stuck_limit_s || "?") + "s busy=" + (_hc.busy || 0));
+        if (_hc.api_version && _hc.api_version !== MOD_VERSION) push("- · 引擎 api_version=" + _hc.api_version + " ≠ 模块 " + MOD_VERSION + "（不影响本机使用，重启一次引擎即可对齐）");
+      } else push("- · 引擎 /health 不可用 → 引擎还没升级到 1.6.130（重启引擎即可；老引擎合成时整个服务会无响应）");
+    }
     let _pk = null;
     try {
       const r2 = await svcRequest(cfg.serverUrl, "GET", "/packcheck", null, { timeoutMs: 12000, retries: 0, quiet: true });
@@ -5080,12 +5099,39 @@ window.runFinalTest = async function runFinalTest() {
     }
   } catch (e) { push("- L 预加载异常: " + String((e && e.message) || e).slice(0, 80)); fails.push("L预加载异常"); }
 
-  // M. 长句润色（预算/截断风险）
+  // M. 长句润色（预算/截断风险） + 1.6.130 并发健康探针（合成期间 /health 必须仍能秒回）
   try {
     const _long = "今天的事情就交给我吧，虽然我平时不太爱说话，也不太擅长和人打交道，但是既然已经答应了你，我就一定会认真处理到底，不会让你一个人承担这些麻烦。";
+    // 合成期间每 250ms 打一次 /health: 老引擎是 async def 里跑同步推理 → 整段无响应;
+    // 1.6.130 把推理搬进线程后 → 应该全成功(这也是"引擎卡死时端口在听但谁都连不上"的根治证据)
+    let _hpOK = 0, _hpFail = 0, _hpMax = 0, _hpBusySeen = 0, _hpStop = false;
+    const _hpProxy = (window.__fvttTTSCanDirect === false);
+    const _hpLoop = (async () => {
+      while (!_hpStop && !_hpProxy) {
+        const _r = await probeEngineHealth(cfg.serverUrl, 2500).catch(() => ({ state: "unknown", ms: 0 }));
+        if (_r && _r.state === "up") {
+          _hpOK++;
+          if (Number(_r.ms) > _hpMax) _hpMax = Number(_r.ms);
+          if (Number(_r.busy) > 0) _hpBusySeen++;
+        } else _hpFail++;
+        await new Promise(x => setTimeout(x, 250));
+      }
+    })();
     const rM = await _sendLine(_long, {}, 60000);
+    _hpStop = true;
+    try { await _hpLoop; } catch (e) { /* noop */ }
     const polM = String((rM.flags && rM.flags.polishText) || "").trim();
+    const _hpOldEngine = (_hpOK === 0 && _hpFail > 0);
     push("- **M 长句润色**（" + _long.length + " 字）: 合成=" + (rM.audio ? "✓" : "✗") + " | 润色=" + (polM ? ("✓ " + polM.length + " 字") : "— 未返回(长句预算不足时属可接受降级)"));
+    push("- **P 合成中引擎并发健康**（/health，每 250ms）: " + (_hpProxy
+      ? "代理模式 → 跳过（本端不直连引擎，由 GM 侧验证）"
+      : ("成功=" + _hpOK + " 失败=" + _hpFail
+        + " 最慢=" + Math.round(_hpMax) + "ms 探到busy=" + _hpBusySeen + " 次 → "
+        + (_hpOK > 0 && _hpFail === 0 ? "✓ 合成期间事件循环未阻塞"
+          : (_hpOldEngine ? "⚠ 引擎还没升级(老引擎合成时整个服务会卡住, 重启引擎即可)"
+            : "✗ 合成期间引擎无响应(应升级引擎到 1.6.130)")))));
+    if (!_hpProxy && _hpOK === 0 && !_hpOldEngine) fails.push("P并发健康");
+    else if (!_hpProxy && _hpOK > 0 && _hpFail > 0) push("- · 注: 有 " + _hpFail + " 次探测失败(可能是首次合成的模型/内核初始化瞬间), 属可接受抖动");
     if (!rM.audio) fails.push("M长句合成");
   } catch (e) { push("- M 长句异常: " + String((e && e.message) || e).slice(0, 80)); fails.push("M长句异常"); }
 
@@ -5171,7 +5217,7 @@ window.runFinalTest = async function runFinalTest() {
   // ============ ⑥ 结论 ============
   _mark("结论");
   push("## 六、结论");
-  push("- 测试脚本: v6(代码版本 " + MOD_VERSION + ") | 耗时: " + Math.round((Date.now() - t0) / 1000) + "s | 场景 " + _scenesDone + " 条 | 断言 " + _chkRows.length + " 项");
+  push("- 测试脚本: v7(代码版本 " + MOD_VERSION + ") | 耗时: " + Math.round((Date.now() - t0) / 1000) + "s | 场景 " + _scenesDone + " 条 | 断言 " + _chkRows.length + " 项");
   push("- 关键项: " + (fails.length ? ("⚠ 存在问题 → " + fails.join("、")) : "全部通过 ✓"));
   try {
     const _secTxt = Object.keys(_secMs).map(k => k + " " + _secMs[k] + "s").join(" · ");
