@@ -1131,6 +1131,7 @@ def activate_character(name):
 MAX_MODEL_POOL = 10
 _POOL_LOCK = threading.Lock()
 TTS_POOL = OrderedDict()   # 角色名 -> {"tts": TTS 实例, "at": 最近使用时间戳}
+_LOAD_LOCKS = {}           # 1.6.137 角色名 -> 加载锁: 并发 /tts 请求同一新角色时只加载一份(防显存双倍/OOM)
 
 
 def _pool_config_path():
@@ -1206,7 +1207,9 @@ def _pool_dbg(msg):
 
 def _pool_get(name):
     """按角色取常驻 TTS 实例(LRU): 命中即用; 未命中加载该角色权重(首次较慢, 之后常驻); 池满淘汰最久未用.
-    激活角色(GM 主角色)直接用热换的 tts_pipeline, 不重复占资源; 权重缺失回退激活角色."""
+    激活角色(GM 主角色)直接用热换的 tts_pipeline, 不重复占资源; 权重缺失回退激活角色.
+    1.6.137: 同名加载锁 — 并发 /tts 请求同一新角色只加载一份; 调用方务必用 asyncio.to_thread 调本函数
+    (模型加载 10~60s, 不能在事件循环上跑, 否则 /health 超时被误判"引擎卡死")."""
     global tts_pipeline, MAX_MODEL_POOL
     name = os.path.basename(str(name or ""))
     if not name:
@@ -1216,52 +1219,71 @@ def _pool_get(name):
             return tts_pipeline
     except Exception:
         pass
-    with _POOL_LOCK:
-        hit = TTS_POOL.get(name)
-        if hit is not None:
-            TTS_POOL.move_to_end(name)
-            hit["at"] = time.time()
-            return hit["tts"]
-        if len(TTS_POOL) >= MAX_MODEL_POOL:
-            _pool_evict_lru()
-    try:
-        y = os.path.join(_CHARS_ROOT, name, "character.yaml")
-        if not os.path.isfile(y):
-            return tts_pipeline
-        import yaml as _yaml
-        with open(y, "r", encoding="utf-8") as _f:
-            cfg = _yaml.safe_load(_f) or {}
-        cfg = cfg[0] if isinstance(cfg, list) and cfg else cfg
-        if not isinstance(cfg, dict):
-            return tts_pipeline
-        gpt = _pool_char_path(os.path.dirname(os.path.abspath(y)), cfg.get("gpt_model_path", ""))
-        sovits = _pool_char_path(os.path.dirname(os.path.abspath(y)), cfg.get("sovits_model_path", ""))
-        ref_raw = str(cfg.get("refer_audio_path", "") or "")
-        ref_abs = _pool_char_path(os.path.dirname(os.path.abspath(y)), ref_raw) if ref_raw else ""
-        if not (gpt and sovits and os.path.isfile(gpt) and os.path.isfile(sovits) and ref_abs and os.path.isfile(ref_abs)):
-            print("[模型池] %s 权重不完整, 回退激活角色" % name)
-            return tts_pipeline
-        print("[模型池] 加载角色模型(首次较慢, 之后常驻即用): %s (常驻 %d→%d/%d)" % (name, len(TTS_POOL), len(TTS_POOL) + 1, MAX_MODEL_POOL))
-        _pool_dbg("LOAD %s yaml=%s gpt=%s sovits=%s ref=%s" % (name, y, gpt, sovits, ref_abs))
-        inst = TTS(tts_config)
-        _pool_dbg("TTS-INST %s OK" % name)
-        inst.init_t2s_weights(gpt)
-        _pool_dbg("GPT-W %s OK" % name)
-        inst.init_vits_weights(sovits)
-        _pool_dbg("SOVITS-W %s OK" % name)
-        inst.set_ref_audio(ref_abs)
-        _pool_dbg("REF %s OK" % name)
+    # 取/插池都要先看一遍(锁内), 再决定要不要加载
+    def _peek():
         with _POOL_LOCK:
-            while len(TTS_POOL) >= MAX_MODEL_POOL:
+            hit = TTS_POOL.get(name)
+            if hit is not None:
+                TTS_POOL.move_to_end(name)
+                hit["at"] = time.time()
+                return hit["tts"]
+            if len(TTS_POOL) >= MAX_MODEL_POOL:
                 _pool_evict_lru()
-            TTS_POOL[name] = {"tts": inst, "at": time.time()}
-        print("[模型池] 就绪: %s (常驻 %d/%d)" % (name, len(TTS_POOL), MAX_MODEL_POOL))
-        _pool_dbg("POOLED %s size=%d max=%d" % (name, len(TTS_POOL), MAX_MODEL_POOL))
-        return inst
-    except Exception as e:
-        print("[模型池] 加载 %s 失败: %s → 回退激活角色" % (name, e))
-        _pool_dbg("FAIL %s: %s" % (name, e))
-        return tts_pipeline
+        return None
+    _h = _peek()
+    if _h is not None:
+        return _h
+    _lk = _LOAD_LOCKS.setdefault(name, threading.Lock())
+    if not _lk.acquire(blocking=False):
+        # 别人正在加载这个角色 → 等它完成再取(不重复加载, 不占显存双份)
+        with _lk:
+            pass
+        _h = _peek()
+        return _h if _h is not None else tts_pipeline
+    try:
+        _h = _peek()   # 拿到锁前别人可能已加载好
+        if _h is not None:
+            return _h
+        try:
+            y = os.path.join(_CHARS_ROOT, name, "character.yaml")
+            if not os.path.isfile(y):
+                return tts_pipeline
+            import yaml as _yaml
+            with open(y, "r", encoding="utf-8") as _f:
+                cfg = _yaml.safe_load(_f) or {}
+            cfg = cfg[0] if isinstance(cfg, list) and cfg else cfg
+            if not isinstance(cfg, dict):
+                return tts_pipeline
+            gpt = _pool_char_path(os.path.dirname(os.path.abspath(y)), cfg.get("gpt_model_path", ""))
+            sovits = _pool_char_path(os.path.dirname(os.path.abspath(y)), cfg.get("sovits_model_path", ""))
+            ref_raw = str(cfg.get("refer_audio_path", "") or "")
+            ref_abs = _pool_char_path(os.path.dirname(os.path.abspath(y)), ref_raw) if ref_raw else ""
+            if not (gpt and sovits and os.path.isfile(gpt) and os.path.isfile(sovits) and ref_abs and os.path.isfile(ref_abs)):
+                print("[模型池] %s 权重不完整, 回退激活角色" % name)
+                return tts_pipeline
+            print("[模型池] 加载角色模型(首次较慢, 之后常驻即用): %s (常驻 %d→%d/%d)" % (name, len(TTS_POOL), len(TTS_POOL) + 1, MAX_MODEL_POOL))
+            _pool_dbg("LOAD %s yaml=%s gpt=%s sovits=%s ref=%s" % (name, y, gpt, sovits, ref_abs))
+            inst = TTS(tts_config)
+            _pool_dbg("TTS-INST %s OK" % name)
+            inst.init_t2s_weights(gpt)
+            _pool_dbg("GPT-W %s OK" % name)
+            inst.init_vits_weights(sovits)
+            _pool_dbg("SOVITS-W %s OK" % name)
+            inst.set_ref_audio(ref_abs)
+            _pool_dbg("REF %s OK" % name)
+            with _POOL_LOCK:
+                while len(TTS_POOL) >= MAX_MODEL_POOL:
+                    _pool_evict_lru()
+                TTS_POOL[name] = {"tts": inst, "at": time.time()}
+            print("[模型池] 就绪: %s (常驻 %d/%d)" % (name, len(TTS_POOL), MAX_MODEL_POOL))
+            _pool_dbg("POOLED %s size=%d max=%d" % (name, len(TTS_POOL), MAX_MODEL_POOL))
+            return inst
+        except Exception as e:
+            print("[模型池] 加载 %s 失败: %s → 回退激活角色" % (name, e))
+            _pool_dbg("FAIL %s: %s" % (name, e))
+            return tts_pipeline
+    finally:
+        _lk.release()
 
 
 def emotion_slot_state(cfg):
@@ -1631,7 +1653,9 @@ async def tts_handle(req: dict):
     _role = str(req.get("role") or req.get("character_name") or "").strip()
     _pipe = None
     if _role:
-        _pipe = _pool_get(_role)
+        # 1.6.137 模型加载(/pool_get, 首次 10~60s)必须在工作线程, 不能占事件循环:
+        #   之前同步跑会让 /health、/status 全部超时 → checkStatus 误报"引擎无响应(卡住)"+ 切换后卡顿
+        _pipe = await asyncio.to_thread(_pool_get, _role)
         if _pipe is not tts_pipeline:
             try:
                 _yc = os.path.join(_CHARS_ROOT, _role, "character.yaml")
@@ -1858,7 +1882,7 @@ _TTS_START_TS = 0.0        # 当前这轮合成开始时间(0 = 没有合成在�
 _TTS_STUCK_LIMIT = 240     # 单次合成最长容忍秒数(正常长句约 10~20s, 240s 只会是死锁)
 _TTS_LOCK = None           # 合成串行锁(asyncio.Lock, 惰性创建)
 _BOOT_TS = time.time()
-API_VERSION = "1.6.136"    # fvtt_api.py 自身版本(与模块版本对齐; /health、/status 会带上, 便于确认引擎是否已升级)
+API_VERSION = "1.6.137"    # fvtt_api.py 自身版本(与模块版本对齐; /health、/status 会带上, 便于确认引擎是否已升级)
 
 
 def _tts_lock():
