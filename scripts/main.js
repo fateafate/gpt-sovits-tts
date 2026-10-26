@@ -19,7 +19,7 @@ window.fetchAndRefreshModels = fetchAndRefreshModels;
 const MODULE = "gpt-sovits-tts";
 // 1.6.103 代码版本号: Foundry 的 game.modules.get(id).version 读的是"载入世界时的清单缓存",
 //   改了 manifest 不刷新会一直显示旧版本(用户多次看到 1.6.96 而实际代码已是新版) → 报告里同时打印两者, 便于确认真的在跑新代码
-const MOD_VERSION = "1.6.137";
+const MOD_VERSION = "1.6.138";
 const CHAT_STYLES = (typeof CONST !== "undefined" && (CONST.CHAT_MESSAGE_STYLES || CONST.CHAT_MESSAGE_TYPES)) || {};
 
 /* ============ 设置定义 ============ */
@@ -230,19 +230,20 @@ function inferEmotionSpeed(label) {
   return 0;   // 未命中 → 不调整
 }
 
-/* ============ 状态 ============ */
+/* ============ 状态 (1.6.138: window 共享单例) ============ */
+// 模块被重复求值(热重载/重复挂载)时本文件会执行两份: 若各自持一套 playedIds/voicedIds/pendingTts/preloadAudio/lastTypedSpoken/typingTimer,
+// 同一消息就会被两份实例各处理一遍 → "朗读两遍、发送两遍、发送后再补读一遍"。全部容器挂 window 单例 → 跨实例去重恢复。
+const __st = (window.__fvttTTSState = window.__fvttTTSState || {});
 const queue = new PlaybackQueue({});
 let statusInfo = { ok: null, data: null };
-let lastTypedSpoken = { text: "", ts: 0 };
-let typingTimer = null;
-let dictation = null;
+let lastTypedSpoken = __st.lastTypedSpoken || (__st.lastTypedSpoken = { text: "", ts: 0 });   // 打字停顿预读记录(对象共享, 只原地改字段)
 let lastErrorNotify = 0;
-const voicedIds = new Set();
-const recentBroadcastIds = new Set();   // 自己最近广播的 messageId(socket 回环去重; 用集合避免连发时单值被覆盖导致旧广播重复播)
-const pendingTts = new Map();      // messageId → 定时器(非作者等广播音频的兜底)
-const playedIds = new Set();       // 已播放广播音频的 messageId(防兜底二次读)
-const audioCache = new Map();      // messageId → {url, mime}: 已合成/已广播的同一段音频(重播复用)
-let preloadAudio = null;           // {text, lang, url, dataUrl}: 预加载时预合成的当前输入音频(再点直接播出)
+const voicedIds = __st.voicedIds || (__st.voicedIds = new Set());
+const recentBroadcastIds = __st.recentBroadcastIds || (__st.recentBroadcastIds = new Set());   // 自己最近广播的 messageId(socket 回环去重; 用集合避免连发时单值被覆盖导致旧广播重复播)
+const pendingTts = __st.pendingTts || (__st.pendingTts = new Map());      // messageId → 定时器(非作者等广播音频的兜底)
+const playedIds = __st.playedIds || (__st.playedIds = new Set());       // 已播放广播音频的 messageId(防兜底二次读)
+const audioCache = __st.audioCache || (__st.audioCache = new Map());      // messageId → {url, mime}: 已合成/已广播的同一段音频(重播复用)
+// 以下可变状态统一放 window(共享): typingTimer/preloadAudio/dictation/submitLocked/sendPopEl
 
 function cacheAudio(messageId, url, mime) {
   try {
@@ -274,12 +275,12 @@ function makeWatchKey() {
  *  也可能仍是原文(没润色/润色被安全校验拒绝) → 两种都必须能命中, 否则润色生效就白重新合成一遍。 */
 function preloadHit(t) {
   try {
-    if (!preloadAudio || !preloadAudio.url) return false;
+    if (!window.__fvttTTSPreloadAudio || !window.__fvttTTSPreloadAudio.url) return false;
     const want = String(t || "").replace(/\s+/g, " ").trim();
     if (!want) return false;
-    const keyA = String(preloadAudio.srcText || "").replace(/\s+/g, " ").trim();
-    const keyB = String(preloadAudio.text || "").replace(/\s+/g, " ").trim();
-    return (keyA === want || keyB === want) && preloadAudio.watchKey === makeWatchKey();
+    const keyA = String(window.__fvttTTSPreloadAudio.srcText || "").replace(/\s+/g, " ").trim();
+    const keyB = String(window.__fvttTTSPreloadAudio.text || "").replace(/\s+/g, " ").trim();
+    return (keyA === want || keyB === want) && window.__fvttTTSPreloadAudio.watchKey === makeWatchKey();
   } catch (e) { return false; }
 }
 
@@ -1158,7 +1159,7 @@ function _wasTypingPreviewed(txt) {
     const lt = lastTypedSpoken;
     if (!lt || !lt.text || !lt.ts) return false;
     if (Date.now() - lt.ts > 30000) return false;
-    return String(lt.text).replace(/\s+/g, " ").trim() === t;
+    return String(lt.text).replace(/\s+/g, " ").trim() === String(t).replace(/\s+/g, " ").trim();   // 1.6.138 两侧都归一化(消息内容带尾随空白时不再误判为"没预读过")
   } catch (e) { return false; }
 }
 
@@ -1372,23 +1373,23 @@ async function maybeSpeak(message) {  const cfg = getCfg();
   const _heardTyping = _wasTypingPreviewed(String((message && message.content) || ""));
   // 预加载音频命中: 输入与预合成文本一致 且 角色/语气/语言/语速未变 → 作者直接播预合成音频并广播(跳过 AI 判断/重新合成, 零等待)
   // 切了角色或语气 → 签名不匹配 → 回落下方正常合成(重新按当前角色/语气合成, 绝不播旧声音)
-  if (preloadHit(stripStageDirections(speakText)) && preloadAudio && preloadAudio.url) {
+  if (preloadHit(stripStageDirections(speakText)) && window.__fvttTTSPreloadAudio && window.__fvttTTSPreloadAudio.url) {
     if (decision.isSelf) {
       // 代理模式(pl 在 HTTPS/跨网/9881 不可达环境): 预合成音频路径写回 flags → 全员从 Foundry 30000 拉同一段
       try {
-        if (message.id && preloadAudio.audioUrl) {
-          const _relP = String(preloadAudio.audioUrl).startsWith("http") ? new URL(preloadAudio.audioUrl).pathname : preloadAudio.audioUrl;
+        if (message.id && window.__fvttTTSPreloadAudio.audioUrl) {
+          const _relP = String(window.__fvttTTSPreloadAudio.audioUrl).startsWith("http") ? new URL(window.__fvttTTSPreloadAudio.audioUrl).pathname : window.__fvttTTSPreloadAudio.audioUrl;
           const _updP = { "flags.gpt-sovits-tts.audioUrl": _relP };
-          try { if (preloadAudio.dataUrl && preloadAudio.dataUrl.length < 400000) _updP["flags.gpt-sovits-tts.audioData"] = preloadAudio.dataUrl; } catch (e) { /* noop */ }
+          try { if (window.__fvttTTSPreloadAudio.dataUrl && window.__fvttTTSPreloadAudio.dataUrl.length < 400000) _updP["flags.gpt-sovits-tts.audioData"] = window.__fvttTTSPreloadAudio.dataUrl; } catch (e) { /* noop */ }
           safeMsgWrite(message, _updP);
         }
       } catch (e) { /* noop */ }
       if (window.__fvttTTSCanDirect === true) {
         if (message.id) { playedIds.add(message.id); setTimeout(() => { try { playedIds.delete(message.id); } catch (e) { /* noop */ } }, 30000); }   // 本地预载已播(防 flags 写回再播)
-        const _mpu = (() => { try { return _modulePath(preloadAudio.audioUrl || ""); } catch (e) { return ""; } })();
+        const _mpu = (() => { try { return _modulePath(window.__fvttTTSPreloadAudio.audioUrl || ""); } catch (e) { return ""; } })();
         // 1.6.132: 这句刚被"打字停顿朗读"预读过 → 预加载命中也不再本地重播(作者只听预读那一次)
         if (!_heardTyping) {
-          queue.enqueue({ play: () => audioPlay(_mpu || preloadAudio.dataUrl || preloadAudio.url, { volume: playVolume(), push: !!_mpu }) });
+          queue.enqueue({ play: () => audioPlay(_mpu || window.__fvttTTSPreloadAudio.dataUrl || window.__fvttTTSPreloadAudio.url, { volume: playVolume(), push: !!_mpu }) });
         } else {
           try { console.debug("[gpt-sovits-tts] 打字已预读同一句 → 预加载命中不重复本地播放"); } catch (e) { /* noop */ }
         }
@@ -1398,10 +1399,10 @@ async function maybeSpeak(message) {  const cfg = getCfg();
       }
       // 立即广播预合成音频(全员同声; socket 不通时 pl 仍可从 flags 拿到)
       try {
-        if (message.id && preloadAudio.audioUrl) {
-          const _relP = String(preloadAudio.audioUrl).startsWith("http") ? new URL(preloadAudio.audioUrl).pathname : preloadAudio.audioUrl;
+        if (message.id && window.__fvttTTSPreloadAudio.audioUrl) {
+          const _relP = String(window.__fvttTTSPreloadAudio.audioUrl).startsWith("http") ? new URL(window.__fvttTTSPreloadAudio.audioUrl).pathname : window.__fvttTTSPreloadAudio.audioUrl;
           const _updP = { "flags.gpt-sovits-tts.audioUrl": _relP };
-          try { if (preloadAudio.dataUrl && preloadAudio.dataUrl.length < 400000) _updP["flags.gpt-sovits-tts.audioData"] = preloadAudio.dataUrl; } catch (e) { /* noop */ }
+          try { if (window.__fvttTTSPreloadAudio.dataUrl && window.__fvttTTSPreloadAudio.dataUrl.length < 400000) _updP["flags.gpt-sovits-tts.audioData"] = window.__fvttTTSPreloadAudio.dataUrl; } catch (e) { /* noop */ }
           safeMsgWrite(message, _updP);
         }
       } catch (e) { /* noop */ }
@@ -1745,7 +1746,7 @@ function submitChatInput() {
   } catch (e) { console.error("[gpt-sovits-tts] 发送失败:", e); }
 }
 
-let submitLocked = false;   // 防重复提交(AI 判断慢时连点会出多个语音)
+// 防重复提交(AI 判断慢时连点会出多个语音) → window 共享(双实例也拦得住)
 
 async function doSubmitChat(ta, opts = {}) {
   const v = String(ta.value || "").trim();
@@ -1755,8 +1756,16 @@ async function doSubmitChat(ta, opts = {}) {
     notifyOnce(_L("ui.cmdHint", "命令(以/开头的行)请直接按回车发送"), "info");
     return;
   }
-  if (submitLocked) { notifyOnce(_L("ui.sending", "正在发送…"), "info"); return; }
-  submitLocked = true;
+  if (window.__fvttTTSSubmitLock) { notifyOnce(_L("ui.sending", "正在发送…"), "info"); return; }
+  // 1.6.138 双实例防护: 同一句 4 秒内被请求再次发送 → 丢弃(防"发送两遍"; 正常操作不可能同句连发)
+  const _sNow = Date.now();
+  const _sLast = window.__fvttTTSLastSent || null;
+  if (_sLast && Math.abs(_sNow - _sLast.ts) < 4000 && _sLast.text === v) {
+    try { console.warn("[gpt-sovits-tts] 同一句 4 秒内重复提交, 已忽略 → " + String(v).slice(0, 20)); } catch (e) { /* noop */ }
+    return;
+  }
+  window.__fvttTTSLastSent = { text: v, ts: _sNow };
+  window.__fvttTTSSubmitLock = true;
   try {
     // 手动创建消息: 不触发表单默认提交(避免浏览器刷新/崩溃), 仍走 createChatMessage → 全员同声朗读
     // 发送已与 AI 调配解耦: 消息立即发送上屏; AI 判断+润色在朗读环节(maybeSpeak)异步完成, 聊天不再被 LLM 阻塞
@@ -1803,18 +1812,17 @@ async function doSubmitChat(ta, opts = {}) {
       try { ta.value = ""; ta.focus(); } catch (e) { /* noop */ }
       refreshPreloadBtn();   // 1.6.102 发送后输入框已清空 → 预加载按钮立即回到"AI 预加载"(不再一直显示已加载)
       // 1.6.134 发送即消费: 清掉本次预加载缓存, 按钮真正复位; 下一句由"自动预加载"在停顿时重新预合成
-      try { if (preloadAudio) { try { if (preloadAudio.url) URL.revokeObjectURL(preloadAudio.url); } catch (e) { /* noop */ } preloadAudio = null; } } catch (e) { /* noop */ }
+      try { if (window.__fvttTTSPreloadAudio) { try { if (window.__fvttTTSPreloadAudio.url) URL.revokeObjectURL(window.__fvttTTSPreloadAudio.url); } catch (e) { /* noop */ } window.__fvttTTSPreloadAudio = null; } } catch (e) { /* noop */ }
     } catch (err) {
       console.error("[gpt-sovits-tts] 消息创建失败:", err);
       notifyOnce(_L("ui.sendFail", "发送失败"), "warn");
     }
   } finally {
-    submitLocked = false;
+    window.__fvttTTSSubmitLock = false;
   }
 }
 
 /* ---------- 发送并朗读面板: 语气选择 + 调配设定 ---------- */
-let sendPopEl = null;
 
 /** 应用语气(情绪槽)到当前语音档案, 供工具条下拉/发送面板共用
  *  用户要求: 在默认(主参考)基础上添加情绪, 而不是只有情绪音频作参考.
@@ -1867,7 +1875,7 @@ function sendPopCurrentChars() {
 //   「当前输入文字 + 声音签名(角色/语气/语言/语速)」重新算一次显示状态。
 function refreshPreloadBtn() {
   try {
-    const pop = sendPopEl;
+    const pop = window.__fvttTTSSendPopEl;
     if (!pop) return;
     const pb = pop.querySelector(".fvtt-tts-sendpop-preload");
     if (!pb) return;
@@ -1888,7 +1896,7 @@ function refreshPreloadBtn() {
 }
 
 function buildSendPop() {
-  if (sendPopEl && document.body.contains(sendPopEl)) return sendPopEl;
+  if (window.__fvttTTSSendPopEl && document.body.contains(window.__fvttTTSSendPopEl)) return window.__fvttTTSSendPopEl;
   const pop = document.createElement("div");
   pop.className = "fvtt-tts-sendpop";
   pop.innerHTML = `
@@ -1969,7 +1977,7 @@ function buildSendPop() {
     // done + 文字已改 → 继承进度: 不重复预热 LLM, 直接按当前文字预合成再发送
     // idle → 完整预加载(预热 LLM + 合成当前文字)
     const wasDone = btnP2.classList.contains("done");
-    const alreadyWarm = !!window.__aiPreloaded || !!preloadAudio;
+    const alreadyWarm = !!window.__aiPreloaded || !!window.__fvttTTSPreloadAudio;
     const oldP2 = btnP2.textContent;
     btnP2.textContent = "⏳ " + (alreadyWarm ? _L("ui.preloadingNow", "合成中…") : _L("ui.preloadingNow", "预加载中…"));
     btnP2.classList.add("loading");
@@ -2102,7 +2110,7 @@ function buildSendPop() {
     }
   });
 
-  sendPopEl = pop;
+  window.__fvttTTSSendPopEl = pop;
   return pop;
 }
 
@@ -2512,12 +2520,12 @@ function findEmotionSlot(emotionKey, charName) {
 }
 
 function renderSendPopEmotions() {
-  if (!sendPopEl || !document.body.contains(sendPopEl)) return;
+  if (!window.__fvttTTSSendPopEl || !document.body.contains(window.__fvttTTSSendPopEl)) return;
   const prof = loadVoiceProfile();
   const charName = prof.current || "";
   const c = sendPopCurrentChars().find(x => x.name === charName);
   const slots = (c && c.emotions) || [];
-  const grid = sendPopEl.querySelector(".fvtt-tts-sendpop-emogrid");
+  const grid = window.__fvttTTSSendPopEl.querySelector(".fvtt-tts-sendpop-emogrid");
   if (!grid) return;
   const curEmo = prof.emotion || "";
   grid.innerHTML = `<button type="button" class="fvtt-tts-sendpop-emo ${curEmo ? "" : "on"}" data-key="">${_L("ui.emotionNone", "默认")}</button>`
@@ -2525,17 +2533,17 @@ function renderSendPopEmotions() {
   // 恢复情绪占比/参数调制滑块值
   const prof2 = loadVoiceProfile();
   const cur2 = (prof2.chars && prof2.chars[prof2.current]) || {};
-  const mix = sendPopEl.querySelector(".fvtt-tts-sendpop-mix");
-  const mod = sendPopEl.querySelector(".fvtt-tts-sendpop-mod");
+  const mix = window.__fvttTTSSendPopEl.querySelector(".fvtt-tts-sendpop-mix");
+  const mod = window.__fvttTTSSendPopEl.querySelector(".fvtt-tts-sendpop-mod");
   // 1.6.111 这两项也是 0 = 自动(AI 决定), 未设置就显示"自动"而不是 50%
   if (mix) {
     mix.value = String(Math.round(((typeof cur2.emotionMix === "number" && cur2.emotionMix > 0) ? cur2.emotionMix : 0) * 100));
-    const _mk = sendPopEl.querySelector(".fvtt-tts-sendpop-mixval");
+    const _mk = window.__fvttTTSSendPopEl.querySelector(".fvtt-tts-sendpop-mixval");
     if (_mk) _mk.textContent = Number(mix.value) > 0 ? mix.value + "%" : "自动";
   }
   if (mod) {
     mod.value = String(Math.round(((typeof cur2.emotionMod === "number" && cur2.emotionMod > 0) ? cur2.emotionMod : 0) * 100));
-    const _md = sendPopEl.querySelector(".fvtt-tts-sendpop-modval");
+    const _md = window.__fvttTTSSendPopEl.querySelector(".fvtt-tts-sendpop-modval");
     if (_md) _md.textContent = Number(mod.value) > 0 ? mod.value + "%" : "自动";
   }
 }
@@ -2584,7 +2592,7 @@ function openSendPop() {
 }
 
 function closeSendPop() {
-  if (sendPopEl && document.body.contains(sendPopEl)) { sendPopEl.style.display = "none"; }
+  if (window.__fvttTTSSendPopEl && document.body.contains(window.__fvttTTSSendPopEl)) { window.__fvttTTSSendPopEl.style.display = "none"; }
 }
 
 /* 快捷角色/情绪切换: 数据与渲染 */
@@ -2717,7 +2725,7 @@ function updateStatusUI() {
 function updateMicUI() {
   const mic = document.querySelector("#fvtt-tts-floatbar .fvtt-tts-mic");
   if (!mic) return;
-  const active = !!(dictation && dictation.active);
+  const active = !!(window.__fvttTTSDictation && window.__fvttTTSDictation.active);
   mic.classList.toggle("active", active);
   mic.title = active ? _L("ui.micStop", "正在听写…点击停止") : _L("ui.mic", "语音听写(点击开始/停止)");
   mic.innerHTML = active ? '<i class="fa-solid fa-microphone-lines"></i>' : '<i class="fa-solid fa-microphone"></i>';
@@ -2757,8 +2765,8 @@ async function adoptPreload(pv, rawText) {
         if (_fb && _fb.ok) { const _bb = await _fb.blob(); if (_bb && _bb.size > 0) _dataUrl = "data:audio/mpeg;base64," + (await blobToBase64(_bb)); }
       } catch (e) { /* noop */ }
     }
-    if (preloadAudio && preloadAudio.url) { try { URL.revokeObjectURL(preloadAudio.url); } catch (e) { /* noop */ } }
-    preloadAudio = { text: pv.text || _src, srcText: _src, lang: pv.lang || "auto", url: _url, audioUrl: pv.audioUrl || "", dataUrl: _dataUrl, mime: "audio/mpeg", ts: Date.now(), watchKey: makeWatchKey() };
+    if (window.__fvttTTSPreloadAudio && window.__fvttTTSPreloadAudio.url) { try { URL.revokeObjectURL(window.__fvttTTSPreloadAudio.url); } catch (e) { /* noop */ } }
+    window.__fvttTTSPreloadAudio = { text: pv.text || _src, srcText: _src, lang: pv.lang || "auto", url: _url, audioUrl: pv.audioUrl || "", dataUrl: _dataUrl, mime: "audio/mpeg", ts: Date.now(), watchKey: makeWatchKey() };
     return true;
   } catch (e) { return false; }
 }
@@ -2818,8 +2826,8 @@ async function synthPreloadCore(stripT) {
     if (!blob) return { ok: false, message: "no-blob" };
     const objUrl = URL.createObjectURL(blob);
     const b64 = await blobToBase64(blob);
-    if (preloadAudio && preloadAudio.url) { try { URL.revokeObjectURL(preloadAudio.url); } catch (e) { /* noop */ } }
-    preloadAudio = { text: stripP, srcText: stripT, lang: cfgP2.textLang || "auto", url: objUrl, audioUrl: audioUrl || "", dataUrl: `data:audio/mpeg;base64,${b64}`, mime: "audio/mpeg", ts: Date.now(), watchKey: makeWatchKey() };
+    if (window.__fvttTTSPreloadAudio && window.__fvttTTSPreloadAudio.url) { try { URL.revokeObjectURL(window.__fvttTTSPreloadAudio.url); } catch (e) { /* noop */ } }
+    window.__fvttTTSPreloadAudio = { text: stripP, srcText: stripT, lang: cfgP2.textLang || "auto", url: objUrl, audioUrl: audioUrl || "", dataUrl: `data:audio/mpeg;base64,${b64}`, mime: "audio/mpeg", ts: Date.now(), watchKey: makeWatchKey() };
     return { ok: true };
   } catch (e) { return { ok: false, message: String((e && e.message) || e) }; }
 }
@@ -2830,7 +2838,7 @@ async function silentPreload(rawText) {
     const stripT = stripStageDirections(String(rawText || ""));
     if (!stripT) return { ok: false };
     const r = await synthPreloadCore(stripT);
-    if (r && r.ok && preloadAudio && preloadAudio.url) {
+    if (r && r.ok && window.__fvttTTSPreloadAudio && window.__fvttTTSPreloadAudio.url) {
       // 合成期间用户改了文字/已发送 → 预加载作废(不存过期的)
       try {
         const el = document.getElementById("chat-message") || findChatTextarea();
@@ -2859,8 +2867,8 @@ function attachTyping() {
     // 1.6.134 自动预加载: 即使不开"打字即读"(send/manual), 停顿时也静默预合成 → 发送零等待
     const _autoOn = (c.autoPreload !== false && c.engine === "gptsovits");
     if (!_typingOn && !_autoOn) return;
-    clearTimeout(typingTimer);
-    typingTimer = setTimeout(async () => {
+    clearTimeout(window.__fvttTTSTypingTimer);
+    window.__fvttTTSTypingTimer = setTimeout(async () => {
       const el = document.getElementById("chat-message") || findChatTextarea();
       if (!el) return;
       const text = el.value.replace(/\s+/g, " ").trim();
@@ -2868,10 +2876,10 @@ function attachTyping() {
       if (text.length < c.minLength) return;
       if (_typingOn) {
         if (text === lastTypedSpoken.text && Date.now() - lastTypedSpoken.ts < 30000) return;
-        lastTypedSpoken = { text, ts: Date.now() };
+        lastTypedSpoken.text = text; lastTypedSpoken.ts = Date.now();
         speak(text, { isTypingPreview: true }).then(async (ok) => {
           // 预读失败(合成异常) → 撤销记录, 发送时该句仍会正常播放(不能因为"预读过"就吞掉发送的语音)
-          if (ok === false) { lastTypedSpoken = { text: "", ts: 0 }; return; }
+          if (ok === false) { lastTypedSpoken.text = ""; lastTypedSpoken.ts = 0; return; }
           try {
             // 1.6.134 顺手把预读播放的这段音频存成预加载 → 发送零等待(零额外合成/LLM)
             const pv = window.__fvttTTSLastTypingPreview;
@@ -2881,7 +2889,7 @@ function attachTyping() {
               if (hadOk) notifyPreloadDone(text);   // 1.6.134 完成立即告知(按钮没开面板也看得到)
             }
           } catch (e) { /* noop */ }
-        }).catch(() => { lastTypedSpoken = { text: "", ts: 0 }; });
+        }).catch(() => { lastTypedSpoken.text = ""; lastTypedSpoken.ts = 0; });
       } else if (_autoOn) {
         // 纯发送模式: 停顿时静默预合成(不播放) → 发送直接播同一段, 零等待
         const stripT = stripStageDirections(text);
@@ -2898,8 +2906,8 @@ function attachTyping() {
 }
 
 function cancelTypingDebounce() {
-  clearTimeout(typingTimer);
-  typingTimer = null;
+  clearTimeout(window.__fvttTTSTypingTimer);
+  window.__fvttTTSTypingTimer = null;
 }
 
 /* ============ 听写 ============ */
@@ -2911,9 +2919,9 @@ function mapSttLang(lang) {
 function toggleDictation() {
   const cfg = getCfg();
   if (!cfg.sttEnabled) { notifyOnce(_L("errors.sttDisabled", "听写功能未启用"), "info"); return; }
-  if (dictation && dictation.active) { dictation.stop(); dictation = null; updateMicUI(); return; }
+  if (window.__fvttTTSDictation && window.__fvttTTSDictation.active) { window.__fvttTTSDictation.stop(); window.__fvttTTSDictation = null; updateMicUI(); return; }
   refreshTtsDevices();  // 刷新设备缓存(拿到设备名, 供配置设定下拉显示)
-  if (dictation && dictation.active) { dictation.stop(); dictation = null; updateMicUI(); return; }
+  if (window.__fvttTTSDictation && window.__fvttTTSDictation.active) { window.__fvttTTSDictation.stop(); window.__fvttTTSDictation = null; updateMicUI(); return; }
   const engine = cfg.sttEngine;
   const lang = cfg.sttLang === "auto" ? detectLang(document.getElementById("chat-message")?.value || "") : cfg.sttLang;
   const devId = cfg.sttDevice || "";
@@ -2938,10 +2946,10 @@ function toggleDictation() {
       return;
     }
     if (devId) notifyOnce(_L("errors.sttBrowserDevice", "浏览器听写使用系统默认麦克风；要指定麦克风请把听写引擎改为“服务端”"), "info");
-    dictation = BrowserSTT.start({ lang: mapSttLang(lang), onResult, onError, onState });
+    window.__fvttTTSDictation = BrowserSTT.start({ lang: mapSttLang(lang), onResult, onError, onState });
   } else {
     if (!ServerSTT.supported()) { notifyOnce(_L("errors.sttServer", "当前浏览器无法使用麦克风录音")); return; }
-    dictation = ServerSTT.start({ serverUrl: cfg.serverUrl, lang, deviceId: devId, onResult, onError, onState });
+    window.__fvttTTSDictation = ServerSTT.start({ serverUrl: cfg.serverUrl, lang, deviceId: devId, onResult, onError, onState });
   }
   updateMicUI();
 }
@@ -2949,7 +2957,7 @@ function toggleDictation() {
 async function handleDictated(text) {
   if (!text) return;
   const cfg = getCfg();
-  dictation = null;
+  window.__fvttTTSDictation = null;
   updateMicUI();
   if (!cfg.sttAutoSend) {
     const ta = document.getElementById("chat-message");
@@ -2984,6 +2992,10 @@ function handleCommand(chatLog, message, chatData) {
   const m = String(message || "").trim();
   const match = m.match(/^\/(ttssay|ttsstop|ttstest|ttsrec|ttshelp)(?:\s+([\s\S]*))?$/i);
   if (!match) return undefined;
+  // 1.6.138 双实例防护: 同一命令事件会被两份实例的 chatMessage hook 各收一次 → 只让第一份执行(3s 窗口)
+  if (window.__fvttTTSCmdLast === m) { return false; }
+  window.__fvttTTSCmdLast = m;
+  setTimeout(() => { try { if (window.__fvttTTSCmdLast === m) window.__fvttTTSCmdLast = ""; } catch (e) { /* noop */ } }, 3000);
   const [, cmd, rest] = match;
   switch (cmd.toLowerCase()) {
     case "ttssay":
@@ -4259,7 +4271,7 @@ function setupAPI() {
     status: () => statusInfo,
     checkStatus: () => checkStatus(true),
     dictate: () => toggleDictation(),
-    isDictating: () => !!(dictation && dictation.active),
+    isDictating: () => !!(window.__fvttTTSDictation && window.__fvttTTSDictation.active),
     openVoiceManager: () => VoiceManager.open(),
     // 内置自检: 一键跑全部测试 → 报告写入服务端 selftest_report.json
     // 1.5.0 全面测试套件(28场景, 含并发/压力/异常/多角色多语气) — 取代旧测试
@@ -5047,12 +5059,12 @@ window.runFinalTest = async function runFinalTest() {
     {
       const _ltsSave = lastTypedSpoken;
       try {
-        lastTypedSpoken = { text: "  测试 防重复 ", ts: Date.now() };
+        lastTypedSpoken.text = "  测试 防重复 "; lastTypedSpoken.ts = Date.now();
         _chk("防重复: 同句30s内=跳过本地重播", _wasTypingPreviewed("测试 防重复") === true);
         _chk("防重复: 不同句=不跳过", _wasTypingPreviewed("另一句") === false);
-        lastTypedSpoken = { text: "测试", ts: Date.now() - 31000 };
+        lastTypedSpoken.text = "测试"; lastTypedSpoken.ts = Date.now() - 31000;
         _chk("防重复: 超过30s=不跳过", _wasTypingPreviewed("测试") === false);
-        lastTypedSpoken = { text: "", ts: 0 };
+        lastTypedSpoken.text = ""; lastTypedSpoken.ts = 0;
         _chk("防重复: 无预读记录=不跳过", _wasTypingPreviewed("测试") === false);
       } catch (e) { /* noop */ } finally { lastTypedSpoken = _ltsSave; }
     }
@@ -5266,7 +5278,7 @@ window.runFinalTest = async function runFinalTest() {
         let w = 0;
         while (w < 320 && !btn.classList.contains("done")) { await new Promise(r => setTimeout(r, 250)); w++; }
         const _done = btn.classList.contains("done");
-        const _pa = (typeof preloadAudio !== "undefined") ? preloadAudio : null;
+        const _pa = window.__fvttTTSPreloadAudio || null;
         const _tnow = stripStageDirections(String(ta3.value || "").trim());
         // 1.6.129 诊断: AI 润色会把预合成文本换成润色稿 → 必须用 srcText 匹配(否则"已预加载"再点不发送)
         const _match = preloadHit(_tnow);
