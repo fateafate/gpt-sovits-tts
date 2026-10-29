@@ -19,7 +19,7 @@ window.fetchAndRefreshModels = fetchAndRefreshModels;
 const MODULE = "gpt-sovits-tts";
 // 1.6.103 代码版本号: Foundry 的 game.modules.get(id).version 读的是"载入世界时的清单缓存",
 //   改了 manifest 不刷新会一直显示旧版本(用户多次看到 1.6.96 而实际代码已是新版) → 报告里同时打印两者, 便于确认真的在跑新代码
-const MOD_VERSION = "1.6.144";
+const MOD_VERSION = "1.6.145";
 const CHAT_STYLES = (typeof CONST !== "undefined" && (CONST.CHAT_MESSAGE_STYLES || CONST.CHAT_MESSAGE_TYPES)) || {};
 
 /* ============ 设置定义 ============ */
@@ -4979,6 +4979,19 @@ window.runFinalTest = async function runFinalTest() {
   const _chkRows = [];
   const _chk = (name, ok, detail) => { _chkRows.push({ name: String(name), ok: !!ok, detail: String(detail || "") }); if (!ok) fails.push(String(name)); return !!ok; };
   const _plays = () => { try { return Number(window.__fvttTTSPlayCount || 0); } catch (e) { return 0; } };
+  // 1.6.145 播放次数基线: 合成/播放是异步的, 上一项的播放可能晚到 → 测量前先等"计数稳定"再取基线
+  const _settle = async (stableMs = 900, maxMs = 20000) => {
+    try {
+      const t0s = Date.now();
+      let last = _plays(), stable = 0;
+      while (Date.now() - t0s < maxMs) {
+        await _sleep(250);
+        const p = _plays();
+        if (p === last) { stable += 250; if (stable >= stableMs) return; }
+        else { stable = 0; last = p; }
+      }
+    } catch (e) { /* noop */ }
+  };
   const _aiOn = !!(cfg.llmEnabled && cfg.llmKey) && window.__fvttTTSLlmBroken !== true;
   const _stat = async () => {
     try {
@@ -5155,6 +5168,7 @@ window.runFinalTest = async function runFinalTest() {
       } catch (e) { /* noop */ }
       if (sc.manualSlot) { try { await applyEmotion(sc.manualSlot, cn); } catch (e) { /* noop */ } }
       const _cv = (() => { try { return currentVoice() || {}; } catch (e) { return {}; } })();
+      await _settle();
       const _p0 = _plays();
       const r = await _sendLine(sc.text, {
         emotion: _cv.emotion ? normalizeEmotionKey(_cv.emotion) : "",
@@ -5190,10 +5204,15 @@ window.runFinalTest = async function runFinalTest() {
     try { setStylePrompt(cn, _origStyle); } catch (e) { /* noop */ }
     window.__fvttTTSAiLineDiag = false; window.__fvttTTSAiLineDiagList = []; window.__fvttTTSAiLineEnterList = [];
   }
-  // 立绘实物（最后一条真实 DOM）
+  // 立绘实物（最后一条真实 DOM）: v9 首跑发现检查太早(渲染还没插) → 这里加等待重试
   try {
-    const im = _lastMsgId ? document.querySelector('.message[data-message-id="' + _lastMsgId + '"] .fvtt-tts-emotion-avatar') : null;
-    const nw = im ? (im.naturalWidth || 0) : 0;
+    let im = null, nw = 0;
+    for (let i = 0; i < 30; i++) {
+      im = _lastMsgId ? document.querySelector('.message[data-message-id="' + _lastMsgId + '"] .fvtt-tts-emotion-avatar') : null;
+      nw = im ? (im.naturalWidth || 0) : 0;
+      if (im && nw > 0) break;
+      await _sleep(200);
+    }
     _chk("立绘实物已插入并解码", !!im && nw > 0, im ? ("naturalWidth=" + nw) : "未插入");
   } catch (e) { /* noop */ }
   push("");
@@ -5209,6 +5228,7 @@ window.runFinalTest = async function runFinalTest() {
   if (_ta) {
     try {
       const _idsB = new Set((((game.messages && game.messages.contents) || []).map(m => m.id)));
+      await _settle();
       const _p0 = _plays();
       _ta.value = "发送框路径测试：这条应发出并被读一次。";
       const r1 = await doSubmitChat(_ta, { aiDirect: true });
@@ -5236,6 +5256,7 @@ window.runFinalTest = async function runFinalTest() {
     try {
       await game.settings.set(MOD, "typingRead", true);
       try { attachTyping(); } catch (e) { /* noop */ }
+      await _settle();
       const _p0 = _plays();
       _ta.value = "预览防双播测试：这句话只应被读一次。";
       _ta.dispatchEvent(new Event("input", { bubbles: true }));
@@ -5263,6 +5284,7 @@ window.runFinalTest = async function runFinalTest() {
       const btn = pop && pop.querySelector(".fvtt-tts-sendpop-preload");
       if (!btn) push("- 预加载: 跳过（面板未就绪）");
       else {
+        await _settle();
         const _p0 = _plays();
         btn.click();
         let w = 0;
@@ -5297,6 +5319,7 @@ window.runFinalTest = async function runFinalTest() {
 
   // D. 白名单负向：没有 fromModSend 的消息必须完全无声
   try {
+    await _settle();
     const _p0 = _plays();
     let m = null;
     try { m = await ChatMessage.create({ content: "白名单负向测试：这条没有 fromModSend，不应被朗读。", speaker: { alias: cn }, flags: { [MOD]: { role: cn, lang: "zh" } } }); } catch (e) { /* noop */ }
@@ -5336,6 +5359,7 @@ window.runFinalTest = async function runFinalTest() {
         const _oldTR = _c.typingRead === true;
         try { await game.settings.set(MOD, "typingRead", false); } catch (e) { /* noop */ }
         try { attachTyping(); } catch (e) { /* noop */ }
+        await _settle();
         const _p0 = _plays();
         const _pa0 = window.__fvttTTSPreloadAudio;
         _ta.value = "静默预加载测试：这段应被预合成但完全不发声。";
