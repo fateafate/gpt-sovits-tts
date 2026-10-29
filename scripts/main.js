@@ -19,7 +19,7 @@ window.fetchAndRefreshModels = fetchAndRefreshModels;
 const MODULE = "gpt-sovits-tts";
 // 1.6.103 代码版本号: Foundry 的 game.modules.get(id).version 读的是"载入世界时的清单缓存",
 //   改了 manifest 不刷新会一直显示旧版本(用户多次看到 1.6.96 而实际代码已是新版) → 报告里同时打印两者, 便于确认真的在跑新代码
-const MOD_VERSION = "1.6.141";
+const MOD_VERSION = "1.6.142";
 const CHAT_STYLES = (typeof CONST !== "undefined" && (CONST.CHAT_MESSAGE_STYLES || CONST.CHAT_MESSAGE_TYPES)) || {};
 
 /* ============ 设置定义 ============ */
@@ -1979,11 +1979,8 @@ function buildSendPop() {
       doSubmitChat(ta);
       return;
     }
-    const cfgP2 = getCfg();
-    if (!cfgP2.llmEnabled || !cfgP2.llmKey) {
-      ui.notifications.warn(_L("ui.aiNoKey", "未配置 AI：请到语音设置填 API 密钥并开启 LLM"));
-      return;
-    }
+    // 1.6.142 修: 预合并**不需要** LLM —— 之前"未配置 AI"直接 return, 导致没配 LLM 的机器
+    //   点 🚀 永远不预合成(最终测试 L 段 80s 超时)。现在照常预合成(规则/手动语气), LLM 仅作可选润色/判语气。
     // done + 文字已改 → 继承进度: 不重复预热 LLM, 直接按当前文字预合成再发送
     // idle → 完整预加载(预热 LLM + 合成当前文字)
     const wasDone = btnP2.classList.contains("done");
