@@ -176,6 +176,12 @@ export function audioPlay(src, { volume = 1, onStart = null, push = true } = {})
   try { if (window.__fvttTTSMutedFlag === true) return Promise.resolve(); } catch (e) { /* noop */ }
   // 播放计数(速度测试/重复播放回归用): 每次真实播放 +1(静音时不计)
   try { window.__fvttTTSPlayCount = (window.__fvttTTSPlayCount || 0) + 1; } catch (e) { /* noop */ }
+  // 1.6.146 播放日志(带时间戳): 最终测试用"时间窗口计数"精确归属, 避免上一项的异步播放串进下一项
+  try {
+    const _plog = (window.__fvttTTSPlayLog = window.__fvttTTSPlayLog || []);
+    _plog.push({ ts: Date.now(), src: String(src || "").slice(0, 80) });
+    while (_plog.length > 60) _plog.shift();
+  } catch (e) { /* noop */ }
   // 记录本端已播 src(规范化键, 防 audioData 兜底/官方广播后 flags 写回重复; 30s 过期)
   markPlayedSrc(src);
   const vol = Math.min(1, Math.max(0, Number(volume) || 0));
