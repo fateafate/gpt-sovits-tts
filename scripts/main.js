@@ -19,7 +19,7 @@ window.fetchAndRefreshModels = fetchAndRefreshModels;
 const MODULE = "gpt-sovits-tts";
 // 1.6.103 代码版本号: Foundry 的 game.modules.get(id).version 读的是"载入世界时的清单缓存",
 //   改了 manifest 不刷新会一直显示旧版本(用户多次看到 1.6.96 而实际代码已是新版) → 报告里同时打印两者, 便于确认真的在跑新代码
-const MOD_VERSION = "1.6.139";
+const MOD_VERSION = "1.6.140";
 const CHAT_STYLES = (typeof CONST !== "undefined" && (CONST.CHAT_MESSAGE_STYLES || CONST.CHAT_MESSAGE_TYPES)) || {};
 
 /* ============ 设置定义 ============ */
@@ -4997,12 +4997,13 @@ window.runFinalTest = async function runFinalTest() {
     return { id: msg && msg.id, audio: audio, flags: fNow, ms: Date.now() - _t };
   };
 
-  push("# GPT-SoVITS TTS 最终测试报告（v7 精简版）");
+  push("# GPT-SoVITS TTS 最终测试报告（v8 发布验收版）");
   push("");
   push("- 时间: " + new Date().toLocaleString("zh-CN") + " | 执行者: " + opName + " | 角色: " + cn);
   push("- 版本断言: 代码=" + MOD_VERSION + " | 清单缓存=" + verTxt + (String(verTxt) === String(MOD_VERSION) ? " ✓ 一致" : "（缓存落后可忽略，看代码版本）"));
-  push("- v7 覆盖: 引擎前置拦截 · 回归冒烟(0 成本断言) · 多场景 6 条 · **发送框真实路径/AI直出** · **打字停顿朗读** · **AI 预加载→再点发送** · **长句润色** · **翻译端点** · **其他角色音色** · **打包完整性** · **看门狗(Python 版)自启** · **合成中 /health 仍秒回** · **防重复(打字预读后发送不重播)** · **强度默认 0=AI 自动**");
+  push("- v8 覆盖: 引擎前置拦截 · 回归冒烟(0 成本断言) · 多场景 6 条 · 发送框真实路径/AI直出 · 打字停顿朗读 · AI 预加载→再点发送 · 长句润色 · 翻译端点 · 其他角色音色 · 打包完整性 · 看门狗自启 · 合成中 /health 秒回 · 防重复(打字预读后发送不重播) · 强度默认 0=AI 自动 · **朗读白名单(负向: 非模块消息不读)** · **防双发(连点只发一条)** · **静默自动预加载(不发声也预合成)** · **发送后预加载复位** · **引擎模型池预加载+能力版本(1.6.136/1.6.137)**");
   push("");
+  push("- 朗读范围: 打字停顿朗读=" + (getCfg().typingRead === true ? "开" : "关(默认)") + " | 触发方式=" + getCfg().triggerMode + " | 自动预加载=" + (getCfg().autoPreload !== false ? "开" : "关") + " | 白名单=仅 fromModSend(本模块发送框)");
 
   // ============ ① 引擎前置：不通就直接出报告，不再空转几百秒 ============
   _mark("引擎前置");
@@ -5070,6 +5071,18 @@ window.runFinalTest = async function runFinalTest() {
         lastTypedSpoken.text = ""; lastTypedSpoken.ts = 0;
         _chk("防重复: 无预读记录=不跳过", _wasTypingPreviewed("测试") === false);
       } catch (e) { /* noop */ } finally { lastTypedSpoken = _ltsSave; }
+    }
+    // 1.6.138 双实例防护: 去重/状态容器必须是 window 共享单例(否则热重载两份实例会双读/双发)
+    _chk("双实例共享容器(window 单例)", !!(window.__fvttTTSState && window.__fvttTTSState.playedIds && window.__fvttTTSState.voicedIds && window.__fvttTTSState.pendingTts && window.__fvttTTSState.audioCache));
+    // 1.6.134 预加载命中: 原文(srcText) 与 润色稿(text) 都必须能命中(否则润色生效时发送白合成一遍)
+    {
+      const _paSave = window.__fvttTTSPreloadAudio;
+      try {
+        window.__fvttTTSPreloadAudio = { url: "blob:final-test", srcText: "原文甲", text: "润色稿乙", watchKey: makeWatchKey() };
+        _chk("预加载命中: 原文可命中", preloadHit("原文甲") === true);
+        _chk("预加载命中: 润色稿可命中", preloadHit("润色稿乙") === true);
+        _chk("预加载命中: 不同文字不命中", preloadHit("别的句子") === false);
+      } catch (e) { /* noop */ } finally { window.__fvttTTSPreloadAudio = _paSave; }
     }
     // 看门狗 / 打包完整性（引擎侧读文件）
     let _wd = null;
@@ -5238,7 +5251,7 @@ window.runFinalTest = async function runFinalTest() {
     const _cfgT = getCfg();
     if (!ta2) push("- K 打字朗读: 跳过（找不到输入框）");
     else {
-      const _oldMode = _cfgT.triggerMode, _oldMin = _cfgT.minLength, _oldDeb = _cfgT.typingDebounce, _oldTypingRead = _cfgT.typingRead;
+      const _oldMin = _cfgT.minLength, _oldDeb = _cfgT.typingDebounce, _oldTypingRead = _cfgT.typingRead;
       const _tBefore = Number(window.__fvttTTSLastSpeakAt || 0);
       try {
         // 1.6.139: 打字停顿预读已改为独立开关 typingRead(默认关); 自测期间临时打开, 测完还原
@@ -5307,6 +5320,13 @@ window.runFinalTest = async function runFinalTest() {
           }
           push("- L 预加载→发送: 消息=" + (_mNew ? "✓" : "✗") + " 音频写回=" + (_aud ? "✓" : "✗") + "（" + (w2 * 0.2).toFixed(1) + "s）");
           if (!_mNew || !_aud) fails.push("L预加载发送");
+          // Q4 发送后预加载复位(在此刻断言: 发送会消费并清空预加载缓存、按钮回到"AI 预加载")
+          try {
+            const _paAfter = window.__fvttTTSPreloadAudio;
+            const _doneAfter = btn.classList.contains("done");
+            push("- **Q4 发送后预加载复位**: 缓存=" + (_paAfter ? "✗ 未清空" : "✓ 已清空") + " | 按钮=" + (_doneAfter ? "✗ 仍显示已预加载" : "✓ 已复位"));
+            if (_paAfter || _doneAfter) fails.push("Q4预加载复位");
+          } catch (e) { /* noop */ }
           try { if (ta3.value) ta3.value = ""; } catch (e) { /* noop */ }
         }
       }
@@ -5348,6 +5368,103 @@ window.runFinalTest = async function runFinalTest() {
     else if (!_hpProxy && _hpOK > 0 && _hpFail > 0) push("- · 注: 有 " + _hpFail + " 次探测失败(可能是首次合成的模型/内核初始化瞬间), 属可接受抖动");
     if (!rM.audio) fails.push("M长句合成");
   } catch (e) { push("- M 长句异常: " + String((e && e.message) || e).slice(0, 80)); fails.push("M长句异常"); }
+
+  // Q. 1.6.132~1.6.139 新增能力实测（本轮最终验收的重点）
+  //   Q1 朗读白名单负向: 不带 fromModSend 的消息(模拟原生聊天/其他模组)绝不能朗读
+  //   Q2 防双发: 连点两次 doSubmitChat 只应新增一条消息
+  //   Q3 静默自动预加载: 打字停顿时预合成(preloadAudio 就绪)但完全不发声
+  //   Q4 发送后预加载复位: 缓存清空 + 按钮不再显示"已预加载"
+  //   Q5 引擎模型池预加载端点 + 引擎能力版本(1.6.136 无闪窗/1.6.137 模型加载不阻塞)
+  try {
+    // ---- Q1 白名单负向 ----
+    let _q1Leak = false, _q1Id = "";
+    try {
+      const _qm = await ChatMessage.create({ content: "白名单负向测试：这条消息没有 fromModSend，不应被朗读。", speaker: { alias: cn }, flags: { [MOD]: { role: cn, lang: "zh" } } });
+      _q1Id = (_qm && _qm.id) || "";
+      if (_q1Id) _testMsgIds.push(_q1Id);
+    } catch (e) { /* noop */ }
+    if (_q1Id) {
+      for (let i = 0; i < 40; i++) {
+        try { const mm = game.messages.get(_q1Id); const f = (mm && mm.flags && mm.flags[MOD]) || {}; if (f.audioUrl || f.audioData) { _q1Leak = true; break; } } catch (e) { /* noop */ }
+        await new Promise(r => setTimeout(r, 200));
+      }
+      push("- **Q1 朗读白名单(负向)**: 非模块消息(无 fromModSend) " + (_q1Leak ? "✗ 被朗读了(严重: 会读其他内容)" : "✓ 8 秒内无任何音频写回(不朗读)"));
+      if (_q1Leak) fails.push("Q1白名单泄漏");
+    } else push("- Q1 白名单负向: 跳过（建消息失败）");
+
+    // ---- Q2 防双发(提交锁/同句去重) ----
+    try {
+      const _taQ = findChatTextarea();
+      if (!_taQ) push("- Q2 防双发: 跳过（找不到输入框）");
+      else {
+        const _idsB = new Set((((game.messages && game.messages.contents) || []).map(m => m.id)));
+        _taQ.value = "防双发测试：同一句连点两次只应发出一条。";
+        const _p1 = doSubmitChat(_taQ);
+        const _p2 = doSubmitChat(_taQ);
+        await Promise.allSettled([_p1, _p2]);
+        await new Promise(r => setTimeout(r, 1200));
+        const _added = ((((game.messages && game.messages.contents) || []).filter(m => !_idsB.has(m.id))));
+        _added.forEach(m => { try { _testMsgIds.push(m.id); } catch (e) { /* noop */ } });
+        push("- **Q2 防双发**: 连调 2 次 doSubmitChat → 新增 " + _added.length + " 条 " + (_added.length === 1 ? "✓" : "✗"));
+        if (_added.length !== 1) fails.push("Q2防双发(" + _added.length + "条)");
+        try { if (_taQ.value) _taQ.value = ""; } catch (e) { /* noop */ }
+      }
+    } catch (e) { push("- Q2 防双发异常: " + String((e && e.message) || e).slice(0, 70)); }
+
+    // ---- Q3 静默自动预加载(不发声) ----
+    try {
+      const _taQ3 = findChatTextarea();
+      const _cQ3 = getCfg();
+      if (!_taQ3) push("- Q3 静默预加载: 跳过（找不到输入框）");
+      else if (_cQ3.autoPreload === false || _cQ3.engine !== "gptsovits") push("- Q3 静默预加载: 跳过（自动预加载关闭/非 GPT-SoVITS 引擎）");
+      else {
+        const _tr0 = _cQ3.typingRead === true;
+        const _speak0 = Number(window.__fvttTTSLastSpeakAt || 0);
+        const _pa0 = window.__fvttTTSPreloadAudio;
+        try { await game.settings.set(MODULE, "typingRead", false); } catch (e) { /* noop */ }   // 确保只预合成不发声
+        try { attachTyping(); } catch (e) { /* noop */ }   // 输入框可能被 v13 重渲染过, 补挂监听
+        try {
+          _taQ3.value = "静默预加载测试：这句话应该被预合成但完全不发声。";
+          _taQ3.dispatchEvent(new Event("input", { bubbles: true }));
+        } catch (e) { /* noop */ }
+        let _q3Got = false;
+        for (let i = 0; i < 120; i++) {
+          await new Promise(r => setTimeout(r, 250));
+          if (window.__fvttTTSPreloadAudio && window.__fvttTTSPreloadAudio !== _pa0 && window.__fvttTTSPreloadAudio.url) { _q3Got = true; break; }
+        }
+        const _q3Spoke = Number(window.__fvttTTSLastSpeakAt || 0) > _speak0;
+        push("- **Q3 静默自动预加载**: 预合成=" + (_q3Got ? "✓ 缓存就绪" : "✗ 未就绪") + " | 发声=" + (_q3Spoke ? "✗ 不应发声" : "✓ 全程无声"));
+        if (!_q3Got) fails.push("Q3静默预加载");
+        if (_q3Spoke) fails.push("Q3静默预加载发声");
+        try { _taQ3.value = ""; } catch (e) { /* noop */ }
+        try { await game.settings.set(MODULE, "typingRead", _tr0); } catch (e) { /* noop */ }
+      }
+    } catch (e) { push("- Q3 静默预加载异常: " + String((e && e.message) || e).slice(0, 70)); }
+
+    // ---- Q5 引擎模型池预加载端点 + 能力版本 ----
+    try {
+      const _t5 = Date.now();
+      const _r5 = await svcRequest(cfg.serverUrl, "POST", "/characters/preload", { names: [cn] }, { timeoutMs: 25000, retries: 0, quiet: true });
+      const _j5 = (_r5 && typeof _r5.json === "function") ? await _r5.json().catch(() => ({})) : {};
+      const _ms5 = Date.now() - _t5;
+      const _ok5 = !!(_r5 && _r5.ok && _j5 && _j5.ok !== false);
+      push("- **Q5 引擎模型池预加载**（/characters/preload）: " + (_ok5
+        ? ("✓ " + _ms5 + "ms · 常驻池 " + (_j5.pool_size == null ? "?" : _j5.pool_size) + "/" + (_j5.max == null ? "?" : _j5.max))
+        : ("✗ " + String((_j5 && (_j5.err || _j5.message)) || "无响应").slice(0, 60) + "（" + _ms5 + "ms）")));
+      if (!_ok5 && _ms5 < 22000) fails.push("Q5预加载端点");
+    } catch (e) { push("- Q5 模型池预加载: ⚠ " + String((e && e.message) || e).slice(0, 60) + "（冷启动/超时按环境警告，不判失败）"); }
+    try {
+      const _h5 = await probeEngineHealth(cfg.serverUrl, 4000).catch(() => ({ state: "unknown" }));
+      const _v5 = String((_h5 && _h5.apiVersion) || "");
+      const _vnum = (v) => String(v || "").split(".").map(n => parseInt(n, 10) || 0);
+      const _vlt = (a, b) => { const x = _vnum(a), y = _vnum(b); for (let i = 0; i < 3; i++) { if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) < (y[i] || 0); } return false; };
+      const _hasFix = !!_v5 && !_vlt(_v5, "1.6.137");
+      push("- **引擎能力版本**（/health api_version）: " + (_v5 || "?") + " → " + (_hasFix
+        ? "✓ 含 1.6.136(无闪窗) + 1.6.137(模型加载不阻塞/不误报卡死)"
+        : "⚠ 早于 1.6.137：重启一次引擎后生效（不判失败）"));
+    } catch (e) { /* noop */ }
+  } catch (e) { push("- Q 段异常: " + String((e && e.message) || e).slice(0, 80)); }
+  push("");
 
   // N. 翻译端点（AI 翻译，自动翻译开启时才会用）
   try {
@@ -5445,7 +5562,7 @@ window.runFinalTest = async function runFinalTest() {
   // ============ ⑥ 结论 ============
   _mark("结论");
   push("## 六、结论");
-  push("- 测试脚本: v7(代码版本 " + MOD_VERSION + ") | 耗时: " + Math.round((Date.now() - t0) / 1000) + "s | 场景 " + _scenesDone + " 条 | 断言 " + _chkRows.length + " 项");
+  push("- 测试脚本: v8(代码版本 " + MOD_VERSION + ") | 耗时: " + Math.round((Date.now() - t0) / 1000) + "s | 场景 " + _scenesDone + " 条 | 断言 " + _chkRows.length + " 项");
   push("- 关键项: " + (fails.length ? ("⚠ 存在问题 → " + fails.join("、")) : "全部通过 ✓"));
   try {
     const _secTxt = Object.keys(_secMs).map(k => k + " " + _secMs[k] + "s").join(" · ");

@@ -64,6 +64,46 @@
       "name": "语音运行者（引擎机器）地址 (Voice Runner URL)",
       "hint": "⚠ 世界级设置，GM 可改。跑 TTS 引擎的那台机器地址（默认留空=Foundry 主机本机 127.0.0.1:9881）。如果你用别的电脑开 FVTT、引擎在另一台机器，请填引擎机器的可达地址，如 http://192.168.1.5:9881 或 frp 公网 http://frp-act.com:9881。所有端（GM/玩家）的合成都经 Foundry 服务器转发到这台机器，改这里=把跑语音的权限转给那台机器。"
     },
+    "gmMute": {
+      "name": "GM 全局静音（世界级，仅 GM 可改）",
+      "hint": "开启后所有玩家语音静音（停播+禁播）；仅 GM 可切换，玩家端只读。"
+    },
+    "aiSharedModels": {
+      "name": "AI 模型分享·可用模型列表（由 GM 分发）",
+      "hint": "主持人一键分发的可用模型名（逗号分隔）；玩家端获取模型列表时优先使用，留空则各自向服务查询。"
+    },
+    "voiceAssignments": {
+      "name": "语音生成者分配（旧版，兼容保留）",
+      "hint": "旧版分配表（说话者→生成者账号）。现已由「语音生成者分配(voiceRunnerMap)」取代，一般无需填写；留空即可。"
+    },
+    "llmEnabled": {
+      "name": "启用 AI 语气判断 (LLM / Enable AI Tone)",
+      "hint": "可选功能：填写下方密钥并开启后，发送面板的「AI 语气」可用 AI 自动判断当前输入文本的语气并应用。不配置则模块照常手动选择语气。"
+    },
+    "llmBaseUrl": {
+      "name": "LLM API 地址 (LLM API Base URL)",
+      "hint": "OpenAI 兼容端点。例：OpenAI=https://api.openai.com/v1；DeepSeek=https://api.deepseek.com/v1；或其他兼容服务。"
+    },
+    "llmKey": {
+      "name": "LLM API 密钥 (LLM API Key)",
+      "hint": "你的模型服务密钥(仅本机模块使用)。"
+    },
+    "llmModel": {
+      "name": "LLM 模型 (LLM Model)",
+      "hint": "模型名，如 gpt-4o-mini / deepseek-chat。可先在语音设置面板「获取模型列表」后，这里自动变成服务可用模型的下拉。"
+    },
+    "llmPolish": {
+      "name": "AI 润色台词 (AI Polish Lines)",
+      "hint": "开(默认): 朗读时 AI 按角色人设+朗读提示词微调台词(加语气词/情绪表达, 不改原意)再朗读, 复刻成品软件的语气多样性；关: 朗读原文。"
+    },
+    "llmMergePolish": {
+      "name": "判断+润色合并调用 (Merge Judgement & Polish)",
+      "hint": "开: 一次 LLM 调用同时判断语气和润色台词, 延迟减半(推荐)；关: 分两次调用(判断一次、润色一次)。"
+    },
+    "llmModels": {
+      "name": "LLM 可用模型缓存 (Fetched LLM Models)",
+      "hint": "自动缓存：语音设置面板「获取模型列表」拉取到的可用模型（本项自动维护，无需手动填写）。"
+    },
     "voiceRunnerMap": {
       "name": "语音生成者分配（谁的语音由谁的电脑生成）",
       "hint": "⚠ 世界级设置，仅 GM 可改。不用填 IP——直接指定玩家：每行一条「谁说话 = 由哪位玩家的电脑生成」。\n例：\n玩家小明 = 玩家小明\n玩家小红 = 玩家小明\n（上例：小明的语音由小明自己的电脑生成，小红的语音也由小明电脑生成；留空行或未列出的用户 = 用默认引擎机。被指定的玩家需要：开着 TTS 服务（server/start-tts-server.bat）、与 FVTT 服务器网络互通（同一局域网通常即可，服务端自动取该玩家在线 IP）。改完无需重启，下一句立即生效。）"
@@ -233,34 +273,6 @@
     "sttServer": "当前浏览器无法使用麦克风录音",
     "sttBrowserDevice": "浏览器听写使用系统默认麦克风；要指定麦克风请把听写引擎改为“服务端”",
     "sttSend": "听写消息发送失败",
-    "llmEnabled": {
-      "name": "启用 AI 语气判断 (LLM / Enable AI Tone)",
-      "hint": "可选功能：填写下方密钥并开启后，发送面板的「AI 语气」可用 AI 自动判断当前输入文本的语气并应用。不配置则模块照常手动选择语气。"
-    },
-    "llmBaseUrl": {
-      "name": "LLM API 地址 (LLM API Base URL)",
-      "hint": "OpenAI 兼容端点。例：OpenAI=https://api.openai.com/v1；DeepSeek=https://api.deepseek.com/v1；或其他兼容服务。"
-    },
-    "llmKey": {
-      "name": "LLM API 密钥 (LLM API Key)",
-      "hint": "你的模型服务密钥(仅本机模块使用)。"
-    },
-    "llmModel": {
-      "name": "LLM 模型 (LLM Model)",
-      "hint": "模型名，如 gpt-4o-mini / deepseek-chat。可先在语音设置面板「获取模型列表」后，这里自动变成服务可用模型的下拉。"
-    },
-    "llmPolish": {
-      "name": "AI 润色台词 (AI Polish Lines)",
-      "hint": "开(默认): 朗读时 AI 按角色人设+朗读提示词微调台词(加语气词/情绪表达, 不改原意)再朗读, 复刻成品软件的语气多样性；关: 朗读原文。"
-    },
-    "llmMergePolish": {
-      "name": "判断+润色合并调用 (Merge Judgement & Polish)",
-      "hint": "开: 一次 LLM 调用同时判断语气和润色台词, 延迟减半(推荐)；关: 分两次调用(判断一次、润色一次)。"
-    },
-    "llmModels": {
-      "name": "LLM 可用模型缓存 (Fetched LLM Models)",
-      "hint": "自动缓存：语音设置面板「获取模型列表」拉取到的可用模型（本项自动维护，无需手动填写）。"
-    },
     "gmProxy": "本机未直连 TTS，已转交 GM/服务器合成，稍后自动播放"
   },
   "status": {
