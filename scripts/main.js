@@ -19,7 +19,7 @@ window.fetchAndRefreshModels = fetchAndRefreshModels;
 const MODULE = "gpt-sovits-tts";
 // 1.6.103 代码版本号: Foundry 的 game.modules.get(id).version 读的是"载入世界时的清单缓存",
 //   改了 manifest 不刷新会一直显示旧版本(用户多次看到 1.6.96 而实际代码已是新版) → 报告里同时打印两者, 便于确认真的在跑新代码
-const MOD_VERSION = "1.6.142";
+const MOD_VERSION = "1.6.143";
 const CHAT_STYLES = (typeof CONST !== "undefined" && (CONST.CHAT_MESSAGE_STYLES || CONST.CHAT_MESSAGE_TYPES)) || {};
 
 /* ============ 设置定义 ============ */
@@ -1626,6 +1626,7 @@ function buildUI() {
     bar.className = "fvtt-tts-floatbar";
     bar.title = _L("ui.floatTip", "拖动可移动位置");
     bar.innerHTML = `
+      <span class="fvtt-tts-status" title="${_L("status.checking", "检查 TTS 服务…")}"></span>
       <select class="fvtt-tts-lang" title="${_L("ui.langTip", "朗读输出语种（也是自动翻译目标语言）")}"></select>
       <select class="fvtt-tts-char"></select>
       <select class="fvtt-tts-emotion"></select>
@@ -1645,7 +1646,11 @@ function buildUI() {
       try { if (game.user && game.user.isGM) { gmBtn.style.display = ""; } } catch (e) { /* noop */ }
       gmBtn.addEventListener("click", (ev) => { ev.stopPropagation(); try { if (window.__fvttTTSTests) window.__fvttTTSTests.runGmSuite(); } catch (e) { console.error(e); } });
     }
+    // 1.6.143 状态灯(1.6.140 体检发现: 悬浮条重构后状态灯丢失 → 设置项 showStatus 成了死开关)
+    const stDot = bar.querySelector(".fvtt-tts-status");
+    if (stDot) stDot.addEventListener("click", (ev) => { ev.stopPropagation(); try { checkStatus(true); } catch (e) { /* noop */ } });
   }
+  try { updateStatusUI(); } catch (e) { /* noop */ }
   // 语种选择(朗读输出语言 = 自动翻译目标): 中/日/英/韩/粤 + 自动
   const langSel = bar.querySelector(".fvtt-tts-lang");
   if (langSel) {
@@ -2719,9 +2724,12 @@ async function refreshQuickUI() {
 }
 
 function updateStatusUI() {
-  const st = document.querySelector(".fvtt-tts-bar .fvtt-tts-status");
+  // 1.6.143 修复: 悬浮条重构后状态灯元素丢失(旧选择器 .fvtt-tts-bar 已不存在) → 状态灯从未显示, showStatus 设置无效
+  const st = document.querySelector("#fvtt-tts-floatbar .fvtt-tts-status") || document.querySelector(".fvtt-tts-bar .fvtt-tts-status");
   if (!st) return;
   const cfg = getCfg();
+  // showStatus=关 → 隐藏状态灯(只隐藏小灯, 不隐藏工具条)
+  try { st.style.display = cfg.showStatus === false ? "none" : ""; } catch (e) { /* noop */ }
   st.classList.toggle("ok", cfg.engine === "gptsovits" && statusInfo.ok === true);
   st.classList.toggle("fail", cfg.engine === "gptsovits" && statusInfo.ok === false);
   st.classList.toggle("unknown", cfg.engine !== "gptsovits" || statusInfo.ok === null);
@@ -4520,6 +4528,7 @@ Hooks.on("updateSetting", (setting, data) => {
     if (setting && setting.key) {
       if (setting.key === `${MODULE}.hudTheme`) applyHudTheme();
       if (setting.key === `${MODULE}.portraitSize`) applyPortraitSize();
+      if (setting.key === `${MODULE}.showStatus`) try { updateStatusUI(); } catch (e) { /* noop */ }
       if (setting.key === `${MODULE}.gmMute`) {
         // GM 全局静音: 开启瞬间停掉所有正在播放/排队的语音(GM 与所有 pl 客户端同时响应)
         try { if (setting.value) stopSpeaking(); } catch (e) { /* noop */ }
@@ -5079,6 +5088,8 @@ window.runFinalTest = async function runFinalTest() {
     }
     // 1.6.138 双实例防护: 去重/状态容器必须是 window 共享单例(否则热重载两份实例会双读/双发)
     _chk("双实例共享容器(window 单例)", !!(window.__fvttTTSState && window.__fvttTTSState.playedIds && window.__fvttTTSState.voicedIds && window.__fvttTTSState.pendingTts && window.__fvttTTSState.audioCache));
+    // 1.6.143 状态灯必须真实存在(1.6.140 体检发现悬浮条重构后状态灯丢失; 以后这里会直接抓到)
+    _chk("悬浮条状态灯存在", !!document.querySelector("#fvtt-tts-floatbar .fvtt-tts-status"));
     // 1.6.134 预加载命中: 原文(srcText) 与 润色稿(text) 都必须能命中(否则润色生效时发送白合成一遍)
     {
       const _paSave = window.__fvttTTSPreloadAudio;

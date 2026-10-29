@@ -736,6 +736,29 @@ body.fvtt-tts-pink .fvtt-tts-sendpop-openvm {
 /* GM 全局静音按钮(开启态红色) */
 .fvtt-tts-floatbar .fvtt-tts-mute.fvtt-tts-mute-on { color: #ff6b6b; }
 
+/* 1.6.143 悬浮条状态灯(补回): 旧 .fvtt-tts-bar 已废弃, 状态灯跟着丢掉 → 这里给悬浮条补同款配色 */
+.fvtt-tts-floatbar .fvtt-tts-status {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  flex: 0 0 auto;
+  border: 1px solid var(--color-border-dark, #444);
+  border-radius: 4px;
+  background: var(--color-bg-btn-minor-inactive, rgba(0, 0, 0, 0.4));
+  color: #fff;
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+}
+.fvtt-tts-floatbar .fvtt-tts-status:hover { border-color: var(--color-border-highlight, #999); }
+.fvtt-tts-floatbar .fvtt-tts-status.ok { color: #7ed07e; border-color: #3d8b3d; }
+.fvtt-tts-floatbar .fvtt-tts-status.fail { color: #e77; border-color: #a33; animation: fvtt-tts-blink 1.6s infinite; }
+.fvtt-tts-floatbar .fvtt-tts-status.unknown { color: #ccb; }
+
 /* 立绘库(1.6.29): 纯立绘蓝色单选槽 — 与语气槽解耦, 语音跟语气/情绪, 立绘跟这里 */
 .fvtt-tts-vm-sprites {
   display: flex;
