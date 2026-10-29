@@ -19,7 +19,7 @@ window.fetchAndRefreshModels = fetchAndRefreshModels;
 const MODULE = "gpt-sovits-tts";
 // 1.6.103 代码版本号: Foundry 的 game.modules.get(id).version 读的是"载入世界时的清单缓存",
 //   改了 manifest 不刷新会一直显示旧版本(用户多次看到 1.6.96 而实际代码已是新版) → 报告里同时打印两者, 便于确认真的在跑新代码
-const MOD_VERSION = "1.6.146";
+const MOD_VERSION = "1.6.147";
 const CHAT_STYLES = (typeof CONST !== "undefined" && (CONST.CHAT_MESSAGE_STYLES || CONST.CHAT_MESSAGE_TYPES)) || {};
 
 /* ============ 设置定义 ============ */
@@ -5215,8 +5215,9 @@ window.runFinalTest = async function runFinalTest() {
   try {
     let el = null, im = null, nw = 0;
     for (let i = 0; i < 30; i++) {
-      try { const mm = game.messages.get(_lastMsgId); el = (mm && mm.element) || null; } catch (e) { el = null; }
-      if (!el && _lastMsgId) el = document.querySelector('[data-message-id="' + _lastMsgId + '"]');
+      // 1.6.147 message.element 在部分版本是 jQuery 对象 → 统一解包; 再不行用 data-message-id 直接查原生节点
+      try { const mm = game.messages.get(_lastMsgId); el = _asChatEl(mm && mm.element); } catch (e) { el = null; }
+      if (!el && _lastMsgId) el = _asChatEl(document.querySelector('[data-message-id="' + _lastMsgId + '"]'));
       im = el ? el.querySelector(".fvtt-tts-emotion-avatar") : null;
       nw = im ? (im.naturalWidth || 0) : 0;
       if (im && nw > 0) break;
@@ -6294,6 +6295,18 @@ function _modulePath(au) {
   } catch (e) { return ""; }
 }
 
+// 1.6.147 元素解包: Foundry 不同版本/调用点可能传 原生元素 / jQuery 对象 / 带 [0] 的包装 →
+//   以前只认 typeof querySelector === "function", 于是 jQuery 会走到"无消息元素"分支 → 整条消息不插立绘。
+function _asChatEl(v) {
+  try {
+    if (!v) return null;
+    if (typeof v.querySelector === "function" && typeof v.querySelectorAll === "function") return v;
+    if (v[0] && typeof v[0].querySelector === "function") return v[0];
+    if (v.jquery && v[0]) return v[0];
+  } catch (e) { /* noop */ }
+  return null;
+}
+
 // 情绪→立绘 / 角色立绘: 消息带角色时, 在内容前显示该角色的立绘(语气槽立绘优先); 无角色不显示
 function applyEmotionAvatar(message, html) {
   // 1.6.101 诊断: 记录"为什么没插立绘"(F12 执行 await fvttTTSDiag() 可看到; 全流程 catch 静默是排查黑洞)
@@ -6311,7 +6324,8 @@ function applyEmotionAvatar(message, html) {
     // 立绘展示方式: 仅指示物/都不显示 → 消息内不插图
     if (cfgM.portraitMode !== "message" && cfgM.portraitMode !== "both") return _why("展示方式=" + cfgM.portraitMode + "(需 message/both)");
     const fl = message && message.flags ? (message.flags[MODULE] || null) : null;
-    const el = html && (typeof html.querySelector === "function") ? html : null;
+    let el = _asChatEl(html);
+    if (!el && message) el = _asChatEl(message.element);
     if (!el) return _why("无消息元素");
     // 立绘跟随朗读(1.6.6): 只有"实际合成/播放了语音"的消息才插立绘 — 纯文本/旁白/动作消息不插。
     // 判定: 消息 flags 已带音频(写回完成) 或 本端已播过该消息(playedIds / 已播 src)。
