@@ -4,7 +4,7 @@
 内置浏览器系统语音、麦克风听写（语音转文字）。
 
 > 致谢：借鉴了不二咲爱笑大佬制作的 **Shinsekai**。制作人：跑团恶魔。交流群：775375241。
-> 当前版本：**1.6.118**（`module.json` 与代码内 `MOD_VERSION` 同步）
+> 当前版本：**1.6.148**（`module.json` 与代码内 `MOD_VERSION` 同步）；最终测试 v9「55 项断言」全绿。
 
 ---
 
@@ -39,6 +39,12 @@
 ```
 或用 Foundry「安装模块 → 清单 URL」填：
 `https://raw.githubusercontent.com/fateafate/gpt-sovits-tts/main/module.json`
+
+也可以直接从 **Releases** 下载最新 zip：
+`https://github.com/fateafate/gpt-sovits-tts/releases/latest/download/gpt-sovits-tts.zip`
+
+> 发布版默认隐藏「🔬 全面测试 / 🧪 GM 综合测试」两个重负载开发者按钮（避免玩家误点压引擎）；
+> 需要时在 模块设置 →「显示开发者测试按钮」打开。最终测试在 语音设置 底部。
 
 ### 2) 引擎（约 16 GB，需单独部署）
 引擎（Python + 模型 + 角色包）**不进仓库**，需单独获取/打包：

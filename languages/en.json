@@ -211,6 +211,10 @@
       "name": "Status Light",
       "hint": "Server status indicator in the chat bar (green = online, red = offline; click to test)."
     },
+    "devTools": {
+      "name": "Show developer test buttons (off by default)",
+      "hint": "Shows the '28-scenario full test' and 'GM suite' buttons on the floatbar. These are heavy stress tests intended for development; hidden by default so users do not accidentally load the engine. The release acceptance test remains under Voice Settings."
+    },
     "commands": {
       "name": "Slash Commands",
       "hint": "/ttssay text, /ttsstop, /ttstest, /ttsrec, /ttshelp."

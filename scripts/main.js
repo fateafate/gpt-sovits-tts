@@ -19,7 +19,7 @@ window.fetchAndRefreshModels = fetchAndRefreshModels;
 const MODULE = "gpt-sovits-tts";
 // 1.6.103 代码版本号: Foundry 的 game.modules.get(id).version 读的是"载入世界时的清单缓存",
 //   改了 manifest 不刷新会一直显示旧版本(用户多次看到 1.6.96 而实际代码已是新版) → 报告里同时打印两者, 便于确认真的在跑新代码
-const MOD_VERSION = "1.6.147";
+const MOD_VERSION = "1.6.148";
 const CHAT_STYLES = (typeof CONST !== "undefined" && (CONST.CHAT_MESSAGE_STYLES || CONST.CHAT_MESSAGE_TYPES)) || {};
 
 /* ============ 设置定义 ============ */
@@ -67,6 +67,8 @@ const SETTINGS = [
   ["typingDebounce",{ type: Number,  scope: "client", default: 1200,             name: "settings.typingDebounce.name", hint: "settings.typingDebounce.hint" }],
   ["showReplay",    { type: Boolean, scope: "client", default: true,            name: "settings.showReplay.name",     hint: "settings.showReplay.hint" }],
   ["showStatus",    { type: Boolean, scope: "client", default: true,            name: "settings.showStatus.name",     hint: "settings.showStatus.hint" }],
+  // 1.6.148 发布版: 开发者测试按钮默认隐藏(玩家误点 28 场景压力自测会跑很久/压引擎); 需要时到设置打开
+  ["devTools",      { type: Boolean, scope: "client", default: false,           name: "settings.devTools.name",       hint: "settings.devTools.hint" }],
   ["commands",      { type: Boolean, scope: "client", default: true,            name: "settings.commands.name",       hint: "settings.commands.hint" }],
   ["sttEnabled",    { type: Boolean, scope: "client", default: true,            name: "settings.sttEnabled.name",     hint: "settings.sttEnabled.hint" }],
   ["sttEngine",     { type: String,  scope: "client", default: "browser",        choices: { browser: "settings.sttEngine.browser", server: "settings.sttEngine.server" }, name: "settings.sttEngine.name", hint: "settings.sttEngine.hint" }],
@@ -1646,9 +1648,10 @@ function buildUI() {
       try { if (game.user && game.user.isGM) { gmBtn.style.display = ""; } } catch (e) { /* noop */ }
       gmBtn.addEventListener("click", (ev) => { ev.stopPropagation(); try { if (window.__fvttTTSTests) window.__fvttTTSTests.runGmSuite(); } catch (e) { console.error(e); } });
     }
-    // 1.6.143 状态灯(1.6.140 体检发现: 悬浮条重构后状态灯丢失 → 设置项 showStatus 成了死开关)
+    // 1.6.148 开发者测试按钮默认隐藏(devTools=关); 需要时在设置里打开
     const stDot = bar.querySelector(".fvtt-tts-status");
     if (stDot) stDot.addEventListener("click", (ev) => { ev.stopPropagation(); try { checkStatus(true); } catch (e) { /* noop */ } });
+    try { applyDevButtons(); } catch (e) { /* noop */ }
   }
   try { updateStatusUI(); } catch (e) { /* noop */ }
   // 语种选择(朗读输出语言 = 自动翻译目标): 中/日/英/韩/粤 + 自动
@@ -2737,8 +2740,21 @@ function updateStatusUI() {
   st.innerHTML = cfg.engine === "gptsovits" ? '<i class="fa-solid fa-volume-high"></i>' : '<i class="fa-solid fa-language"></i>';
 }
 
-function updateMicUI() {
-  const mic = document.querySelector("#fvtt-tts-floatbar .fvtt-tts-mic");
+/** 1.6.148 开发者测试按钮显隐: devTools=关(默认) → 悬浮条的 🔬全面测试 / 🧪GM综合测试 隐藏。
+ *  目的: 玩家不会误点 28 场景压力自测(会长时间压引擎); 作者需要时到设置打开, 控制台入口始终可用。 */
+function applyDevButtons() {
+  try {
+    const on = getCfg().devTools === true;
+    const bar = document.getElementById("fvtt-tts-floatbar");
+    if (!bar) return;
+    const st = bar.querySelector(".fvtt-tts-selftest");
+    if (st) st.style.display = on ? "" : "none";
+    const gm = bar.querySelector(".fvtt-tts-gmtest");
+    if (gm) gm.style.display = (on && game.user && game.user.isGM) ? "" : "none";
+  } catch (e) { /* noop */ }
+}
+
+function updateMicUI() {  const mic = document.querySelector("#fvtt-tts-floatbar .fvtt-tts-mic");
   if (!mic) return;
   const active = !!(window.__fvttTTSDictation && window.__fvttTTSDictation.active);
   mic.classList.toggle("active", active);
@@ -4529,6 +4545,7 @@ Hooks.on("updateSetting", (setting, data) => {
       if (setting.key === `${MODULE}.hudTheme`) applyHudTheme();
       if (setting.key === `${MODULE}.portraitSize`) applyPortraitSize();
       if (setting.key === `${MODULE}.showStatus`) try { updateStatusUI(); } catch (e) { /* noop */ }
+      if (setting.key === `${MODULE}.devTools`) try { applyDevButtons(); } catch (e) { /* noop */ }
       if (setting.key === `${MODULE}.gmMute`) {
         // GM 全局静音: 开启瞬间停掉所有正在播放/排队的语音(GM 与所有 pl 客户端同时响应)
         try { if (setting.value) stopSpeaking(); } catch (e) { /* noop */ }
@@ -5080,6 +5097,10 @@ window.runFinalTest = async function runFinalTest() {
     if (_stDot) _chk("状态灯可见性与 showStatus 一致", (cfg.showStatus !== false) === (_stDot.style.display !== "none"));
     let _pop = null; try { _pop = buildSendPop(); } catch (e) { /* noop */ }
     _chk("发送面板控件齐全", !!(_pop && _pop.querySelector(".fvtt-tts-sendpop-preload") && _pop.querySelector(".fvtt-tts-sendpop-direct") && _pop.querySelector(".fvtt-tts-sendpop-fire") && _pop.querySelector(".fvtt-tts-sendpop-close")));
+    // 1.6.148 发布版默认隐藏开发者测试按钮(devTools=关)
+    const _devBtn = document.querySelector("#fvtt-tts-floatbar .fvtt-tts-selftest");
+    if (getCfg().devTools === true) _chk("开发者按钮(devTools=开)可见", !!_devBtn);
+    else _chk("开发者测试按钮默认隐藏", !_devBtn || _devBtn.style.display === "none");
     // 56 项设置全部可读且类型正确
     let _setBad = "";
     try {
