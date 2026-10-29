@@ -70,11 +70,15 @@
     },
     "triggerMode": {
       "name": "Trigger Mode",
-      "hint": "send = speak on send; typing = speak after a pause while typing (local preview, no send needed); both = both (speaks once more on send, for everyone else in the room); manual = only commands/macros/replay button.",
+      "hint": "send = speak on send; manual = only commands/macros/replay button. typing/both are legacy options — pause-while-typing speech is now controlled by the separate 'Speak while typing' switch below (off by default).",
       "send": "On send",
-      "typing": "While typing",
-      "both": "Send + typing",
+      "typing": "While typing (legacy)",
+      "both": "Send + typing (legacy)",
       "manual": "Manual only"
+    },
+    "typingRead": {
+      "name": "Speak While Typing (off by default)",
+      "hint": "Off: only text sent through this module's send box (AI direct / preloaded send / send now) and /ttssay is spoken; native chat Enter, other modules, system and dice messages are never read (recommended). On: after a pause in the chat input (~1s) it previews your unsent text locally."
     },
     "speakSelf": {
       "name": "Speak My Messages",

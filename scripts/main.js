@@ -19,7 +19,7 @@ window.fetchAndRefreshModels = fetchAndRefreshModels;
 const MODULE = "gpt-sovits-tts";
 // 1.6.103 代码版本号: Foundry 的 game.modules.get(id).version 读的是"载入世界时的清单缓存",
 //   改了 manifest 不刷新会一直显示旧版本(用户多次看到 1.6.96 而实际代码已是新版) → 报告里同时打印两者, 便于确认真的在跑新代码
-const MOD_VERSION = "1.6.138";
+const MOD_VERSION = "1.6.139";
 const CHAT_STYLES = (typeof CONST !== "undefined" && (CONST.CHAT_MESSAGE_STYLES || CONST.CHAT_MESSAGE_TYPES)) || {};
 
 /* ============ 设置定义 ============ */
@@ -42,6 +42,8 @@ const SETTINGS = [
   ["voiceServerUrl",{ type: String,  scope: "world",  default: "",                name: "settings.voiceServerUrl.name", hint: "settings.voiceServerUrl.hint" }],
   ["voiceRunnerMap",{ type: String,  scope: "world",  default: "",  restricted: true, name: "settings.voiceRunnerMap.name", hint: "settings.voiceRunnerMap.hint" }],
   ["triggerMode",   { type: String,  scope: "client", default: "both",           choices: { send: "settings.triggerMode.send", typing: "settings.triggerMode.typing", both: "settings.triggerMode.both", manual: "settings.triggerMode.manual" }, name: "settings.triggerMode.name", hint: "settings.triggerMode.hint" }],
+  // 1.6.139 用户要求: 只让"本模块发送框发出的内容"朗读 —— 打字停顿预读改为独立开关, 默认关
+  ["typingRead",    { type: Boolean, scope: "client", default: false,            name: "settings.typingRead.name", hint: "settings.typingRead.hint" }],
   ["speakSelf",     { type: Boolean, scope: "client", default: true,            name: "settings.speakSelf.name",      hint: "settings.speakSelf.hint" }],
   ["speakOthers",   { type: Boolean, scope: "client", default: true,            name: "settings.speakOthers.name",    hint: "settings.speakOthers.hint" }],
   ["voiceFilter",   { type: String,  scope: "client", default: "all",            choices: { all: "settings.voiceFilter.all", gm: "settings.voiceFilter.gm", players: "settings.voiceFilter.players" }, name: "settings.voiceFilter.name", hint: "settings.voiceFilter.hint" }],
@@ -2853,18 +2855,19 @@ async function silentPreload(rawText) {
 
 function attachTyping() {
   const cfg = getCfg();
-  // 1.6.129 修: 原来这里读 cfg.typingVoice(该设定从未注册, 读出来恒为 undefined) → 打字停顿朗读整条链路永不触发。
-  //   现在只用 triggerMode 判定(typing/both = 打字即读), commands 只用于命令解析, 与本功能无关。
-  const _typingOn0 = (cfg.triggerMode === "typing" || cfg.triggerMode === "both");
-  if (!_typingOn0 && !cfg.commands) return;
+  // 1.6.139 用户要求: 只有"本模块指定方式"才朗读 —— 打字停顿预读独立开关 typingRead(默认关),
+  //   不再由 triggerMode 决定(triggerMode 只保留 send/manual 对"他人消息自动朗读"的语义)。
+  const _typingOn0 = (cfg.typingRead === true);
+  const _autoOn0 = (cfg.autoPreload !== false && cfg.engine === "gptsovits");   // 静默预合成(不发声)仍可用
+  if (!_typingOn0 && !_autoOn0 && !cfg.commands) return;
   // 1.6.129: 输入框兜底用 findChatTextarea()(v13 分离窗口/不同版本 DOM 结构差异), 不再只认 #chat-message
   const ta = document.getElementById("chat-message") || findChatTextarea();
   if (!ta || ta.dataset.fvttTtsAttached) return;
   ta.dataset.fvttTtsAttached = "1";
   ta.addEventListener("input", () => {
     const c = getCfg();
-    const _typingOn = (c.triggerMode === "typing" || c.triggerMode === "both");
-    // 1.6.134 自动预加载: 即使不开"打字即读"(send/manual), 停顿时也静默预合成 → 发送零等待
+    const _typingOn = (c.typingRead === true);
+    // 1.6.134 自动预加载: 即使不开"打字即读", 停顿时也静默预合成 → 发送零等待(只合成不发声)
     const _autoOn = (c.autoPreload !== false && c.engine === "gptsovits");
     if (!_typingOn && !_autoOn) return;
     clearTimeout(window.__fvttTTSTypingTimer);
@@ -5235,11 +5238,11 @@ window.runFinalTest = async function runFinalTest() {
     const _cfgT = getCfg();
     if (!ta2) push("- K 打字朗读: 跳过（找不到输入框）");
     else {
-      const _oldMode = _cfgT.triggerMode, _oldMin = _cfgT.minLength, _oldDeb = _cfgT.typingDebounce;
+      const _oldMode = _cfgT.triggerMode, _oldMin = _cfgT.minLength, _oldDeb = _cfgT.typingDebounce, _oldTypingRead = _cfgT.typingRead;
       const _tBefore = Number(window.__fvttTTSLastSpeakAt || 0);
       try {
-        // 1.6.129: typingVoice 这个设定从未注册(读出来恒 undefined), 不再设置它; 打字朗读只由 triggerMode 控制
-        await game.settings.set(MODULE, "triggerMode", "typing");
+        // 1.6.139: 打字停顿预读已改为独立开关 typingRead(默认关); 自测期间临时打开, 测完还原
+        await game.settings.set(MODULE, "typingRead", true);
         await game.settings.set(MODULE, "minLength", 1);
       } catch (e) { /* noop */ }
       try { attachTyping(); } catch (e) { /* noop */ }
@@ -5257,7 +5260,7 @@ window.runFinalTest = async function runFinalTest() {
       if (!_okK) fails.push("K打字朗读");
       try { ta2.value = ""; } catch (e) { /* noop */ }
       try {
-        await game.settings.set(MODULE, "triggerMode", _oldMode || "both");
+        await game.settings.set(MODULE, "typingRead", _oldTypingRead === true);
         await game.settings.set(MODULE, "minLength", Number(_oldMin) || 1);
         if (Number.isFinite(Number(_oldDeb))) await game.settings.set(MODULE, "typingDebounce", Number(_oldDeb));
       } catch (e) { /* noop */ }
