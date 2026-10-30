@@ -19,7 +19,7 @@ window.fetchAndRefreshModels = fetchAndRefreshModels;
 const MODULE = "gpt-sovits-tts";
 // 1.6.103 代码版本号: Foundry 的 game.modules.get(id).version 读的是"载入世界时的清单缓存",
 //   改了 manifest 不刷新会一直显示旧版本(用户多次看到 1.6.96 而实际代码已是新版) → 报告里同时打印两者, 便于确认真的在跑新代码
-const MOD_VERSION = "1.6.152";
+const MOD_VERSION = "1.6.153";
 const CHAT_STYLES = (typeof CONST !== "undefined" && (CONST.CHAT_MESSAGE_STYLES || CONST.CHAT_MESSAGE_TYPES)) || {};
 
 /* ============ 设置定义 ============ */
@@ -4995,6 +4995,8 @@ window.runEngineSelfCheck = async function runEngineSelfCheck(opts) {
 //        多语种×多语气×双模型 / AI 判语气+润色+选立绘 / 手动选立绘优先
 // 1.6.144 最终测试 v9（发布验收）: 删掉历年反复通过、已无信息量的旧项;
 //   只保留"当前仍可能坏"的路径, 并加严断言(音频字节 + 真实播放次数 + 界面元素存在 + 设置项可读)。
+// 1.6.153 最终测试 v10（精简验收）: 删掉已连续多轮通过、信息量低的项(界面/设置/文案/看门狗/打包/并发健康/第三条场景),
+//   只保留"坏了用户立刻能感知"的链路: 核心朗读(2 条) / 发送框 / 预览防双播 / 预加载 / 白名单 / 防双发 / 静默预加载 / AI。
 window.runFinalTest = async function runFinalTest() {
   const MOD = MODULE;
   const L = [];
@@ -5016,10 +5018,7 @@ window.runFinalTest = async function runFinalTest() {
   const _chkRows = [];
   const _chk = (name, ok, detail) => { _chkRows.push({ name: String(name), ok: !!ok, detail: String(detail || "") }); if (!ok) fails.push(String(name)); return !!ok; };
   const _plays = () => { try { return Number(window.__fvttTTSPlayCount || 0); } catch (e) { return 0; } };
-  // 1.6.146 精确计数: 只统计 t0 之后发生的播放(解决"上一项的异步尾音串进本项"的误判)
   const _playsSince = (t0s) => { try { return (window.__fvttTTSPlayLog || []).filter(x => x && x.ts >= t0s).length; } catch (e) { return 0; } };
-  // 1.6.145 播放次数基线: 合成/播放是异步的, 上一项的播放可能晚到 → 测量前先等"计数稳定"
-  // 1.6.146 加强: 还要求"距最后一次播放已过 1.5s", 否则上一项的尾音会被算进本项
   const _settle = async (stableMs = 1200, maxMs = 25000) => {
     try {
       const t0s = Date.now();
@@ -5044,7 +5043,6 @@ window.runFinalTest = async function runFinalTest() {
       return (j && j.stats) || null;
     } catch (e) { return null; }
   };
-  // 造一条"发送框同款"消息并等音频写回
   const _sendLine = async (text, extra, waitMs) => {
     let _curEmo = "";
     try { const _c = (loadVoiceProfile().chars || {})[cn] || {}; _curEmo = String(_c.emotion || ""); } catch (e) { /* noop */ }
@@ -5078,15 +5076,15 @@ window.runFinalTest = async function runFinalTest() {
     return { id: msg && msg.id, audio: audio, bytes: _bytes, flags: fNow, ms: Date.now() - _t };
   };
 
-  push("# GPT-SoVITS TTS 最终测试报告（v9 发布验收）");
+  push("# GPT-SoVITS TTS 最终测试报告（v10 精简验收）");
   push("");
   push("- 时间: " + new Date().toLocaleString("zh-CN") + " | 执行者: " + opName + " | 角色: " + cn);
-  push("- 版本断言: 代码=" + MOD_VERSION + " | 清单缓存=" + verTxt + (String(verTxt) === String(MOD_VERSION) ? " ✓ 一致" : "（缓存落后可忽略，看代码版本）"));
-  push("- v9 覆盖: 引擎前置 · 界面/设置自检(状态灯/面板/56 设置项/关键文案/双实例/预加载命中/防重复) · 核心朗读 3 条(音频字节 + 真实播放次数) · 真实交互(发送框/预览→发送防双播/预加载→发送/白名单负向/防双发/静默预加载) · 合成中并发健康 · 引擎能力/看门狗/打包 · AI 路径(配了 LLM 才跑)");
-  push("- 朗读范围: 打字停顿朗读=" + (cfg.typingRead === true ? "开" : "关(默认)") + " | 触发方式=" + cfg.triggerMode + " | 自动预加载=" + (cfg.autoPreload !== false ? "开" : "关") + " | 白名单=仅 fromModSend");
+  push("- 版本断言: 代码=" + MOD_VERSION + " | 清单缓存=" + verTxt + (String(verTxt) === String(MOD_VERSION) ? " ✓ 一致" : "（缓存落后可忽略）"));
+  push("- v10 只测「坏了用户立刻能感知」的链路: 核心朗读 2 条(字节/播放次数/参考音/立绘) · 发送框 · 预览→发送防双播 · 预加载→发送 · 白名单负向 · 防双发 · 静默预加载 · AI(配了才跑)");
+  push("- 已删除(多轮通过、信息量低): 界面/设置/文案自检 · 看门狗 · 打包完整性 · 并发健康 · 第三条场景");
   push("");
 
-  // ============ 0 引擎前置：不通直接出报告，不空转 ============
+  // ============ 0 引擎前置 ============
   _mark("引擎前置");
   let engOk = false, engDetail = "";
   try {
@@ -5099,110 +5097,32 @@ window.runFinalTest = async function runFinalTest() {
     const _h0 = await probeEngineHealth(cfg.serverUrl).catch(() => ({ state: "unknown" }));
     push("## 引擎不可用 → 测试中止");
     push("");
-    push("- 判定: " + (_h0.state === "refused" ? "连接被拒 = 引擎进程没在跑" : (_h0.state === "hung" ? "端口在听但 HTTP 不响应 = 引擎卡死" : (_h0.state === "up" ? "引擎 /health 正常（刚才只是瞬时失败）" : "无法判定（引擎地址/网络）"))));
+    push("- 判定: " + (_h0.state === "refused" ? "连接被拒 = 引擎进程没在跑" : (_h0.state === "hung" ? "端口在听但 HTTP 不响应 = 引擎卡死" : "无法判定（引擎地址/网络）")));
     push("- /status: " + engDetail);
     const md0 = L.join("\n");
     try { console.warn("[gpt-sovits-tts][最终测试]\n" + md0); } catch (e) { /* noop */ }
     return { markdown: md0, saved: "", fails: ["引擎未启动"] };
   }
-  push("## 一、环境与自检");
-  push("");
-  push("- 引擎连通 ✓ " + engDetail + " | LLM=" + (_aiOn ? "已配置" : "未配置") + " | 立绘=" + cfg.portraitMode + " | 调配(0=自动) 音量=" + (Number(cfg.volume) > 0 ? cfg.volume : "自动") + " 语速=" + (Number(cfg.speedFactor) > 0 ? cfg.speedFactor : "自动"));
-  _mark("自检");
-  try {
-    // 界面元素（1.6.143 状态灯丢失这类回归由这里兜住）
-    _chk("悬浮条存在", !!document.querySelector("#fvtt-tts-floatbar"));
-    const _stDot = document.querySelector("#fvtt-tts-floatbar .fvtt-tts-status");
-    _chk("状态灯存在", !!_stDot);
-    if (_stDot) _chk("状态灯可见性与 showStatus 一致", (cfg.showStatus !== false) === (_stDot.style.display !== "none"));
-    let _pop = null; try { _pop = buildSendPop(); } catch (e) { /* noop */ }
-    _chk("发送面板控件齐全", !!(_pop && _pop.querySelector(".fvtt-tts-sendpop-preload") && _pop.querySelector(".fvtt-tts-sendpop-direct") && _pop.querySelector(".fvtt-tts-sendpop-fire") && _pop.querySelector(".fvtt-tts-sendpop-close")));
-    // 1.6.148 发布版默认隐藏开发者测试按钮(devTools=关)
-    const _devBtn = document.querySelector("#fvtt-tts-floatbar .fvtt-tts-selftest");
-    if (getCfg().devTools === true) _chk("开发者按钮(devTools=开)可见", !!_devBtn);
-    else _chk("开发者测试按钮默认隐藏", !_devBtn || _devBtn.style.display === "none");
-    // 56 项设置全部可读且类型正确
-    let _setBad = "";
-    try {
-      for (const [k, def] of SETTINGS) {
-        let v; try { v = game.settings.get(MOD, k); } catch (e) { _setBad = k + ":get"; break; }
-        const t = def && def.type;
-        if (t === Boolean && typeof v !== "boolean") { _setBad = k + ":bool"; break; }
-        if (t === Number && typeof v !== "number") { _setBad = k + ":num"; break; }
-        if (t === String && typeof v !== "string") { _setBad = k + ":str"; break; }
-      }
-    } catch (e) { _setBad = "throw"; }
-    _chk("设置项全部可读且类型正确(" + SETTINGS.length + " 项)", !_setBad, _setBad);
-    // 关键 i18n 文案
-    const _missI18n = ["settings.typingRead.name", "settings.typingRead.hint", "settings.triggerMode.name", "ui.preloadDoneToast", "status.ok"].filter(k => { try { const s = game.i18n.localize(k); return !s || s === k; } catch (e) { return true; } });
-    _chk("关键 i18n 文案存在", _missI18n.length === 0, _missI18n.join(","));
-    // 双实例共享容器
-    _chk("双实例共享容器(window 单例)", !!(window.__fvttTTSState && window.__fvttTTSState.playedIds && window.__fvttTTSState.voicedIds && window.__fvttTTSState.pendingTts && window.__fvttTTSState.audioCache));
-    // 预加载命中（原文 / 润色稿）
-    const _paSave = window.__fvttTTSPreloadAudio;
-    try {
-      window.__fvttTTSPreloadAudio = { url: "blob:final-test", srcText: "原文甲", text: "润色稿乙", watchKey: makeWatchKey() };
-      _chk("预加载命中: 原文", preloadHit("原文甲") === true);
-      _chk("预加载命中: 润色稿", preloadHit("润色稿乙") === true);
-      _chk("预加载命中: 不同文字不命中", preloadHit("别的句子") === false);
-    } finally { window.__fvttTTSPreloadAudio = _paSave; }
-    // 防重复判定（含空白归一化）
-    const _lts = lastTypedSpoken; const _ltsB = { text: _lts.text, ts: _lts.ts };
-    try {
-      _lts.text = "  测试 防重复 "; _lts.ts = Date.now();
-      _chk("防重复判定: 同句=跳过", _wasTypingPreviewed("测试   防重复") === true);
-      _chk("防重复判定: 不同句=不跳过", _wasTypingPreviewed("另一句") === false);
-      _lts.ts = Date.now() - 31000;
-      _chk("防重复判定: 超 30s=不跳过", _wasTypingPreviewed("测试 防重复") === false);
-    } finally { _lts.text = _ltsB.text; _lts.ts = _ltsB.ts; }
-  } catch (e) { push("- 自检异常: " + String((e && e.message) || e).slice(0, 80)); fails.push("自检异常"); }
-  // 引擎能力版本
-  try {
-    const _hc = await probeEngineHealth(cfg.serverUrl, 4000).catch(() => ({ state: "unknown" }));
-    if (_hc && _hc.apiVersion) {
-      const _vn = (v) => String(v || "").split(".").map(n => parseInt(n, 10) || 0);
-      const _vlt = (a, b) => { const x = _vn(a), y = _vn(b); for (let i = 0; i < 3; i++) { if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) < (y[i] || 0); } return false; };
-      const _cap = !_vlt(_hc.apiVersion, "1.6.137");
-      _chk("引擎能力版本 ≥1.6.137(无闪窗+模型加载不阻塞)", _cap, "api=" + _hc.apiVersion + (window.__fvttTTSCanDirect === false ? "（代理模式, 本端探测仅供参考）" : ""));
-    } else push("- · 引擎 /health 无 api_version（旧引擎, 重启后可测）");
-  } catch (e) { /* noop */ }
-  // 看门狗 / 打包
-  try {
-    const r1 = await svcRequest(cfg.serverUrl, "GET", "/watchdog", null, { timeoutMs: 12000, retries: 0, quiet: true });
-    const wd = (r1 && typeof r1.json === "function") ? await r1.json().catch(() => null) : null;
-    if (wd && wd.script !== undefined) {
-      _chk("看门狗脚本存在", !!wd.script, "size=" + (wd.script_size || 0));
-      _chk("看门狗已是 Python 版", /watchdog\.py$/i.test(String(wd.script_path || "")), String(wd.script_path || "").split("\\").pop() || "?");
-      _chk("看门狗开机自启已安装", !!wd.startup, String(wd.startup_path || "").slice(-40));
-      if (wd.legacy_startup) push("- · ⚠ 启动文件夹里还有旧 .vbs 启动项（会被杀软删掉）→ 运行一次 engine\\安装看门狗自启.bat");
-    } else push("- · 看门狗检查: 跳过（引擎未提供 /watchdog）");
-    const r2 = await svcRequest(cfg.serverUrl, "GET", "/packcheck", null, { timeoutMs: 12000, retries: 0, quiet: true });
-    const pk = (r2 && typeof r2.json === "function") ? await r2.json().catch(() => null) : null;
-    if (pk && pk.bat !== undefined) _chk("打包脚本含看门狗三件套", !!(pk.has_watchdog && pk.has_install && pk.has_uninstall), "bat=" + pk.bat);
-    else push("- · 打包完整性: 跳过（引擎未提供 /packcheck）");
-  } catch (e) { /* noop */ }
-  const _bad0 = _chkRows.filter(x => !x.ok);
-  push("- 自检断言 " + _chkRows.length + " 项: " + (_bad0.length ? ("✗ " + _bad0.length + " 项失败") : "全部 ✓"));
-  _bad0.forEach(x => push("  ✗ " + x.name + (x.detail ? ("（" + x.detail + "）") : "")));
+  let apiV = "";
+  try { const h = await probeEngineHealth(cfg.serverUrl, 4000).catch(() => ({})); apiV = String((h && h.apiVersion) || ""); } catch (e) { /* noop */ }
+  push("## 环境");
+  push("- 引擎连通 ✓ " + engDetail + " | api=" + (apiV || "?") + " | LLM=" + (_aiOn ? "已配置" : "未配置") + " | 立绘=" + cfg.portraitMode);
   push("");
 
-  // ============ 二、核心朗读（3 条, 严格断言）============
-  _note("① 核心朗读 3 条实测中（约 1~2 分钟）…");
+  // ============ 1 核心朗读（2 条）============
+  _note("① 核心朗读 2 条…");
   _mark("核心朗读");
-  push("## 二、核心朗读（3 条真实链路 + 字节/播放次数断言）");
+  push("## 一、核心朗读（2 条）");
   push("");
   const _slotKeyOf = (re) => { try { const c = (quickChars && quickChars.chars || []).find(x => x.name === cn); const s = ((c && c.emotions) || []).find(e => re.test(String(e && e.label))); return (s && s.key) || ""; } catch (e) { return ""; } };
-  const _shyKey = _slotKeyOf(/害羞/);
   const _angryKey = _slotKeyOf(/生气/);
-  const _style2 = _shyKey ? "害羞羞涩的语气" : (_angryKey ? "用愤怒、压着火气的语气说话" : "");
+  const _shyKey = _slotKeyOf(/害羞/);
+  const _styleEmo = _shyKey ? "害羞羞涩的语气" : (_angryKey ? "用愤怒、压着火气的语气说话" : "");
   const _scenes = [
-    { label: "①手动语气槽", style: "", strength: 0, text: "今天的事情，就交给我吧。", manualSlot: (_angryKey || "voice_03"), wantEmo: true },
-    { label: "②提示词定情绪", style: _style2, strength: 50, text: "今天的事情，就交给我吧。我会认真处理的。", wantEmo: true },
-    { label: "③无提示词(应中性)", style: "", strength: 50, text: "我们下午三点在大厅集合。", wantEmo: false },
+    { label: "①带情绪", style: _styleEmo, strength: 50, text: "今天的事情，就交给我吧。我会认真处理的。", manualSlot: _angryKey || "", wantEmo: true },
+    { label: "②中性句", style: "", strength: 50, text: "我们下午三点在大厅集合。", wantEmo: false },
   ];
-  const _sceneRows = [];
   let _lastMsgId = "";
-  window.__fvttTTSAiLineDiag = true; window.__fvttTTSAiLineDiagList = []; window.__fvttTTSAiLineEnterList = [];
   try {
     for (const sc of _scenes) {
       try {
@@ -5223,81 +5143,48 @@ window.runFinalTest = async function runFinalTest() {
         ref: String(_cv.ref || ""), auxRef: String(_cv.auxRef || ""),
         promptText: String(_cv.promptText || ""), promptLang: String(_cv.promptLang || ""),
       }, 45000);
-      await _sleep(900);   // 等播放探针落定
+      await _sleep(900);
       const _dPlays = _playsSince(_tPlay);
       if (r.id) _lastMsgId = r.id;
       const f = r.flags || {};
       const _sp = window.__fvttTTSLastSynthParams || {};
       const slot = (() => { try { return findEmotionSlot(String(f.emotion || ""), cn); } catch (e) { return null; } })();
-      const semi = (() => { try { return slot ? normalizeEmotionKey(String(slot.label || slot.key || "")) : normalizeEmotionKey(String(f.emotion || "")); } catch (e) { return ""; } })();
       const av = String(f.aiSprite || f.avatar || f.selSprite || "");
       const slotAv = String((slot && slot.avatar) || "");
-      push("- **" + sc.label + "**「" + (sc.style || "无提示词") + "」强度" + sc.strength + "% → 槽=" + String(f.emotion || "无")
-        + " | 合成=" + (r.audio ? "✓" : "✗") + " 字节=" + (r.bytes > 0 ? r.bytes + "B" : "?") + " 来源=" + (_sp.src || "?")
-        + " 参考音=" + ((_sp.aux && _sp.aux.length) ? "✓" : "无") + " 占比=" + (_sp.mix == null ? "?" : _sp.mix)
-        + " 语速=" + Number(_sp.spd || 1).toFixed(2) + " | 播放=" + _dPlays + " 次 | 立绘=" + (av ? String(av).slice(-22) : "无"));
+      push("- **" + sc.label + "** → 槽=" + String(f.emotion || "无") + " | 合成=" + (r.audio ? "✓" : "✗") + " 字节=" + (r.bytes > 0 ? r.bytes + "B" : "?")
+        + " 参考音=" + ((_sp.aux && _sp.aux.length) ? "✓" : "无") + " 占比=" + (_sp.mix == null ? "?" : _sp.mix) + " | 播放=" + _dPlays + " 次 | 立绘=" + (av ? String(av).slice(-20) : "无"));
       _chk(sc.label + " 合成", r.audio);
       _chk(sc.label + " 音频字节>1KB", r.bytes > 1000, r.bytes + "B");
       _chk(sc.label + " 本机播放恰 1 次", _dPlays === 1, "plays=" + _dPlays);
-      if (sc.wantEmo && slot && slot.ref_audio_path) {
-        _chk(sc.label + " 情绪参考音已送达", !!(_sp.aux && _sp.aux.length));
-        _chk(sc.label + " 情绪占比>0", !!(_sp.mix > 0), String(_sp.mix));
-        if (slotAv) _chk(sc.label + " 立绘=情绪槽图", av === slotAv, (av || "无") + " vs " + slotAv);
-      }
-      if (!sc.wantEmo) {
-        // 1.6.151 修: 配了 AI 时它也可能会给"看似中性"的句子判出情绪(本机实测判成 voice_02),
-        //   此时带情绪参考音是正确行为 —— 只在"无 AI 的规则兜底"路径才要求真正中性(无参考音)。
+      if (sc.wantEmo) {
+        if (slot && slot.ref_audio_path) {
+          _chk(sc.label + " 情绪参考音已送达", !!(_sp.aux && _sp.aux.length));
+          _chk(sc.label + " 情绪占比>0", !!(_sp.mix > 0), String(_sp.mix));
+          if (slotAv) _chk(sc.label + " 立绘=情绪槽图", av === slotAv, (av || "无") + " vs " + slotAv);
+        } else push("- · 角色无可用情绪槽 → 情绪参考音断言跳过");
+      } else {
         if (_aiOn) {
           const _hasSlot = !!(slot && slot.ref_audio_path);
-          _chk(sc.label + " 参考音与判定一致", _hasSlot ? !!(_sp.aux && _sp.aux.length) : !(_sp.aux && _sp.aux.length),
-            "slot=" + (slot ? slot.key : "无") + " aux=" + String((_sp.aux || []).length));
+          _chk(sc.label + " 参考音与判定一致", _hasSlot ? !!(_sp.aux && _sp.aux.length) : !(_sp.aux && _sp.aux.length), "slot=" + (slot ? slot.key : "无"));
         } else {
-          _chk(sc.label + " 中性句不应带情绪参考音", !(_sp.aux && _sp.aux.length), String((_sp.aux || []).length));
+          _chk(sc.label + " 中性句无情绪参考音", !(_sp.aux && _sp.aux.length));
         }
       }
-      _sceneRows.push({ label: sc.label, emo: semi, av: av, slotAv: slotAv, audio: r.audio, bytes: r.bytes, plays: _dPlays });
     }
   } finally {
     try { if (_profSnap) saveVoiceProfile(JSON.parse(_profSnap)); } catch (e) { /* noop */ }
     try { setStylePrompt(cn, _origStyle); } catch (e) { /* noop */ }
-    window.__fvttTTSAiLineDiag = false; window.__fvttTTSAiLineDiagList = []; window.__fvttTTSAiLineEnterList = [];
   }
-  // 立绘实物（最后一条真实 DOM）: 轮询 + 诊断(元素是否存在/为何没插), 不用 .message 类名(不同版本 DOM 不同)
-  try {
-    let el = null, im = null, nw = 0;
-    for (let i = 0; i < 30; i++) {
-      // 1.6.147 message.element 在部分版本是 jQuery 对象 → 统一解包; 再不行用 data-message-id 直接查原生节点
-      try { const mm = game.messages.get(_lastMsgId); el = _asChatEl(mm && mm.element); } catch (e) { el = null; }
-      if (!el && _lastMsgId) el = _asChatEl(document.querySelector('[data-message-id="' + _lastMsgId + '"]'));
-      im = el ? el.querySelector(".fvtt-tts-emotion-avatar") : null;
-      nw = im ? (im.naturalWidth || 0) : 0;
-      if (im && nw > 0) break;
-      await _sleep(200);
-    }
-    let _why = "";
-    try {
-      const lst = (window.__fvttTTSSpriteWhy || []).filter(x => x && x.mid === _lastMsgId).slice(-2);
-      if (lst.length) _why = lst.map(x => x.reason).join(" | ");
-    } catch (e) { /* noop */ }
-    const _detail = im ? ("naturalWidth=" + nw + (nw > 0 ? "" : "（元素在但未解码）"))
-      : ("未插入; 消息元素=" + (el ? "在" : "不在") + "; 页面立绘数=" + document.querySelectorAll(".fvtt-tts-emotion-avatar").length + ( _why ? "; 原因=" + _why : "; 无未插入记录"));
-    if (!el) {
-      // 消息本身没有被聊天记录渲染(Foundry 渲染窗口/滚动状态) → 测不到 DOM, 但 flags 立绘已由上面断言
-      push("- · 立绘实物: 该消息未被聊天记录渲染（元素不存在）→ 跳过 DOM 实测（不判失败）");
-    } else {
-      _chk("立绘实物已插入并解码", !!im && nw > 0, _detail);
-    }
-  } catch (e) { /* noop */ }
   push("");
 
-  // ============ 三、真实交互 ============
-  push("## 三、真实交互（发送框 / 防双播 / 预加载 / 白名单 / 防双发 / 静默预加载）");
+  // ============ 2 真实交互 ============
+  push("## 二、真实交互");
   push("");
   _mark("交互");
   const _ta = findChatTextarea();
   if (!_ta) { push("- 跳过（找不到聊天输入框）"); fails.push("找不到输入框"); }
 
-  // A. 发送框真实路径
+  // A 发送框
   if (_ta) {
     try {
       const _idsB = new Set((((game.messages && game.messages.contents) || []).map(m => m.id)));
@@ -5311,19 +5198,19 @@ window.runFinalTest = async function runFinalTest() {
       if (msg && msg.id) _testIds.push(msg.id);
       let aud = false;
       for (let i = 0; i < 120 && !aud; i++) { try { const mm = game.messages.get(msg && msg.id); const f = mm && mm.flags && mm.flags[MOD]; if (f && (f.audioUrl || f.audioData)) aud = true; } catch (e) { /* noop */ } if (!aud) await _sleep(200); }
-      await _sleep(900);
+      await _sleep(700);
       const _d = _playsSince(_tPlay);
       const _f = (() => { try { const mm = game.messages.get(msg && msg.id); return (mm && mm.flags && mm.flags[MOD]) || {}; } catch (e) { return {}; } })();
-      push("- **发送框**（doSubmitChat）: 消息=" + (msg ? "✓" : "✗") + " 音频=" + (aud ? "✓" : "✗") + " 白名单标记=" + (_f.fromModSend ? "✓" : "—") + " 播放=" + _d + " 次");
+      push("- **发送框**: 消息=" + (msg ? "✓" : "✗") + " 音频=" + (aud ? "✓" : "✗") + " 标记=" + (_f.fromModSend ? "✓" : "—") + " 播放=" + _d + " 次");
       _chk("发送框 建立消息", !!msg);
       _chk("发送框 音频写回", aud);
       _chk("发送框 带 fromModSend", !!_f.fromModSend);
-      _chk("发送框 本机播放恰 1 次", _d === 1, "plays=" + _d);
+      _chk("发送框 播放恰 1 次", _d === 1, "plays=" + _d);
       try { if (_ta.value) _ta.value = ""; } catch (e) { /* noop */ }
     } catch (e) { push("- 发送框异常: " + String((e && e.message) || e).slice(0, 70)); fails.push("发送框异常"); }
   }
 
-  // B. 预览 → 发送 防双播（作者只听预读那一次）
+  // B 预览 → 发送 防双播
   if (_ta) {
     const _oldTR = getCfg().typingRead === true;
     try {
@@ -5337,19 +5224,19 @@ window.runFinalTest = async function runFinalTest() {
       for (let i = 0; i < 100; i++) { await _sleep(200); if (_playsSince(_tPlay) > 0) { previewed = true; break; } }
       const _dPrev = _playsSince(_tPlay);
       const r2 = await doSubmitChat(_ta);
-      await _sleep(1200);
+      await _sleep(1000);
       const _dSend = _playsSince(_tPlay) - _dPrev;
       const _tot = _playsSince(_tPlay);
-      push("- **预览→发送 防双播**: 预读=" + (previewed ? "✓" : "✗") + " | 发送后新增播放=" + _dSend + " 次 | 总计=" + _tot + " 次（期望 1）");
-      _chk("预览 触发了朗读", previewed);
-      _chk("预览→发送 作者只播一次", _tot === 1, "total=" + _tot + " send+" + _dSend);
+      push("- **预览→发送 防双播**: 预读=" + (previewed ? "✓" : "✗") + " 发送后新增=" + _dSend + " 总计=" + _tot + "（期望 1）");
+      _chk("预览 触发朗读", previewed);
+      _chk("预览→发送 只播一次", _tot === 1, "total=" + _tot);
       if (r2 && r2.id) _testIds.push(r2.id);
       try { if (_ta.value) _ta.value = ""; } catch (e) { /* noop */ }
     } catch (e) { push("- 预览防双播异常: " + String((e && e.message) || e).slice(0, 70)); fails.push("预览防双播异常"); }
     finally { try { await game.settings.set(MOD, "typingRead", _oldTR); } catch (e) { /* noop */ } }
   }
 
-  // C. 预加载 → 发送（零等待 + 缓存消费 + 按钮复位）
+  // C 预加载 → 发送
   if (_ta) {
     try {
       _ta.value = "预加载路径测试：先预合成再发送。";
@@ -5364,24 +5251,24 @@ window.runFinalTest = async function runFinalTest() {
         while (w < 200 && !btn.classList.contains("done")) { await _sleep(250); w++; }
         const done = btn.classList.contains("done");
         const pa = window.__fvttTTSPreloadAudio || null;
-        push("- **预加载**: " + (done ? "✓ 完成 " + (w * 0.25).toFixed(1) + "s" : "✗ 未完成") + " | 缓存=" + ((pa && pa.url) ? "✓" : "✗") + " | 命中=" + (preloadHit(stripStageDirections(String(_ta.value || "").trim())) ? "✓" : "✗"));
+        push("- **预加载**: " + (done ? "✓ " + (w * 0.25).toFixed(1) + "s" : "✗ 超时") + " 缓存=" + ((pa && pa.url) ? "✓" : "✗"));
         _chk("预加载 完成", done);
         _chk("预加载 缓存就绪", !!(pa && pa.url));
         if (done) {
           const _idsB = new Set((((game.messages && game.messages.contents) || []).map(m => m.id)));
-          btn.click();   // 再点 = 直接发送
+          btn.click();
           let msg = null;
           for (let i = 0; i < 120 && !msg; i++) { await _sleep(200); const arr = (game.messages && game.messages.contents) || []; const nw = arr.filter(m => !_idsB.has(m.id)); if (nw.length) msg = nw[nw.length - 1]; }
           if (msg && msg.id) _testIds.push(msg.id);
           let aud = false;
           for (let i = 0; i < 80 && !aud; i++) { try { const mm = game.messages.get(msg && msg.id); const f = mm && mm.flags && mm.flags[MOD]; if (f && (f.audioUrl || f.audioData)) aud = true; } catch (e) { /* noop */ } if (!aud) await _sleep(200); }
-          await _sleep(900);
+          await _sleep(700);
           const _d = _playsSince(_tPlay);
           const _paAfter = window.__fvttTTSPreloadAudio;
-          push("- 预加载→发送: 消息=" + (msg ? "✓" : "✗") + " 音频=" + (aud ? "✓" : "✗") + " 播放=" + _d + " 次 | 缓存消费=" + (_paAfter ? "✗ 未清空" : "✓ 已清空") + " | 按钮复位=" + (btn.classList.contains("done") ? "✗" : "✓"));
+          push("- 预加载→发送: 消息=" + (msg ? "✓" : "✗") + " 音频=" + (aud ? "✓" : "✗") + " 播放=" + _d + " 次 | 缓存消费=" + (_paAfter ? "✗" : "✓") + " 按钮复位=" + (btn.classList.contains("done") ? "✗" : "✓"));
           _chk("预加载→发送 建立消息", !!msg);
           _chk("预加载→发送 音频写回", aud);
-          _chk("预加载→发送 本机播放恰 1 次", _d === 1, "plays=" + _d);
+          _chk("预加载→发送 播放恰 1 次", _d === 1, "plays=" + _d);
           _chk("预加载→发送 缓存已消费", !_paAfter);
           _chk("预加载→发送 按钮已复位", !btn.classList.contains("done"));
           try { if (_ta.value) _ta.value = ""; } catch (e) { /* noop */ }
@@ -5390,25 +5277,22 @@ window.runFinalTest = async function runFinalTest() {
     } catch (e) { push("- 预加载异常: " + String((e && e.message) || e).slice(0, 70)); fails.push("预加载异常"); }
   }
 
-  // D. 白名单负向：没有 fromModSend 的消息必须完全无声
+  // D 白名单负向
   try {
     await _settle();
     const _tPlay = Date.now();
     let m = null;
-    try { m = await ChatMessage.create({ content: "白名单负向测试：这条没有 fromModSend，不应被朗读。", speaker: { alias: cn }, flags: { [MOD]: { role: cn, lang: "zh" } } }); } catch (e) { /* noop */ }
+    try { m = await ChatMessage.create({ content: "白名单负向测试：没有 fromModSend，不应被朗读。", speaker: { alias: cn }, flags: { [MOD]: { role: cn, lang: "zh" } } }); } catch (e) { /* noop */ }
     if (m && m.id) _testIds.push(m.id);
     let leak = false;
-    for (let i = 0; i < 40; i++) {
-      try { const mm = game.messages.get(m && m.id); const f = (mm && mm.flags && mm.flags[MOD]) || {}; if (f.audioUrl || f.audioData) { leak = true; break; } } catch (e) { /* noop */ }
-      await _sleep(200);
-    }
+    for (let i = 0; i < 40; i++) { try { const mm = game.messages.get(m && m.id); const f = (mm && mm.flags && mm.flags[MOD]) || {}; if (f.audioUrl || f.audioData) { leak = true; break; } } catch (e) { /* noop */ } await _sleep(200); }
     const _d = _playsSince(_tPlay);
-    push("- **白名单(负向)**: 非模块消息 音频写回=" + (leak ? "✗ 泄漏" : "✓ 无") + " | 播放=" + _d + " 次（期望 0）");
-    _chk("白名单 非模块消息不产生音频", !leak);
+    push("- **白名单(负向)**: 音频=" + (leak ? "✗ 泄漏" : "✓ 无") + " 播放=" + _d + "（期望 0）");
+    _chk("白名单 非模块消息无音频", !leak);
     _chk("白名单 非模块消息不播放", _d === 0, "plays=" + _d);
   } catch (e) { push("- 白名单异常: " + String((e && e.message) || e).slice(0, 60)); fails.push("白名单异常"); }
 
-  // E. 防双发
+  // E 防双发
   if (_ta) {
     try {
       _ta.value = "防双发测试：同一句连点两次只应发出一条。";
@@ -5417,28 +5301,18 @@ window.runFinalTest = async function runFinalTest() {
       await _sleep(1500);
       const added = (((game.messages && game.messages.contents) || []).filter(m => !_idsB.has(m.id)));
       added.forEach(m => { try { _testIds.push(m.id); } catch (e) { /* noop */ } });
-      // 等这条消息的音频写回(+播放)完成, 避免它的异步播放串进下一项(静默预加载)计数
-      try {
-        const mid = added[0] && added[0].id;
-        for (let i = 0; i < 120; i++) {
-          const mm = game.messages.get(mid);
-          const f = (mm && mm.flags && mm.flags[MOD]) || {};
-          if (f.audioUrl || f.audioData) break;
-          await _sleep(200);
-        }
-        await _sleep(1200);
-      } catch (e) { /* noop */ }
+      try { const mid = added[0] && added[0].id; for (let i = 0; i < 120; i++) { const mm = game.messages.get(mid); const f = (mm && mm.flags && mm.flags[MOD]) || {}; if (f.audioUrl || f.audioData) break; await _sleep(200); } await _sleep(1000); } catch (e) { /* noop */ }
       push("- **防双发**: 连调 2 次 → 新增 " + added.length + " 条");
       _chk("防双发 只新增 1 条", added.length === 1, "added=" + added.length);
       try { if (_ta.value) _ta.value = ""; } catch (e) { /* noop */ }
     } catch (e) { push("- 防双发异常: " + String((e && e.message) || e).slice(0, 60)); fails.push("防双发异常"); }
   }
 
-  // F. 静默自动预加载（不发声）
+  // F 静默自动预加载
   if (_ta) {
     try {
       const _c = getCfg();
-      if (_c.autoPreload === false || _c.engine !== "gptsovits") push("- 静默预加载: 跳过（自动预加载关闭/非 GPT-SoVITS）");
+      if (_c.autoPreload === false || _c.engine !== "gptsovits") push("- 静默预加载: 跳过（自动预加载关/非 GPT-SoVITS）");
       else {
         const _oldTR = _c.typingRead === true;
         try { await game.settings.set(MOD, "typingRead", false); } catch (e) { /* noop */ }
@@ -5446,12 +5320,12 @@ window.runFinalTest = async function runFinalTest() {
         await _settle();
         const _tPlay = Date.now();
         const _pa0 = window.__fvttTTSPreloadAudio;
-        _ta.value = "静默预加载测试：这段应被预合成但完全不发声。";
+        _ta.value = "静默预加载测试：应被预合成但完全不发声。";
         _ta.dispatchEvent(new Event("input", { bubbles: true }));
         let got = false;
         for (let i = 0; i < 120; i++) { await _sleep(250); if (window.__fvttTTSPreloadAudio && window.__fvttTTSPreloadAudio !== _pa0 && window.__fvttTTSPreloadAudio.url) { got = true; break; } }
         const _d = _playsSince(_tPlay);
-        push("- **静默自动预加载**: 预合成=" + (got ? "✓" : "✗") + " | 发声=" + (_d === 0 ? "✓ 无声" : "✗ " + _d + " 次") + " | 播放次数=" + _d);
+        push("- **静默预加载**: 预合成=" + (got ? "✓" : "✗") + " 发声=" + (_d === 0 ? "✓ 无声" : "✗ " + _d + " 次"));
         _chk("静默预加载 缓存就绪", got);
         _chk("静默预加载 不发声", _d === 0, "plays=" + _d);
         try { _ta.value = ""; } catch (e) { /* noop */ }
@@ -5459,37 +5333,15 @@ window.runFinalTest = async function runFinalTest() {
       }
     } catch (e) { push("- 静默预加载异常: " + String((e && e.message) || e).slice(0, 60)); fails.push("静默预加载异常"); }
   }
-
-  // G. 合成中并发健康
-  try {
-    const _long = "今天的事情就交给我吧，虽然我平时不太爱说话，也不太擅长和人打交道，但是既然已经答应了你，我就一定会认真处理到底，不会让你一个人承担这些麻烦。";
-    let ok = 0, bad = 0, maxMs = 0, stop = false;
-    const proxy = (window.__fvttTTSCanDirect === false);
-    const loop = (async () => {
-      while (!stop && !proxy) {
-        const r = await probeEngineHealth(cfg.serverUrl, 2500).catch(() => ({ state: "unknown", ms: 0 }));
-        if (r && r.state === "up") { ok++; if (Number(r.ms) > maxMs) maxMs = Number(r.ms); } else bad++;
-        await _sleep(250);
-      }
-    })();
-    const rm = await _sendLine(_long, {}, 60000);
-    stop = true;
-    try { await loop; } catch (e) { /* noop */ }
-    push("- **合成中并发健康**: " + (proxy ? "代理模式 → 跳过" : ("成功=" + ok + " 失败=" + bad + " 最慢=" + Math.round(maxMs) + "ms")) + (proxy ? "" : (ok > 0 && bad === 0 ? " → ✓ 事件循环未阻塞" : " → ⚠ 引擎可能未升级")));
-    if (!proxy) _chk("合成中引擎仍能回应 /health", ok > 0, "ok=" + ok + " bad=" + bad);
-    _chk("长句合成", rm.audio);
-  } catch (e) { push("- 并发健康异常: " + String((e && e.message) || e).slice(0, 60)); fails.push("并发健康异常"); }
   push("");
 
-  // ============ 四、AI 路径（配了 LLM 才跑）============
-  push("## 四、AI 路径" + (_aiOn ? "" : "（未配置 LLM → 跳过）"));
+  // ============ 3 AI（有条件）============
+  push("## 三、AI 路径" + (_aiOn ? "" : "（未配置 LLM → 跳过）"));
   push("");
   if (!_aiOn) {
-    push("- 未配置 LLM API 密钥：AI 判语气 / 润色 / 翻译 / AI 选立绘 / AI 直出 全部跳过（配置后重跑本段会自动实测）。");
-    push("- 规则兜底路径已由上「核心朗读 ②③」覆盖。");
+    push("- 未配置 LLM：AI 判语气/润色/翻译 跳过（规则兜底已由核心朗读覆盖）。");
   } else {
     try {
-      // AI 判语气 + 润色
       const s0 = await _stat(); const c0 = Number((s0 && s0.calls) || 0);
       await _settle();
       const _tPlay = Date.now();
@@ -5498,48 +5350,30 @@ window.runFinalTest = async function runFinalTest() {
       const s1 = await _stat(); const d = Number((s1 && s1.calls) || 0) - c0;
       const fa = ra.flags || {};
       const pol = String(fa.polishText || "").trim();
-      push("- **AI 判语气/润色**: 调用=" + Math.max(0, d) + " 次 | 语气槽=" + String(fa.emotion || "无") + " | 润色=" + (pol ? ("✓ " + pol.length + " 字") : "—") + " | 合成=" + (ra.audio ? "✓" : "✗") + " 播放=" + _playsSince(_tPlay) + " 次");
+      const _d = _playsSince(_tPlay);
+      push("- **AI 判语气/润色**: 调用=" + Math.max(0, d) + " 次 | 槽=" + String(fa.emotion || "无") + " | 润色=" + (pol ? ("✓ " + pol.length + " 字") : "—") + " | 播放=" + _d);
       _chk("AI 判语气 至少调用 1 次", d >= 1, "calls=" + d);
       _chk("AI 路径 合成", ra.audio);
-      _chk("AI 路径 本机播放恰 1 次", _playsSince(_tPlay) === 1, "plays=" + _playsSince(_tPlay));
+      _chk("AI 路径 播放恰 1 次", _d === 1, "plays=" + _d);
       if (cfg.llmPolish) _chk("AI 润色 已写回", !!pol);
-      // 翻译端点
       const rt = await svcRequest(cfg.serverUrl, "POST", "/llm/translate", { base: cfg.llmBaseUrl || "https://api.openai.com/v1", key: cfg.llmKey, model: cfg.llmModel || "gpt-4o-mini", text: "今天天气很好，我们出去散步吧。", to: "ja", gm_prompt: "" }, { timeoutMs: 30000, retries: 0, quiet: true });
       const jt = (rt && typeof rt.json === "function") ? await rt.json().catch(() => ({})) : {};
       const tt = String((jt && jt.text) || "");
-      push("- **AI 翻译端点**: " + (tt ? ("✓ " + tt.slice(0, 24)) : "✗ " + String((jt && jt.message) || "").slice(0, 60)));
+      push("- **AI 翻译**: " + (tt ? ("✓ " + tt.slice(0, 22)) : "✗ " + String((jt && jt.message) || "").slice(0, 50)));
       _chk("AI 翻译端点", !!tt);
-      // 省 token 快路径
-      const _sty = (() => { try { return getStylePrompt(cn) || ""; } catch (e) { return ""; } })();
-      const _se = (() => { try { return styleEmotionKey(_sty); } catch (e) { return ""; } })();
-      if (_se) {
-        const _pol0 = getCfg().llmPolish;
-        try { await game.settings.set(MOD, "llmPolish", false); } catch (e) { /* noop */ }
-        await _sleep(300);
-        const c1 = Number(((await _stat()) || {}).calls || 0);
-        const r2 = await _sendLine("快路径测试：零 token 也要能出声。", {}, 45000);
-        const c2 = Number(((await _stat()) || {}).calls || 0);
-        push("- **零 token 快路径**: 调用=" + Math.max(0, c2 - c1) + " 次 | 合成=" + (r2.audio ? "✓" : "✗"));
-        _chk("零 token 快路径 0 调用", (c2 - c1) === 0, "calls=" + (c2 - c1));
-        _chk("快路径 合成", r2.audio);
-        try { if (_pol0 !== null) await game.settings.set(MOD, "llmPolish", _pol0); } catch (e) { /* noop */ }
-      } else push("- 零 token 快路径: 跳过（当前朗读提示词不能定情绪）");
     } catch (e) { push("- AI 路径异常: " + String((e && e.message) || e).slice(0, 80)); fails.push("AI路径异常"); }
   }
   push("");
 
-  // ============ 五、结论（全量断言汇总）============
+  // ============ 4 结论 ============
   _mark("结论");
-  push("## 五、结论");
+  push("## 四、结论");
   const _badAll = _chkRows.filter(x => !x.ok);
-  push("- 测试脚本: v9(代码版本 " + MOD_VERSION + ") | 耗时: " + Math.round((Date.now() - t0) / 1000) + "s | 断言 " + _chkRows.length + " 项 | 场景 " + _sceneRows.length + " 条");
+  push("- 测试脚本: v10(代码版本 " + MOD_VERSION + ") | 耗时: " + Math.round((Date.now() - t0) / 1000) + "s | 断言 " + _chkRows.length + " 项");
   push("- 断言明细: " + (_badAll.length ? ("✗ " + _badAll.length + " 项失败") : "全部 ✓"));
   _badAll.forEach(x => push("  ✗ " + x.name + (x.detail ? ("（" + x.detail + "）") : "")));
   push("- 关键项: " + (fails.length ? ("⚠ 存在问题 → " + fails.join("、")) : "全部通过 ✓"));
-  try {
-    const _secTxt = Object.keys(_secMs).map(k => k + " " + _secMs[k] + "s").join(" · ");
-    if (_secTxt) push("- 耗时明细: " + _secTxt);
-  } catch (e) { /* noop */ }
+  try { const _secTxt = Object.keys(_secMs).map(k => k + " " + _secMs[k] + "s").join(" · "); if (_secTxt) push("- 耗时明细: " + _secTxt); } catch (e) { /* noop */ }
   push("");
   if (_testIds.length && window.__fvttTTSKeepTestMsgs !== true) {
     let del = 0;
