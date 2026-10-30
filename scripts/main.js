@@ -19,7 +19,7 @@ window.fetchAndRefreshModels = fetchAndRefreshModels;
 const MODULE = "gpt-sovits-tts";
 // 1.6.103 代码版本号: Foundry 的 game.modules.get(id).version 读的是"载入世界时的清单缓存",
 //   改了 manifest 不刷新会一直显示旧版本(用户多次看到 1.6.96 而实际代码已是新版) → 报告里同时打印两者, 便于确认真的在跑新代码
-const MOD_VERSION = "1.6.150";
+const MOD_VERSION = "1.6.151";
 const CHAT_STYLES = (typeof CONST !== "undefined" && (CONST.CHAT_MESSAGE_STYLES || CONST.CHAT_MESSAGE_TYPES)) || {};
 
 /* ============ 设置定义 ============ */
@@ -5225,7 +5225,17 @@ window.runFinalTest = async function runFinalTest() {
         _chk(sc.label + " 情绪占比>0", !!(_sp.mix > 0), String(_sp.mix));
         if (slotAv) _chk(sc.label + " 立绘=情绪槽图", av === slotAv, (av || "无") + " vs " + slotAv);
       }
-      if (!sc.wantEmo) _chk(sc.label + " 中性句不应带情绪参考音", !(_sp.aux && _sp.aux.length), String((_sp.aux || []).length));
+      if (!sc.wantEmo) {
+        // 1.6.151 修: 配了 AI 时它也可能会给"看似中性"的句子判出情绪(本机实测判成 voice_02),
+        //   此时带情绪参考音是正确行为 —— 只在"无 AI 的规则兜底"路径才要求真正中性(无参考音)。
+        if (_aiOn) {
+          const _hasSlot = !!(slot && slot.ref_audio_path);
+          _chk(sc.label + " 参考音与判定一致", _hasSlot ? !!(_sp.aux && _sp.aux.length) : !(_sp.aux && _sp.aux.length),
+            "slot=" + (slot ? slot.key : "无") + " aux=" + String((_sp.aux || []).length));
+        } else {
+          _chk(sc.label + " 中性句不应带情绪参考音", !(_sp.aux && _sp.aux.length), String((_sp.aux || []).length));
+        }
+      }
       _sceneRows.push({ label: sc.label, emo: semi, av: av, slotAv: slotAv, audio: r.audio, bytes: r.bytes, plays: _dPlays });
     }
   } finally {
