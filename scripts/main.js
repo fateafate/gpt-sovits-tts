@@ -19,7 +19,7 @@ window.fetchAndRefreshModels = fetchAndRefreshModels;
 const MODULE = "gpt-sovits-tts";
 // 1.6.103 代码版本号: Foundry 的 game.modules.get(id).version 读的是"载入世界时的清单缓存",
 //   改了 manifest 不刷新会一直显示旧版本(用户多次看到 1.6.96 而实际代码已是新版) → 报告里同时打印两者, 便于确认真的在跑新代码
-const MOD_VERSION = "1.6.148";
+const MOD_VERSION = "1.6.149";
 const CHAT_STYLES = (typeof CONST !== "undefined" && (CONST.CHAT_MESSAGE_STYLES || CONST.CHAT_MESSAGE_TYPES)) || {};
 
 /* ============ 设置定义 ============ */
@@ -5916,17 +5916,22 @@ Hooks.on("createChatMessage", (message) => {
 });
 
 // 填完 LLM API 网址/密钥保存后, 自动拉取可用模型 → 设置页里模型下拉自动出现可选项
-Hooks.on("updateSetting", (key, value, options, userId) => {
+Hooks.on("updateSetting", (setting, data, options, userId) => {
   (window.__fvttTTSHooks = window.__fvttTTSHooks || {}).updateSetting = true;
+  // 1.6.149 修: v13 的 updateSetting 传的是 Setting 文档(有 .key/.value), 旧写法当字符串比较 → 两条功能静默失效。
+  //   兼容两种签名: 文档对象 或 (key, value) 字符串旧版。
+  const _k = (setting && setting.key) ? String(setting.key) : (typeof setting === "string" ? setting : "");
+  const _nv = (setting && typeof setting === "object" && "value" in setting) ? setting.value
+    : (data && typeof data === "object" && "value" in data ? data.value : data);
   // GM 改"同时运行上限" → 立即同步服务端模型池(裁剪/扩容), 仅 GM 生效(pl 只读)
-  if (key === `${MODULE}.maxConcurrentModels`) {
+  if (_k === `${MODULE}.maxConcurrentModels`) {
     try {
       if (game.user && game.user.isGM) {
-        svcRequest(getCfg().serverUrl, "POST", "/config", { max_concurrent_models: Number(value) || 10 }).catch(() => { /* noop */ });
+        svcRequest(getCfg().serverUrl, "POST", "/config", { max_concurrent_models: Number(_nv) || 10 }).catch(() => { /* noop */ });
       }
     } catch (e) { /* noop */ }
   }
-  if (key !== `${MODULE}.llmKey` && key !== `${MODULE}.llmBaseUrl`) return;
+  if (_k !== `${MODULE}.llmKey` && _k !== `${MODULE}.llmBaseUrl`) return;
   setTimeout(() => { fetchAndRefreshModels(true).catch(() => {}); }, 300);
 });
 // 打开设置页: 给"API 地址/密钥"输入框挂实时监听 → 输入过程中即自动检测模型并更新下方"LLM 模型"下拉
