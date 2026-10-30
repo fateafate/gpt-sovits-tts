@@ -19,7 +19,7 @@ window.fetchAndRefreshModels = fetchAndRefreshModels;
 const MODULE = "gpt-sovits-tts";
 // 1.6.103 代码版本号: Foundry 的 game.modules.get(id).version 读的是"载入世界时的清单缓存",
 //   改了 manifest 不刷新会一直显示旧版本(用户多次看到 1.6.96 而实际代码已是新版) → 报告里同时打印两者, 便于确认真的在跑新代码
-const MOD_VERSION = "1.6.151";
+const MOD_VERSION = "1.6.152";
 const CHAT_STYLES = (typeof CONST !== "undefined" && (CONST.CHAT_MESSAGE_STYLES || CONST.CHAT_MESSAGE_TYPES)) || {};
 
 /* ============ 设置定义 ============ */
@@ -58,6 +58,9 @@ const SETTINGS = [
   ["speedFactor",   { type: Number,  scope: "client", default: 0,                range: { min: 0, max: 2.0, step: 0.05 }, name: "settings.speedFactor.name", hint: "settings.speedFactor.hint" }],
   // 1.6.132 提示词强度默认 0 = 交给 AI 自己定(情绪/立绘由 AI 决定, 语速停顿不锁); >0 才手动指定提示词影响强度
   ["styleStrength", { type: Number,  scope: "client", default: 0,                range: { min: 0, max: 100, step: 5 },    name: "settings.styleStrength.name", hint: "settings.styleStrength.hint" }],
+  // 1.6.152 对齐 Shinsekai 的质量旋钮(默认 32/关 = 与之前完全一致, 不影响现有听感)
+  ["sampleSteps",   { type: Number,  scope: "client", default: 32,               range: { min: 4, max: 48, step: 4 },    name: "settings.sampleSteps.name", hint: "settings.sampleSteps.hint" }],
+  ["superSampling", { type: Boolean, scope: "client", default: false,            name: "settings.superSampling.name", hint: "settings.superSampling.hint" }],
   // 1.6.134 自动预加载: 打字停顿后自动把当前句子预合成好(发送零等待); 打字即读模式下直接复用预读音频, 零额外合成
   ["autoPreload",   { type: Boolean, scope: "client", default: true,             name: "settings.autoPreload.name",       hint: "settings.autoPreload.hint" }],
   // 1.6.65 情绪效果强度(严格对齐 Shinsekai): 默认 0 = 完全不做 DSP 变调, 情绪差异靠"情绪参考音频"; 调高只加轻微语速/音量, 不变调
@@ -667,6 +670,16 @@ async function speak(text, { lang = null, sender = "", refAudioPath = null, prom
       if (typeof pv.emotionMix === "number") overrides.emotionMix = pv.emotionMix;
     }
   }
+  // 1.6.152 质量旋钮(对齐 Shinsekai): 默认 32 / 关 = 与之前完全一致; 只有用户改过才下发
+  try {
+    const _ss = Number(cfg.sampleSteps);
+    const _sup = cfg.superSampling === true;
+    if ((Number.isFinite(_ss) && _ss !== 32) || _sup) {
+      overrides = overrides || {};
+      if (Number.isFinite(_ss) && _ss !== 32) overrides.sampleSteps = Math.max(4, Math.min(48, Math.round(_ss)));
+      if (_sup) overrides.superSampling = true;
+    }
+  } catch (e) { /* noop */ }
   // 情绪(1.6.24): LLM 根据台词+角色提示词判情绪(优先, 声音调制+立绘分组) > 显式选择 > 规则判定; 失败降级不阻塞
   // 1.6.118 P0: skipAiEmotion 以前只是参数、从未被检查 → 模块发送框的消息在 maybeSpeak 已判过语气,
   //   这里又调一次 /llm(真实使用每条消息 2 次 AI, token 翻倍)。现在真正生效。
@@ -2853,6 +2866,12 @@ async function synthPreloadCore(stripT) {
         const _kw2 = styleKeywordParams(getStylePrompt(roleP) || "", stripP.length);
         if (_kw2.speed) _spdP = _kw2.speed;
       }
+    } catch (e) { /* noop */ }
+    // 1.6.152 预加载与发送必须同参数(否则"预加载→发送"会因采样参数不同而听感不一致)
+    try {
+      const _ssP = Number(cfgP2.sampleSteps);
+      if (Number.isFinite(_ssP) && _ssP !== 32) overridesP.sampleSteps = Math.max(4, Math.min(48, Math.round(_ssP)));
+      if (cfgP2.superSampling === true) overridesP.superSampling = true;
     } catch (e) { /* noop */ }
     const { blob, audioUrl } = await gptSovitsSynth(stripP, cfgP2.textLang || "auto", { serverUrl: cfgP2.serverUrl, speedFactor: _spdP, overrides: Object.keys(overridesP).length ? overridesP : null, mediaType: "mp3", asBlob: true, role: roleP, skipDirect: window.__fvttTTSCanDirect !== true });
     if (!blob) return { ok: false, message: "no-blob" };
@@ -5877,6 +5896,12 @@ async function _proxySynthFor(message) {
     if (fl2.emotion) o.emotion = fl2.emotion;   // 1.6.20 情绪后处理(作者端判好的情绪 → 代理合成同语气)
     // 1.6.109/1.6.112 玩家端代理合成同样规范化占比(单一来源): 否则只有 GM 听到语气
     normalizeEmotionMix(o);
+    // 1.6.152 代理合成同样使用引擎机(本端)的质量旋钮, 才能与"本机自己说话"听感一致
+    try {
+      const _ssG = Number(cfg.sampleSteps);
+      if (Number.isFinite(_ssG) && _ssG !== 32) o.sampleSteps = Math.max(4, Math.min(48, Math.round(_ssG)));
+      if (cfg.superSampling === true) o.superSampling = true;
+    } catch (e) { /* noop */ }
     const t0 = Date.now();
     const _pprov = String(fl2.ttsProvider || req.provider || "gpt-sovits");
     let res;

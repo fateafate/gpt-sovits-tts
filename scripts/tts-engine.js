@@ -441,6 +441,9 @@ export async function gptSovitsSynth(text, lang, { serverUrl, speedFactor = 1, o
       if (typeof overrides.emotionMix === "number") serverPayload.emotion_mix = overrides.emotionMix;
       if (overrides.emotion) serverPayload.emotion = overrides.emotion;
       if (overrides.textSplitMethod) serverPayload.text_split_method = overrides.textSplitMethod;
+      // 1.6.152 质量旋钮(对齐 Shinsekai): 采样步数 / 超采样; 默认不下发(保持原行为)
+      if (typeof overrides.sampleSteps === "number") serverPayload.sample_steps = overrides.sampleSteps;
+      if (typeof overrides.superSampling === "boolean") serverPayload.super_sampling = overrides.superSampling;
       if (typeof overrides.fragmentInterval === "number") serverPayload.fragment_interval = overrides.fragmentInterval;
     }
     const resp = await fetch(base + "/tts", {

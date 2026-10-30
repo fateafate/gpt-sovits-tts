@@ -181,6 +181,14 @@
       "name": "Reading Prompt Strength",
       "hint": "0% (default, recommended): let AI / the reading prompt decide emotion, speed and pauses automatically; >0% manually controls how strongly the prompt affects speed/pause (100% = fully apply). Per-character override available."
     },
+    "sampleSteps": {
+      "name": "Sampling steps (sample_steps)",
+      "hint": "Quality/speed knob for GPT-SoVITS V3/V4 (same as Shinsekai). Default 32 = exactly the current behaviour; higher (40/48) is steadier but slower, lower is faster with possible artifacts. Ignored by V2 models."
+    },
+    "superSampling": {
+      "name": "Super sampling (super_sampling)",
+      "hint": "Super-sampling switch for GPT-SoVITS V3/V4 (same as Shinsekai). Default off = current behaviour; on improves high-frequency detail at the cost of speed and VRAM."
+    },
     "emotionFxStrength": {
       "name": "Emotion FX Strength (DSP)",
       "hint": "0% (recommended, same as Shinsekai): no pitch/tempo processing at all — emotion comes from the character's emotion reference audio (most natural). Higher values add slight speed/volume only (never pitch). Keep 0 if voices sound odd."
