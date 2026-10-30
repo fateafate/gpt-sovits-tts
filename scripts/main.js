@@ -19,7 +19,7 @@ window.fetchAndRefreshModels = fetchAndRefreshModels;
 const MODULE = "gpt-sovits-tts";
 // 1.6.103 代码版本号: Foundry 的 game.modules.get(id).version 读的是"载入世界时的清单缓存",
 //   改了 manifest 不刷新会一直显示旧版本(用户多次看到 1.6.96 而实际代码已是新版) → 报告里同时打印两者, 便于确认真的在跑新代码
-const MOD_VERSION = "1.6.149";
+const MOD_VERSION = "1.6.150";
 const CHAT_STYLES = (typeof CONST !== "undefined" && (CONST.CHAT_MESSAGE_STYLES || CONST.CHAT_MESSAGE_TYPES)) || {};
 
 /* ============ 设置定义 ============ */
@@ -1771,15 +1771,14 @@ async function doSubmitChat(ta, opts = {}) {
     return _sr;
   }
   if (window.__fvttTTSSubmitLock) { _sr.reason = "locked"; notifyOnce(_L("ui.sending", "正在发送…"), "info"); return _sr; }
-  // 1.6.138 双实例防护: 同一句 4 秒内被请求再次发送 → 丢弃(防"发送两遍"; 正常操作不可能同句连发)
-  const _sNow = Date.now();
+  // 1.6.150 防双发: 同句 1.2 秒内重复提交才忽略(以前 4 秒, 连发两次「……」都会被静默吞掉);
+  //   而且会给出轻提示(不再只写控制台), 用户能看懂"为什么没发出去"。
   const _sLast = window.__fvttTTSLastSent || null;
-  if (_sLast && Math.abs(_sNow - _sLast.ts) < 4000 && _sLast.text === v) {
-    _sr.reason = "dup-4s";
-    try { console.warn("[gpt-sovits-tts] 同一句 4 秒内重复提交, 已忽略 → " + String(v).slice(0, 20)); } catch (e) { /* noop */ }
+  if (_sLast && Math.abs(Date.now() - _sLast.ts) < 1200 && _sLast.text === v) {
+    _sr.reason = "dup-1.2s";
+    notifyOnce(_L("ui.dupSend", "同一句刚发过，已忽略重复提交"), "info");
     return _sr;
   }
-  window.__fvttTTSLastSent = { text: v, ts: _sNow };
   window.__fvttTTSSubmitLock = true;
   try {
     // 手动创建消息: 不触发表单默认提交(避免浏览器刷新/崩溃), 仍走 createChatMessage → 全员同声朗读
@@ -1825,6 +1824,8 @@ async function doSubmitChat(ta, opts = {}) {
     try {
       const _msg = await ChatMessage.create(data);
       _sr.ok = true; _sr.reason = "created"; _sr.id = (_msg && _msg.id) || "";
+      // 1.6.150 只在真正发送成功后记录(以前创建失败也会占位 4 秒, 重试被误判为重复)
+      try { window.__fvttTTSLastSent = { text: v, ts: Date.now() }; } catch (e) { /* noop */ }
       try { ta.value = ""; ta.focus(); } catch (e) { /* noop */ }
       refreshPreloadBtn();   // 1.6.102 发送后输入框已清空 → 预加载按钮立即回到"AI 预加载"(不再一直显示已加载)
       // 1.6.134 发送即消费: 清掉本次预加载缓存, 按钮真正复位; 下一句由"自动预加载"在停顿时重新预合成

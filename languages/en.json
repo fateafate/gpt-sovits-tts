@@ -343,6 +343,7 @@
     "aiApplied": "AI tone applied",
     "aiJudging": "🤖 Judging tone…",
     "sending": "Sending…",
+    "dupSend": "Same line just sent — duplicate submission ignored",
     "aiFetchFail": "Fetch models failed",
     "aiNoModels": "The service returned no models",
     "aiPickTitle": "Choose AI model",

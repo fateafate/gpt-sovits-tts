@@ -343,6 +343,7 @@
     "aiApplied": "AI 语气已应用",
     "aiJudging": "🤖 正在判断语气…",
     "sending": "正在发送…",
+    "dupSend": "同一句刚发过，已忽略重复提交",
     "aiFetchFail": "获取模型失败",
     "aiNoModels": "该服务未返回可用模型",
     "aiPickTitle": "选择 AI 模型",
